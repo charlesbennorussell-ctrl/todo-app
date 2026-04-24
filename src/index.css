@@ -1,0 +1,47 @@
+@import "tailwindcss";
+
+@font-face {
+  font-family: 'Untitled Sans';
+  src: url('/fonts/UntitledSans-Regular.otf') format('opentype');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: 'Untitled Sans';
+  src: url('/fonts/UntitledSans-Bold.otf') format('opentype');
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* Legacy aliases — all resolve to Untitled Sans Regular so old font-['...'] Tailwind classes still render in one voice. */
+@font-face {
+  font-family: 'Univers BQ';
+  src: url('/fonts/UntitledSans-Regular.otf') format('opentype');
+  font-weight: 400;
+}
+@font-face {
+  font-family: 'NB International';
+  src: url('/fonts/UntitledSans-Regular.otf') format('opentype');
+  font-weight: 400;
+}
+
+html, body, #root { height: 100%; margin: 0; }
+body { background: #282828; color: white; }
+
+/* Single typographic standard — one family, one size, one weight, one line-height. */
+html, body, div, p, span, button, input, textarea, select, label, a, li, td, th, h1, h2, h3, h4, h5, h6, code {
+  font-family: 'Untitled Sans', sans-serif !important;
+  font-size: 14px !important;
+  font-weight: 400 !important;
+  line-height: 1.4 !important;
+  font-style: normal !important;
+}
+
+/* Exception: the assignee-initial glyph inside its 12px circle stays small and bold so it fits its container. */
+.assignee-initial, .assignee-initial p {
+  font-size: 7.5px !important;
+  line-height: 1 !important;
+  font-weight: 700 !important;
+}
