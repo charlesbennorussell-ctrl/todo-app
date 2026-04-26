@@ -30,6 +30,11 @@
 html, body, #root { height: 100%; margin: 0; }
 body { background: #282828; color: white; }
 
+/* Disable text selection by default — dragging cards/columns shouldn't smear a selection across the page.
+   Inputs, textareas, and contentEditable nodes opt back in so titles can still be edited. */
+html, body { user-select: none; -webkit-user-select: none; }
+input, textarea, [contenteditable="true"], [contenteditable=""] { user-select: text; -webkit-user-select: text; }
+
 /* Single typographic standard — one family, one size, one weight, one line-height. */
 html, body, div, p, span, button, input, textarea, select, label, a, li, td, th, h1, h2, h3, h4, h5, h6, code {
   font-family: 'Untitled Sans', sans-serif !important;
@@ -44,4 +49,33 @@ html, body, div, p, span, button, input, textarea, select, label, a, li, td, th,
   font-size: 7.5px !important;
   line-height: 1 !important;
   font-weight: 700 !important;
+}
+
+/* Placeholder for any empty element with [data-placeholder]. Shows the attribute's text in
+   gray whenever the element has no children — disappears the instant content is typed (or
+   set programmatically). Works for both contentEditable spans and plain spans, so a freshly
+   created task shows "New Task" in gray BEFORE it's clicked, and the same gray "New Task"
+   stays visible inside the editable cursor while the user hasn't typed anything yet. */
+[data-placeholder]:empty:before {
+  content: attr(data-placeholder);
+  color: #383838;
+  pointer-events: none;
+}
+
+/* Brand-purple text selection — overrides the OS default (usually blue). Applies app-wide. */
+::selection {
+  background-color: #7363FF;
+  color: #ffffff;
+}
+::-moz-selection {
+  background-color: #7363FF;
+  color: #ffffff;
+}
+
+/* Hide the Liveblocks free-tier branding badge (bottom-right corner). The wrapper element is
+   injected by Liveblocks at #liveblocks-badge with inline `opacity: 1` — !important is required
+   to override its inline style. pointer-events: none also prevents an invisible click target. */
+#liveblocks-badge {
+  opacity: 0 !important;
+  pointer-events: none !important;
 }

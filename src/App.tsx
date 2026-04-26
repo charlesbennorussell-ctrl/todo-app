@@ -1,6 +1,6 @@
-import { useState, useCallback, useMemo, useRef, useEffect } from 'react';
+﻿import { Fragment, memo, useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Plus, X, List, FolderTree, Settings as SettingsIcon, Folder, Trash2, Calendar as CalendarIcon, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Plus, X, List, FolderTree, SlidersHorizontal as SettingsIcon, Folder, Trash2, Calendar as CalendarIcon, ChevronLeft, ChevronRight } from 'lucide-react';
 import {
   DndContext,
   KeyboardSensor,
@@ -37,129 +37,436 @@ import {
   Person,
   LIST_TITLES,
   LISTS,
+  PERSONAL_CLIENT_ID,
   formatDeadline,
   todayISO,
 } from './data';
 
 
 function TaskCheckbox({ completed, onToggle }: { completed: boolean; onToggle: () => void }) {
+  // Completed state matches the faded row palette â€” fill + border collapse into the same muted
+  // mid-tone as the text (#383838), with a slightly lighter tick (#6a6a6a) and a chunkier
+  // 1.5-stroke so the check actually reads at this low contrast level.
+  const idleStroke = '#656464';
+  const doneFill = '#383838';
+  // Tick stroke is the page background color so the check reads as a cut-out shape from the
+  // muted fill — same look as the original design, just on the dimmer fill.
+  const tickStroke = '#282828';
   return (
-    <motion.div className="relative shrink-0 size-3 cursor-pointer" whileTap={{ scale: 0.9 }} onClick={onToggle}>
-      <div className={`absolute inset-0 rounded-[3.333px] ${completed ? 'bg-[#5e5e5e]' : ''}`}>
-        <div aria-hidden="true" className={`absolute ${completed ? 'border-[#5e5e5e] border-[2.67px]' : 'border-white border-[0.667px]'} border-solid inset-0 pointer-events-none rounded-[3.333px]`} />
+    // stopPropagation on pointerdown so a click on the checkbox doesn't bubble to the row's
+    // {...listeners} and start a drag â€” toggling completion stays a click, not the start of a move.
+    // -mt-[2px] lifts the checkbox so its TOP sits at the title's cap-height (top of capital
+    // letters) and its bottom sits roughly at the baseline â€” visually "embedded" in the text line.
+    <motion.div className="relative shrink-0 size-3 cursor-pointer -mt-[2px]" whileTap={{ scale: 0.9 }} onPointerDown={(e) => e.stopPropagation()} onClick={onToggle}>
+      <div className="absolute inset-0 rounded-[3.333px]" style={{ backgroundColor: completed ? doneFill : 'transparent' }}>
+        <div aria-hidden="true" className="absolute border-[1.5px] border-solid inset-0 pointer-events-none rounded-[3.333px]" style={{ borderColor: completed ? doneFill : idleStroke }} />
       </div>
       {completed && (
-        <motion.div initial={{ scale: 0, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ type: "spring", duration: 0.3, bounce: 0.4 }} className="absolute inset-0 flex items-center justify-center">
-          <svg className="w-2 h-2" viewBox="0 0 8 8"><path d="M6.5 1.5L3 5L1.5 3.5" stroke="#282828" strokeWidth="1" fill="none" strokeLinecap="round" strokeLinejoin="round" /></svg>
+        // y: 2 nudges the tick down 2px (must go through framer's animate prop — an inline
+        // style.transform would be overridden by the scale/opacity transform).
+        <motion.div initial={{ scale: 0, opacity: 0, y: 1 }} animate={{ scale: 1, opacity: 1, y: 1 }} transition={{ type: "spring", duration: 0.3, bounce: 0.4 }} className="absolute inset-0 flex items-center justify-center">
+          <svg className="w-2 h-2" viewBox="0 0 8 8"><path d="M6.5 1.5L3 5L1.5 3.5" stroke={tickStroke} strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" /></svg>
         </motion.div>
       )}
     </motion.div>
   );
 }
 
-function AssigneeBadge({ letter, tone }: { letter: Assignee; tone: 'scheduled' | 'todo' }) {
-  const fill = tone === 'scheduled' ? '#8465FF' : '#656464';
+function MilestoneToggle({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) {
   return (
-    <div className="relative shrink-0 size-[12.333px]" title={letter}>
-      <svg className="absolute block inset-0 size-full" fill="none" viewBox="0 0 12.3333 12.3333">
-        <circle cx="6.16663" cy="6.16663" fill={fill} r="6.16663" />
-      </svg>
-      <div className="assignee-initial absolute flex flex-col font-['Untitled_Sans:Heavy',sans-serif] font-extrabold inset-[22.22%_0_19.44%_0] justify-center leading-[0] not-italic text-[#282828] text-[7.5px] text-center">
-        <p className="leading-[normal]">{letter}</p>
-      </div>
+    <button
+      type="button"
+      role="switch"
+      aria-checked={value}
+      onClick={() => onChange(!value)}
+      className={`relative inline-flex h-[18px] w-[32px] shrink-0 rounded-full transition-colors ${value ? 'bg-[#7363FF]' : 'bg-[#1f1f1f]'}`}
+    >
+      <span className={`absolute top-[2px] size-[14px] rounded-full bg-white transition-transform ${value ? 'translate-x-[16px]' : 'translate-x-[2px]'}`} />
+    </button>
+  );
+}
+
+function AssigneeBadge({ letter, tone, hollow = false, dim = false, active = false }: { letter: Assignee; tone: 'scheduled' | 'todo'; hollow?: boolean; dim?: boolean; active?: boolean }) {
+  // `dim` matches the muted palette used for completed tasks; `active` swaps the fill to white
+  // for the panel's "selected resource" treatment so the badge pops alongside its bold-white name.
+  const color = dim ? '#383838' : active ? '#ffffff' : (tone === 'scheduled' ? '#8465FF' : '#656464');
+  // Multi-character shorts (auto-disambiguated when two people share an initial) render as a
+  // pill instead of a circle: same height, expanded width, fully rounded ends. The width grows
+  // ~5px per extra character beyond the first.
+  const len = letter.length || 1;
+  const widthPx = len === 1 ? 12.333 : 12.333 + (len - 1) * 5;
+  return (
+    // -mt-[2px] matches the typographic alignment used on TaskCheckbox + DeadlineArrow so the
+    // badge sits at the text's cap-to-baseline band, not centered on the row's bounding box.
+    <div className="relative shrink-0 -mt-[2px] flex items-center justify-center" title={letter} style={{ width: widthPx, height: 12.333, borderRadius: 999, backgroundColor: hollow ? 'transparent' : color, border: hollow ? `1px solid ${color}` : 'none' }}>
+      <span
+        className="assignee-initial font-['Untitled_Sans:Heavy',sans-serif] font-extrabold leading-none not-italic text-[7.5px] text-center"
+        style={{ color: hollow ? color : '#282828' }}
+      >{letter}</span>
     </div>
   );
 }
 
-function DeadlineArrow() {
+// TaskOrder + helper used by every task renderer (list, project, calendar, dashboard).
+// Returns the visual sequence of "meta blocks" + where the title slot belongs. Each block is
+// either 'project', 'client', 'title', or 'cp' (combined client-project rendered as a SINGLE
+// span "Client-Project" with no whitespace around the dash). The combined block is used in
+// 'cpt' / 'tcp' modes where client and project sit next to each other; the renderers know to
+// emit it as one inline element so the flex gap between siblings doesn't add space around the
+// dash. 'ptc' keeps project and client on separate sides of the title (no combination).
+type TaskOrder = 'cpt' | 'ptc' | 'tcp';
+type TaskMetaSlot = 'project' | 'client' | 'title' | 'cp';
+function taskOrderSlots(order: TaskOrder, hasProject: boolean, hasClient: boolean): TaskMetaSlot[] {
+  if (order === 'cpt') {
+    // (client-project) title
+    const out: TaskMetaSlot[] = [];
+    if (hasClient && hasProject) out.push('cp');
+    else if (hasClient) out.push('client');
+    else if (hasProject) out.push('project');
+    out.push('title');
+    return out;
+  }
+  if (order === 'tcp') {
+    // title (client-project)
+    const out: TaskMetaSlot[] = ['title'];
+    if (hasClient && hasProject) out.push('cp');
+    else if (hasClient) out.push('client');
+    else if (hasProject) out.push('project');
+    return out;
+  }
+  // 'ptc' (default): project title client
+  const out: TaskMetaSlot[] = [];
+  if (hasProject) out.push('project');
+  out.push('title');
+  if (hasClient) out.push('client');
+  return out;
+}
+
+function DeadlineArrow({ dim = false }: { dim?: boolean }) {
   return (
-    <div className="h-[12px] relative shrink-0 w-[18px]">
+    // -mt-[2px] matches the typographic alignment used on TaskCheckbox: lifts the icon so it sits
+    // visually inside the text's cap-height-to-baseline band, not centered on the row's bounding box.
+    // `dim` mirrors the muted palette used for completed tasks so the arrow fades with the rest of the row.
+    <div className="h-[12px] relative shrink-0 w-[18px] -mt-[2px]">
       <svg className="absolute block inset-0 size-full" fill="none" viewBox="0 0 18 12">
-        <path d={arrowPaths.p25eb4200} fill="#656464" />
+        <path d={arrowPaths.p25eb4200} fill={dim ? '#383838' : '#656464'} />
       </svg>
     </div>
   );
 }
+
+// --- Motion system ------------------------------------------------------------
+// Single source of truth for the app's motion vocabulary. Every drag interaction
+// across list / project / calendar pulls from the same constants and primitives,
+// so a tweak here propagates everywhere.
+//
+// Tuned for "buttery": smooth deceleration curves, durations long enough that
+// the motion has room to breathe but short enough to feel responsive. Nothing
+// abrupt, nothing bouncy.
+const MOTION = {
+  // easeOutQuart - slightly creamier than standard easeOut. Gentle landing.
+  // The motion settles like it's gliding to a stop on velvet.
+  easeOut: 'cubic-bezier(0.16, 1, 0.3, 1)',
+  // For opacity fades where the bezier feels overly dramatic.
+  easeStandard: 'cubic-bezier(0.4, 0, 0.2, 1)',
+  // Durations - luxurious without feeling sluggish.
+  fast: 200,   // micro: opacity, hover tints
+  base: 320,   // layout shifts (e.g. underlying sortable transforms after a drop)
+  slow: 420,   // overlays appearing, source collapse
+  // Displacement-only timing. Deliberately MUCH longer than `base`: when you
+  // scrub a dragged card over many neighbours quickly, each one's displacement
+  // target keeps changing. A short transition means every target update kicks
+  // off a fresh fast animation that "races to catch up", which reads as jerky.
+  // A long transition lets the card glide smoothly between successive targets
+  // without ever appearing to snap.
+  displace: 600,
+};
+const DISPLACE_TRANSITION = `transform ${MOTION.displace}ms ${MOTION.easeOut}, margin-top ${MOTION.displace}ms ${MOTION.easeOut}`;
+
+// --- Displaced ----------------------------------------------------------------
+// Unified displacement primitive for ALL draggable rows (list, project, calendar).
+//
+// Why this exists: the previous setup used framer-motion `animate={{ y, marginTop }}`
+// on every row, which restarts a JS spring on every drag-over event. With dozens of
+// rows re-rendering at 60fps as the cursor moves, the springs stack up and cause
+// noticeable stutter. This component does the same visual work with a single CSS
+// transform + margin-top transition, which the browser composites on the GPU ï¿½
+// no per-frame JS, no spring restarts, no jank.
+//
+// `React.memo` shortcuts re-renders entirely when the offset/gap props haven't
+// changed for a given row ï¿½ critical when 30+ rows are mounted.
+const Displaced = memo(function Displaced({
+  offset = 0,
+  gap = 0,
+  active = false,
+  className = '',
+  children,
+}: {
+  offset?: number;
+  gap?: number;
+  active?: boolean;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div
+      className={className}
+      style={{
+        transform: offset ? `translate3d(0, ${offset}px, 0)` : undefined,
+        marginTop: gap || undefined,
+        transition: active ? DISPLACE_TRANSITION : 'none',
+        // Promote to its own compositor layer only while a drag is happening ï¿½
+        // `will-change` is a strong hint and is wasteful when nothing is moving.
+        willChange: active ? 'transform, margin-top' : 'auto',
+      }}
+    >
+      {children}
+    </div>
+  );
+});
 
 function SortableTaskItem({
-  task, onToggle, onRename, onDelete, onEdit, isDragOverlay = false, displacementOffset = 0, insertionGap = 0, isAnyDragging = false, collapsed = false, projects = [], clients = [],
+  task, onToggle, onRename, onDelete, onEdit, onQuickEdit, onAddSibling, autoFocus = false, isDragOverlay = false, displacementOffset = 0, insertionGap = 0, isAnyDragging = false, collapsed = false, projects = [], clients = [], nonDraggable = false, idPrefix = '', taskOrder = 'ptc',
 }: {
-  task: Task; onToggle: () => void; onRename?: (title: string) => void; onDelete?: () => void; onEdit?: () => void; isDragOverlay?: boolean; displacementOffset?: number; insertionGap?: number; isAnyDragging?: boolean; collapsed?: boolean; projects?: Project[]; clients?: Client[];
+  task: Task; onToggle: () => void; onRename?: (title: string) => void; onDelete?: () => void; onEdit?: (e?: React.MouseEvent) => void; onQuickEdit?: (e?: React.MouseEvent) => void; onAddSibling?: () => void; autoFocus?: boolean; isDragOverlay?: boolean; displacementOffset?: number; insertionGap?: number; isAnyDragging?: boolean; collapsed?: boolean; projects?: Project[]; clients?: Client[]; nonDraggable?: boolean;
+  taskOrder?: TaskOrder;
+  // Optional prefix for the dnd-kit sortable id. Lets the same task render in two places (e.g.
+  // dashboard sub-list AND work column) without sharing a sortable id â€” otherwise picking up one
+  // instance would mark BOTH as the active drag and fade them simultaneously.
+  idPrefix?: string;
 }) {
   const project = task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
-  const client = project?.clientId ? clients.find((c) => c.id === project.clientId) : undefined;
-  const [editing, setEditing] = useState(false);
+  // Prefer the task's explicit clientId, fall back to the project's owning client.
+  const resolvedClientId = task.clientId ?? project?.clientId;
+  const client = resolvedClientId ? clients.find((c) => c.id === resolvedClientId) : undefined;
+  const [editing, setEditing] = useState(autoFocus);
   const [draft, setDraft] = useState(task.title);
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id, data: { type: 'task', task } });
-  const style = { transform: CSS.Transform.toString(transform), transition: isDragOverlay || !isAnyDragging ? 'none' : 'transform 360ms cubic-bezier(0.22, 1, 0.36, 1)' };
+  const titleRef = useRef<HTMLSpanElement>(null);
+  // Coordinates of the click that triggered the transition into edit mode. If set, the caret
+  // is placed at that exact point in the text instead of being collapsed to start/end. Cleared
+  // after one use. Lets the user click in the middle of a word and land the cursor there in
+  // a single click instead of two.
+  const editClickPosRef = useRef<{ x: number; y: number } | null>(null);
+  useLayoutEffect(() => {
+    if (!editing || !titleRef.current) return;
+    const el = titleRef.current;
+    const clickPos = editClickPosRef.current;
+    editClickPosRef.current = null;
+    const handle = window.setTimeout(() => {
+      if (!el.isConnected) return;
+      el.focus();
+      const sel = window.getSelection();
+      if (!sel) return;
+      // Prefer caret-from-point so the cursor lands where the user clicked. Falls back to
+      // start (empty title) or end (existing title) when there's no click position — this
+      // covers the autoFocus-on-spawn path where there's no click to anchor to.
+      let placed = false;
+      if (clickPos) {
+        // caretRangeFromPoint is broadly supported in Chromium/WebKit; caretPositionFromPoint
+        // is the standard but only Firefox; use whichever the browser provides.
+        const doc = document as Document & {
+          caretRangeFromPoint?: (x: number, y: number) => Range | null;
+          caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+        };
+        const r = doc.caretRangeFromPoint?.(clickPos.x, clickPos.y);
+        if (r && el.contains(r.startContainer)) {
+          sel.removeAllRanges();
+          sel.addRange(r);
+          placed = true;
+        } else {
+          const p = doc.caretPositionFromPoint?.(clickPos.x, clickPos.y);
+          if (p && el.contains(p.offsetNode)) {
+            const range = document.createRange();
+            range.setStart(p.offsetNode, p.offset);
+            range.collapse(true);
+            sel.removeAllRanges();
+            sel.addRange(range);
+            placed = true;
+          }
+        }
+      }
+      if (!placed) {
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        range.collapse(!task.title); // empty → start, has text → end
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+    }, 0);
+    return () => clearTimeout(handle);
+  }, [editing]);
+  const sortable = useSortable({ id: `${idPrefix}${task.id}`, data: { type: 'task', task } });
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = sortable;
+  // Inside <DragOverlay>, the cloned row still calls useSortable (it lives inside DndContext) and
+  // gets back transform/isDragging values describing the SOURCE row's reordering. Applying those to
+  // the overlay clone makes it inherit the source's animation and can compound with the outer
+  // overlay wrapper's transform â€” visible as a small vertical "jump". Neutralize them on the clone.
+  const style = isDragOverlay
+    ? { transform: undefined, transition: 'none' }
+    : { transform: CSS.Transform.toString(transform), transition: !isAnyDragging ? 'none' : `transform ${MOTION.base}ms ${MOTION.easeOut}` };
   const isScheduled = task.type === 'scheduled';
-  const titleColor = isScheduled ? 'text-[#8465ff]' : task.completed ? 'text-[#5e5e5e]' : 'text-white';
-  const metaColor = isScheduled ? 'text-[#8465ff]' : 'text-[#656464]';
+  const isNext = task.section === 'next';
+  const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID;
+  // Completed tasks fade to a near-background color across ALL their text â€” no strikethrough,
+  // just visually quieted. #383838 is one step off the #282828 page background.
+  const titleColor = isScheduled ? 'text-[#8465ff]' : task.completed ? 'text-[#383838]' : isNext ? 'text-[#a8a8a8]' : 'text-white';
+  const metaColor = task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : 'text-[#656464]';
 
   return (
+    <Displaced offset={displacementOffset} gap={insertionGap} active={isAnyDragging}>
+    {/*
+     * Whole-card drag: {...attributes} {...listeners} live on the row container, NOT a tiny handle.
+     * Click anywhere â†’ drag (PointerSensor's distance: 8 means a stationary click stays a click).
+     * Interactive children (checkbox, +/trash buttons, title-while-editing) call
+     * stopPropagation in their own pointerdown handlers so they keep working.
+     */}
+    {/* Source slot keeps its 37px layout space (no collapse) â€” prevents layout reflow during the
+        drag, which was causing the "Next" header to overlap with rows. Card just fades to invisible. */}
     <motion.div
       ref={setNodeRef}
       style={style}
-      className={`relative shrink-0 w-full group overflow-hidden ${isDragOverlay ? 'z-50 bg-[#333333]' : task.completed ? 'bg-[#2d2d2d]' : ''}`}
+      data-task-row={isDragOverlay ? undefined : task.id}
+      {...(nonDraggable ? {} : attributes)}
+      {...(nonDraggable ? {} : listeners)}
+      className={`relative shrink-0 w-full group overflow-hidden ${nonDraggable || isDragOverlay ? '' : 'cursor-grab active:cursor-grabbing'} ${isDragOverlay ? 'z-50 bg-[#333333]' : ''}`}
       animate={{
-        y: displacementOffset,
-        marginTop: insertionGap,
-        height: collapsed ? 0 : 37,
         scale: isDragOverlay ? 1.02 : 1,
         opacity: isDragging ? 0 : 1,
       }}
       transition={{
-        y: isAnyDragging
-          ? { type: "spring", stiffness: 260, damping: 32, mass: 0.8 }
-          : { duration: 0 },
-        marginTop: { type: "spring", stiffness: 260, damping: 32, mass: 0.8 },
-        height: { type: "spring", stiffness: 220, damping: 34, mass: 0.9 },
         scale: { duration: 0.18 },
         opacity: isDragging ? { duration: 0.12, ease: "easeOut" } : { duration: 0 },
       }}
       whileHover={!isDragging && !isDragOverlay ? { backgroundColor: "rgba(255, 255, 255, 0.03)", transition: { duration: 0.15 } } : {}}
     >
-      <div onDoubleClick={(e) => { if (onEdit && !editing) { e.stopPropagation(); onEdit(); } }} className="box-border flex flex-row gap-2 h-[37px] items-center px-[31px] w-full">
-        <motion.div {...attributes} {...listeners} className="opacity-0 group-hover:opacity-100 cursor-grab active:cursor-grabbing -ml-5 p-1 text-[#5e5e5e] hover:text-white transition-all duration-200" whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.95 }}>
-          <svg width="12" height="18" viewBox="0 0 12 18" fill="none">
-            <path d="M6 1L6 17" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
-            <path d="M2.5 3.5L6 0L9.5 3.5" stroke="currentColor" strokeWidth="1" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-            <path d="M2.5 14.5L6 18L9.5 14.5" stroke="currentColor" strokeWidth="1" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </motion.div>
+      <div onDoubleClick={(e) => { if (onEdit && !editing) { e.stopPropagation(); onEdit(e); } }} onContextMenu={(e) => { if (onQuickEdit) { e.preventDefault(); e.stopPropagation(); onQuickEdit(e); } }} className="relative box-border flex flex-row gap-2 h-[37px] items-center px-[31px] w-full">
+        {/* Visual grab affordance only â€” absolutely positioned so it doesn't take flex layout space.
+            Otherwise the gap-2 after the arrow indents the checkbox 8px past the section labels.
+            White when this row IS the drag overlay so it pops while in motion; gray on hover otherwise. */}
+        {!nonDraggable && (
+          <div className={`absolute left-[2px] top-1/2 -translate-y-1/2 p-1 transition-opacity duration-200 ${isDragOverlay ? 'opacity-100 text-white' : 'opacity-0 group-hover:opacity-100 text-[#5e5e5e]'}`}>
+            <svg width="12" height="18" viewBox="0 0 12 18" fill="none">
+              <path d="M6 1L6 17" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+              <path d="M2.5 3.5L6 0L9.5 3.5" stroke="currentColor" strokeWidth="1" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M2.5 14.5L6 18L9.5 14.5" stroke="currentColor" strokeWidth="1" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </div>
+        )}
         {!isScheduled && <TaskCheckbox completed={task.completed} onToggle={onToggle} />}
+        {/* Title row — slot order is driven by the user's `taskOrder` setting. A literal "-"
+            appears between client and project whenever they're adjacent. */}
         <div className="flex flex-row items-center gap-[4px]">
-          {project && (
-            <p className={`font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap text-[#656464]`}>{project.name}</p>
-          )}
+          {taskOrderSlots(taskOrder, !!project, !!client).map((slot, i) => {
+            const metaCls = `font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : 'text-[#656464]'}`;
+            if (slot === 'project' && project) return <p key={`p-${i}`} className={metaCls}>{project.name}</p>;
+            if (slot === 'client' && client) return <p key={`c-${i}`} className={`font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap ${metaColor}`}>{client.short}</p>;
+            // Client + project combined into one span with NO whitespace around the dash.
+            if (slot === 'cp' && client && project) {
+              const order = taskOrder === 'cpt';
+              return (
+                <p key={`cp-${i}`} className={metaCls}>
+                  {order ? `${client.short}-${project.name}` : `${client.short}-${project.name}`}
+                </p>
+              );
+            }
+            if (slot === 'title') {
+              return (
           <span
+            key={`t-${i}`}
+            ref={titleRef}
             contentEditable={editing && !isDragOverlay}
             suppressContentEditableWarning
-            onClick={(e) => { if (!isScheduled && onRename && !editing) { e.stopPropagation(); setEditing(true); } }}
-            onPointerDown={(e) => { if (editing) e.stopPropagation(); }}
+            data-placeholder="New Task"
+            onPointerDown={(e) => {
+              if (editing) { e.stopPropagation(); return; }
+              if (isScheduled || !onRename) return;
+              // Imperatively flip contentEditable + focus + place caret in the SAME pointerdown
+              // tick, BEFORE React re-renders. This is what enables drag-to-select on the very
+              // first click (browser needs contentEditable=true at pointerdown time to engage
+              // its native drag-select). Setting contentEditable on the DOM directly side-steps
+              // React's render cycle.
+              const el = titleRef.current;
+              if (!el) return;
+              e.stopPropagation();
+              el.contentEditable = 'true';
+              el.focus();
+              const doc = document as Document & {
+                caretRangeFromPoint?: (x: number, y: number) => Range | null;
+                caretPositionFromPoint?: (x: number, y: number) => { offsetNode: Node; offset: number } | null;
+              };
+              const r = doc.caretRangeFromPoint?.(e.clientX, e.clientY);
+              if (r && el.contains(r.startContainer)) {
+                const sel = window.getSelection();
+                sel?.removeAllRanges();
+                sel?.addRange(r);
+              } else {
+                const p = doc.caretPositionFromPoint?.(e.clientX, e.clientY);
+                if (p && el.contains(p.offsetNode)) {
+                  const range = document.createRange();
+                  range.setStart(p.offsetNode, p.offset);
+                  range.collapse(true);
+                  const sel = window.getSelection();
+                  sel?.removeAllRanges();
+                  sel?.addRange(range);
+                }
+              }
+              // Stash click position so the useLayoutEffect re-anchors the caret AFTER React
+              // re-renders. Without this, React's reconciliation of the span's children
+              // (text node) collapses the selection back to the end of the text.
+              editClickPosRef.current = { x: e.clientX, y: e.clientY };
+              setEditing(true);
+            }}
             onBlur={(e) => {
               const next = (e.currentTarget.textContent || '').trim();
               if (onRename && next && next !== task.title) onRename(next);
               setEditing(false);
             }}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') { e.preventDefault(); (e.currentTarget as HTMLSpanElement).blur(); }
+              // Stop ALL keystrokes from bubbling to the row's drag listeners while editing —
+              // dnd-kit's KeyboardSensor would otherwise see Space/Arrow keys as "start drag" commands.
+              e.stopPropagation();
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                (e.currentTarget as HTMLSpanElement).blur();
+                // Enter on a task title spawns a sibling task right after this one.
+                if (onAddSibling) onAddSibling();
+              }
               if (e.key === 'Escape') { e.preventDefault(); (e.currentTarget as HTMLSpanElement).textContent = task.title; setEditing(false); }
             }}
             className={`font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap outline-none ${titleColor} ${!isScheduled && onRename ? 'cursor-text' : ''}`}
+            // Empty / very-short titles still need a comfortable click target — give the editable
+            // span a ~5-char-wide min-width (40px at 14px font) so it's easy to hit without
+            // bleeding into the empty row space (which the user reserves for drag-grabbing).
+            style={(task.title || '').length <= 1 ? { minWidth: '40px' } : undefined}
           >{task.title}</span>
-          {client && (
-            <p className={`font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap ${metaColor}`}>{client.short}</p>
-          )}
+              );
+            }
+            return null;
+          })}
         </div>
-        {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} />)}
+        {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} />)}
         {task.deadline && (
           <>
-            {!isScheduled && <DeadlineArrow />}
-            <p className={`font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] whitespace-nowrap ${isScheduled ? 'text-[#8465ff]' : 'text-white'}`}>{formatDeadline(task.deadline)}</p>
+            {!isScheduled && <DeadlineArrow dim={task.completed} />}
+            <p className={`font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : isNext ? 'text-[#a8a8a8]' : 'text-white'}`}>{formatDeadline(task.deadline)}</p>
           </>
         )}
-        {onDelete && !isDragOverlay && (
+        {/* + sits inline right after the task info (assignees / deadline) so it always hugs the content.
+            We blur() the button immediately so its focus state doesn't compete with the new task's
+            title focus (which fires from a setTimeout in SortableTaskItem's useLayoutEffect). */}
+        {!isDragOverlay && onAddSibling && (
+          <button
+            type="button"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => { e.stopPropagation(); (e.currentTarget as HTMLButtonElement).blur(); onAddSibling(); }}
+            className="p-1 opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity"
+            aria-label="Add task in same project"
+          >
+            <Plus size={14} />
+          </button>
+        )}
+        {/* Trash is the last element and uses ml-auto so it always pins to the right edge of the row. */}
+        {!isDragOverlay && onDelete && (
           <button
             type="button"
             onPointerDown={(e) => e.stopPropagation()}
@@ -172,13 +479,18 @@ function SortableTaskItem({
         )}
       </div>
     </motion.div>
+    </Displaced>
   );
 }
 
-function SectionHeader({ title }: { title: string }) {
+function SectionHeader({ title, onAdd }: { title: string; onAdd?: () => void }) {
+  // "Today" is the highlighted section across the app, so its header reads white.
+  // Other section headers (Inbox, Next, Milestones, etc.) stay muted grey.
+  const color = title === 'Today' ? 'text-white' : 'text-[#656464]';
   return (
-    <div className="h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px]">
-      <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[#656464] text-[14px] whitespace-nowrap">{title}</p>
+    <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px]">
+      <p className={`font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic ${color} text-[14px] whitespace-nowrap`}>{title}</p>
+      {onAdd && <AddPlus onClick={onAdd} />}
     </div>
   );
 }
@@ -186,27 +498,29 @@ function SectionHeader({ title }: { title: string }) {
 function Spacer() { return <div className="h-[37px] shrink-0 w-full" />; }
 
 function SectionDroppable({ id, children }: { id: string; children: React.ReactNode }) {
-  const { setNodeRef, isOver } = useDroppable({ id });
-  return (
-    <div ref={setNodeRef} className={`min-h-[37px] w-full transition-colors ${isOver ? 'bg-white/[0.02]' : ''}`}>
-      {children}
-    </div>
-  );
+  const { setNodeRef } = useDroppable({ id });
+  // pb-[37px] gives the section a 37px slop zone below its last card so dropping in the visual
+  // margin between sections still resolves here. Without this, drops in the gap between Today
+  // and Next (or below the last card in a column) fell through to no droppable at all.
+  return <div ref={setNodeRef} className="min-h-[37px] w-full pb-[37px]">{children}</div>;
 }
 
 function BottomBar({ mode, onSetMode, onAdd }: { mode: AppMode; onSetMode: (m: AppMode) => void; onAdd: () => void }) {
   const iconClass = (active: boolean) => `p-2 rounded-full transition-colors ${active ? 'text-white' : 'text-[#656464] hover:text-white'}`;
   return (
-    <div className="fixed bottom-0 left-0 right-0 h-[109px] bg-[#232323] flex items-center px-14 z-40">
-      <div className="flex-1 grid grid-cols-5 gap-5 items-center max-w-[600px]">
-        <motion.button onClick={onAdd} whileHover={{ scale: 1.06 }} whileTap={{ scale: 0.94 }} className="size-[57px] rounded-full bg-[#7363FF] flex items-center justify-center shadow-lg">
-          <Plus size={22} color="#232323" strokeWidth={2.5} />
-        </motion.button>
+    <div className="fixed bottom-0 left-0 right-0 h-[109px] bg-[#232323] grid grid-cols-3 items-center px-14 z-40">
+      {/* Left column: three view icons. */}
+      <div className="flex flex-row gap-10 items-center justify-self-start">
         <button onClick={() => onSetMode('dashboard')} className={iconClass(mode === 'dashboard')}><List size={22} /></button>
         <button onClick={() => onSetMode('projectView')} className={iconClass(mode === 'projectView')}><FolderTree size={22} /></button>
         <button onClick={() => onSetMode('calendar')} className={iconClass(mode === 'calendar')}><CalendarIcon size={22} /></button>
-        <button onClick={() => onSetMode('settings')} className={iconClass(mode === 'settings')}><SettingsIcon size={22} /></button>
       </div>
+      {/* Center column: + add-task button, dead-centered in the bottom bar. */}
+      <motion.button onClick={onAdd} whileHover={{ scale: 1.06 }} whileTap={{ scale: 0.94 }} className="size-[27px] rounded-full bg-[#7363FF] flex items-center justify-center shadow-lg justify-self-center">
+        <Plus size={16} color="#232323" strokeWidth={2.5} />
+      </motion.button>
+      {/* Right column: settings (3-sliders icon). */}
+      <button onClick={() => onSetMode('settings')} className={`${iconClass(mode === 'settings')} justify-self-end`}><SettingsIcon size={22} /></button>
     </div>
   );
 }
@@ -251,9 +565,9 @@ function DateRangePicker({ start, end, onChange }: { start?: string; end?: strin
   return (
     <div className="bg-[#1f1f1f] rounded-md p-3">
       <div className="flex items-center justify-between mb-2">
-        <button type="button" onClick={prevMonth} className="text-[#888] hover:text-white px-2">‹</button>
+        <button type="button" onClick={prevMonth} className="text-[#888] hover:text-white px-2">â€¹</button>
         <div className="text-white text-[13px]">{monthName}</div>
-        <button type="button" onClick={nextMonth} className="text-[#888] hover:text-white px-2">›</button>
+        <button type="button" onClick={nextMonth} className="text-[#888] hover:text-white px-2">â€º</button>
       </div>
       <div className="grid grid-cols-7 gap-1 text-[11px] text-[#666] mb-1">
         {['S', 'M', 'T', 'W', 'T', 'F', 'S'].map((d, i) => <div key={i} className="text-center">{d}</div>)}
@@ -281,7 +595,7 @@ function DateRangePicker({ start, end, onChange }: { start?: string; end?: strin
       <div className="flex items-center justify-between mt-2 text-[11px]">
         <div className="text-[#888]">
           {start && <span>{formatDeadline(start)}</span>}
-          {start && end && <span className="mx-1">→</span>}
+          {start && end && <span className="mx-1">â†’</span>}
           {end && <span>{formatDeadline(end)}</span>}
           {!start && !end && <span>Pick start, then end</span>}
         </div>
@@ -294,7 +608,7 @@ function DateRangePicker({ start, end, onChange }: { start?: string; end?: strin
 }
 
 function AddModal({
-  onClose, onAddTask, onUpdateTask, onAddProject, onAddClient, projects, clients, people, editingTask, defaultList,
+  onClose, onAddTask, onUpdateTask, onAddProject, onAddClient, projects, clients, people, editingTask, defaultList, defaultAssignee,
 }: {
   onClose: () => void;
   onAddTask: (t: Omit<Task, 'id' | 'order'>) => void;
@@ -304,6 +618,7 @@ function AddModal({
   projects: Project[]; clients: Client[]; people: Person[];
   editingTask?: Task | null;
   defaultList?: ListId;
+  defaultAssignee?: string;
 }) {
   const isEdit = !!editingTask;
   const initialProject = editingTask?.projectId ? projects.find((p) => p.id === editingTask.projectId) : undefined;
@@ -311,9 +626,11 @@ function AddModal({
   const [title, setTitle] = useState(editingTask?.title ?? '');
   const [list, setList] = useState<ListId>(editingTask?.list ?? defaultList ?? 'dashboard');
   const [section, setSection] = useState<SectionId>(editingTask?.section ?? 'today');
-  const [clientId, setClientId] = useState<string>(initialProject?.clientId ?? '');
+  const [isMilestone, setIsMilestone] = useState<boolean>(editingTask?.type === 'scheduled');
+  // Prefer the task's explicit clientId; fall back to the client owning its project.
+  const [clientId, setClientId] = useState<string>(editingTask?.clientId ?? initialProject?.clientId ?? '');
   const [projectId, setProjectId] = useState<string>(editingTask?.projectId ?? '');
-  const [assignees, setAssignees] = useState<string[]>(editingTask?.assignees ?? []);
+  const [assignees, setAssignees] = useState<string[]>(editingTask?.assignees ?? (defaultAssignee ? [defaultAssignee] : []));
   const [startDate, setStartDate] = useState<string | undefined>(editingTask?.startDate);
   const [deadline, setDeadline] = useState<string | undefined>(editingTask?.deadline);
   const [projectName, setProjectName] = useState('');
@@ -325,27 +642,38 @@ function AddModal({
   const submit = (e: React.FormEvent) => {
     e.preventDefault();
     if (tab === 'task' && title.trim()) {
+      // If the user only picked one date, treat it as the deadline (the more common case ï¿½
+      // single-date picks should not silently land in startDate and disappear).
+      const finalStart = (startDate && deadline) ? startDate : undefined;
+      const finalDeadline = deadline ?? startDate;
+      // If a project is picked, trust its clientId; else store the explicit client choice.
+      const pickedProject = projectId ? projects.find((p) => p.id === projectId) : undefined;
+      const finalClientId = pickedProject?.clientId ?? (clientId || undefined);
       if (isEdit && editingTask && onUpdateTask) {
         onUpdateTask(editingTask.id, {
           title: title.trim(),
+          type: isMilestone ? 'scheduled' : 'todo',
           assignees,
           list,
           section,
           projectId: projectId || undefined,
-          startDate,
-          deadline,
+          clientId: finalClientId,
+          startDate: finalStart,
+          deadline: finalDeadline,
+          ...(isMilestone ? { completed: false } : {}),
         });
       } else {
         onAddTask({
           title: title.trim(),
-          type: 'todo',
+          type: isMilestone ? 'scheduled' : 'todo',
           assignees,
           completed: false,
           list,
           section,
           projectId: projectId || undefined,
-          startDate,
-          deadline,
+          clientId: finalClientId,
+          startDate: finalStart,
+          deadline: finalDeadline,
         });
       }
       onClose();
@@ -379,6 +707,13 @@ function AddModal({
           {tab === 'task' && (
             <>
               <input autoFocus value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Task title (required)" className="bg-[#1f1f1f] rounded-md px-3 py-2 text-white text-[14px] outline-none focus:ring-1 focus:ring-[#7363FF]" />
+              <div className="flex items-center justify-between bg-[#1f1f1f] rounded-md px-3 py-2">
+                <div className="flex flex-col">
+                  <span className={`text-[14px] ${isMilestone ? 'text-[#8465ff]' : 'text-white'}`}>Milestone</span>
+                  <span className="text-[#666] text-[12px]">No checkbox Â· pinned to top of its column</span>
+                </div>
+                <MilestoneToggle value={isMilestone} onChange={setIsMilestone} />
+              </div>
               <div className="flex gap-2">
                 <select value={clientId} onChange={(e) => { setClientId(e.target.value); setProjectId(''); }} className="flex-1 bg-[#1f1f1f] rounded-md px-3 py-2 text-white text-[14px] outline-none">
                   <option value="">No client</option>
@@ -413,7 +748,7 @@ function AddModal({
                 </div>
               </div>
               <div>
-                <div className="text-[#888] text-[12px] mb-1">Dates (optional — start → deadline)</div>
+                <div className="text-[#888] text-[12px] mb-1">Dates (optional â€” start â†’ deadline)</div>
                 <DateRangePicker start={startDate} end={deadline} onChange={(s, e) => { setStartDate(s); setDeadline(e); }} />
               </div>
             </>
@@ -434,14 +769,14 @@ function AddModal({
             <button type="button" onClick={onClose} className="px-4 py-2 rounded-md text-[#999] hover:text-white text-[14px]">Cancel</button>
             <button type="submit" className="px-4 py-2 rounded-md bg-[#7363FF] text-white text-[14px] hover:bg-[#8573ff]">{isEdit ? 'Save' : 'Add'}</button>
           </div>
-          <p className="text-[#666] text-[12px] mt-1">Projects referenced: {projects.length} · Clients: {clients.length}</p>
+          <p className="text-[#666] text-[12px] mt-1">Projects referenced: {projects.length} Â· Clients: {clients.length}</p>
         </form>
       </motion.div>
     </motion.div>
   );
 }
 
-function EditableText({ value, onChange, className, autoFocus = false, placeholder, onEditingChange }: { value: string; onChange: (v: string) => void; className?: string; autoFocus?: boolean; placeholder?: string; onEditingChange?: (editing: boolean) => void }) {
+function EditableText({ value, onChange, className, autoFocus = false, placeholder, onEditingChange, onDiscardIfEmpty, onEnter }: { value: string; onChange: (v: string) => void; className?: string; autoFocus?: boolean; placeholder?: string; onEditingChange?: (editing: boolean) => void; onDiscardIfEmpty?: () => void; onEnter?: () => void }) {
   const [editing, setEditingState] = useState(autoFocus);
   const setEditing = (v: boolean) => { setEditingState(v); onEditingChange?.(v); };
   useEffect(() => { if (autoFocus) onEditingChange?.(true); }, []);
@@ -463,20 +798,32 @@ function EditableText({ value, onChange, className, autoFocus = false, placehold
       contentEditable={editing}
       suppressContentEditableWarning
       data-placeholder={placeholder || ''}
+      // While editing, swallow pointerdown so clicks within the text place a caret
+      // instead of bubbling to the row's drag listeners.
+      onPointerDown={(e) => { if (editing) e.stopPropagation(); }}
       onClick={() => setEditing(true)}
       onBlur={(e) => {
         const next = (e.currentTarget.textContent || '').trim();
         if (next && next !== value) onChange(next);
+        else if (!next && !value && onDiscardIfEmpty) onDiscardIfEmpty();
         else if (!next && value) e.currentTarget.textContent = value;
         setEditing(false);
       }}
       onKeyDown={(e) => {
-        if (e.key === 'Enter') { e.preventDefault(); (e.currentTarget as HTMLSpanElement).blur(); }
+        // Stop ALL keystrokes from bubbling to row drag listeners while editing — otherwise
+        // dnd-kit's KeyboardSensor sees Space/Arrows as "start drag" commands.
+        e.stopPropagation();
+        if (e.key === 'Enter' && !e.shiftKey) {
+          e.preventDefault();
+          (e.currentTarget as HTMLSpanElement).blur();
+          // Optional onEnter callback (e.g. spawn a sibling task).
+          if (onEnter) onEnter();
+        }
         if (e.key === 'Escape') { e.preventDefault(); (e.currentTarget as HTMLSpanElement).textContent = value; setEditing(false); }
       }}
       className={`outline-none cursor-text ${className || ''}`}
       style={value ? undefined : { minWidth: '1px' }}
-    >{value || (placeholder && !editing ? <span className="text-[#5e5e5e]">{placeholder}</span> : null)}</span>
+    >{value || (placeholder && !editing ? <span className="text-[#383838]">{placeholder}</span> : null)}</span>
   );
 }
 
@@ -507,38 +854,201 @@ function ShortInBrackets({ value, onChange }: { value: string; onChange: (v: str
   );
 }
 
-function ClientRow({ client, autoFocus, bodyFont, onRenameName, onRenameShort, onDelete }: { client: Client; autoFocus: boolean; bodyFont: string; onRenameName: (v: string) => void; onRenameShort: (v: string) => void; onDelete: () => void }) {
+function ClientRow({ client, autoFocus, bodyFont, onRenameName, onRenameShort, onDelete, currentUserShort }: { client: Client; autoFocus: boolean; bodyFont: string; onRenameName: (v: string) => void; onRenameShort: (v: string) => void; onDelete: () => void; currentUserShort?: string }) {
   const [editingName, setEditingName] = useState(autoFocus);
+  const isPersonal = client.id === PERSONAL_CLIENT_ID;
+  // Drop target: dragging a project onto this row reassigns the project to this client.
+  const { setNodeRef, isOver } = useDroppable({ id: `client:${client.id}`, data: { type: 'clientHeader', clientId: client.id } });
   return (
-    <SettingsRow>
+    <motion.div
+      ref={setNodeRef}
+      className={`relative group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px] overflow-hidden ${isOver ? 'bg-white/[0.06] ring-1 ring-[#7363FF]/40' : ''}`}
+      whileHover={{ backgroundColor: "rgba(255, 255, 255, 0.03)", transition: { duration: 0.15 } }}
+    >
+      {isPersonal && <AssigneeBadge letter={currentUserShort || '?'} tone="todo" hollow />}
       <span className="inline-flex items-baseline">
-        <EditableText value={client.name} onChange={onRenameName} className={`${bodyFont} text-white`} autoFocus={autoFocus} placeholder="New Client" onEditingChange={setEditingName} />
-        {!editingName && client.short && (
+        {isPersonal ? (
+          <span className={`${bodyFont} text-white`}>Personal</span>
+        ) : (
+          <EditableText value={client.name} onChange={onRenameName} className={`${bodyFont} text-white`} autoFocus={autoFocus} placeholder="New Client" onEditingChange={setEditingName} />
+        )}
+        {!isPersonal && !editingName && client.short && (
           <>
             <span className="w-[6px]" />
             <ShortInBrackets value={client.short} onChange={onRenameShort} />
           </>
         )}
       </span>
-      <TrashBtn onClick={onDelete} />
-    </SettingsRow>
+      {!isPersonal && (
+        <button
+          type="button"
+          onClick={onDelete}
+          className="ml-auto -mr-[22px] p-1 opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity"
+          aria-label="Delete client"
+        >
+          <Trash2 size={14} />
+        </button>
+      )}
+    </motion.div>
+  );
+}
+
+function ResourceRow({ person, bodyFont, onDelete }: { person: Person; bodyFont: string; onDelete: () => void }) {
+  // Drop target: dragging a project or task assigns this person to it (and to the project's children for projects).
+  const { setNodeRef, isOver } = useDroppable({ id: `resource:${person.id}`, data: { type: 'resource', personShort: person.short } });
+  return (
+    <motion.div
+      ref={setNodeRef}
+      className={`relative group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px] overflow-hidden ${isOver ? 'bg-white/[0.06] ring-1 ring-[#7363FF]/40' : ''}`}
+      whileHover={{ backgroundColor: "rgba(255, 255, 255, 0.03)", transition: { duration: 0.15 } }}
+    >
+      <AssigneeBadge letter={person.short || '?'} tone="todo" />
+      <span className="w-[2px]" />
+      <span className={`${bodyFont} text-white`}>{person.name || '(unnamed)'}</span>
+      {person.short && (
+        <>
+          <span className="w-[6px]" />
+          <span className={`${bodyFont} text-[#656464]`}>({person.short})</span>
+        </>
+      )}
+      <button
+        type="button"
+        onClick={onDelete}
+        className="ml-auto -mr-[22px] p-1 opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity"
+        aria-label="Delete resource"
+      >
+        <Trash2 size={14} />
+      </button>
+    </motion.div>
+  );
+}
+
+function HeaderAddMenu({
+  clients,
+  onAddBlankClient,
+  onAddBlankProject,
+  onAddBlankTask,
+}: {
+  clients: Client[];
+  onAddBlankClient: () => void;
+  onAddBlankProject: (clientId?: string) => void;
+  onAddBlankTask: () => void;
+}) {
+  const [mode, setMode] = useState<'closed' | 'cascade' | 'picker'>('closed');
+  const [filter, setFilter] = useState('');
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  // Close picker when clicking outside.
+  useEffect(() => {
+    if (mode !== 'picker') return;
+    const onDown = (e: MouseEvent) => {
+      if (!wrapRef.current?.contains(e.target as Node)) { setMode('closed'); setFilter(''); }
+    };
+    window.addEventListener('mousedown', onDown);
+    return () => window.removeEventListener('mousedown', onDown);
+  }, [mode]);
+
+  const filtered = clients
+    .filter((c) => c.name.toLowerCase().includes(filter.toLowerCase()))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  const cascadeBtn = "px-2 py-[2px] rounded text-[13px] text-[#ccc] hover:text-white hover:bg-white/[0.05] transition-colors whitespace-nowrap";
+
+  return (
+    <div
+      ref={wrapRef}
+      className="relative flex items-center"
+      onMouseEnter={() => { if (mode === 'closed') setMode('cascade'); }}
+      onMouseLeave={() => { if (mode === 'cascade') setMode('closed'); }}
+    >
+      <button
+        type="button"
+        onClick={() => setMode((m) => (m === 'closed' ? 'cascade' : m === 'cascade' ? 'closed' : m))}
+        className={`${mode === 'closed' ? 'opacity-0 group-hover:opacity-100' : 'opacity-100'} text-[#656464] hover:text-white transition-opacity`}
+        aria-label="Add"
+      >
+        <Plus size={14} />
+      </button>
+      {mode === 'cascade' && (
+        <div className="ml-2 flex items-center gap-1 bg-[#1f1f1f] rounded-md px-1 py-[2px] shadow-lg">
+          <button
+            type="button"
+            onClick={() => { setMode('picker'); setFilter(''); }}
+            className={cascadeBtn}
+          >Client+</button>
+          <button
+            type="button"
+            onClick={() => { onAddBlankProject(); setMode('closed'); }}
+            className={cascadeBtn}
+          >Project+</button>
+          <button
+            type="button"
+            onClick={() => { onAddBlankTask(); setMode('closed'); }}
+            className={cascadeBtn}
+          >Task+</button>
+        </div>
+      )}
+      {mode === 'picker' && (
+        <div className="absolute left-full top-full ml-2 mt-1 w-[240px] bg-[#1f1f1f] rounded-md p-2 shadow-2xl border border-[#2f2f2f] z-40">
+          <input
+            autoFocus
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            placeholder="Find a clientâ€¦"
+            className="w-full bg-[#2a2a2a] rounded px-2 py-1 text-white text-[13px] outline-none focus:ring-1 focus:ring-[#7363FF] mb-2"
+          />
+          <div className="max-h-[220px] overflow-y-auto">
+            {filtered.length === 0 ? (
+              <div className="text-[#666] text-[12px] px-2 py-1">No matching clients</div>
+            ) : (
+              filtered.map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  onClick={() => { onAddBlankProject(c.id); setMode('closed'); setFilter(''); }}
+                  className="w-full text-left px-2 py-1 text-[13px] text-[#ccc] hover:text-white hover:bg-white/[0.05] rounded transition-colors"
+                >
+                  {c.name} <span className="opacity-60">({c.short})</span>
+                </button>
+              ))
+            )}
+          </div>
+          <div className="border-t border-[#2f2f2f] mt-1 pt-1">
+            <button
+              type="button"
+              onClick={() => { onAddBlankClient(); setMode('closed'); setFilter(''); }}
+              className="w-full text-left px-2 py-1 text-[13px] text-[#7363FF] hover:bg-white/[0.05] rounded transition-colors"
+            >+ Create New</button>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
 function ProjectViewMode({
-  projects, clients, tasks, newId, isAnyDragging, isDraggingProjTask, activeProjTaskId, sourceCollapsed,
+  projects, clients, tasks, newId, isAnyDragging, isDraggingProjTask, activeProjTaskId, activeProjTask, overProjTask, sourceCollapsed,
   onAddClient, onRenameClient, onRenameClientShort, onDeleteClient,
   onAddProject, onRenameProject, onDeleteProject,
-  onToggleTask, onRenameTask, onAddTaskToProject, onAddTaskInList,
+  onToggleTask, onRenameTask, onDeleteTask, onEditTask, onQuickEditTask, onAddTaskToProject, onAddTaskInList, onAddProjectInList,
+  people, onAddPerson, onDeletePerson, currentUserShort, taskOrder = 'ptc',
 }: {
-  projects: Project[]; clients: Client[]; tasks: Task[]; newId: string | null; isAnyDragging: boolean;
+  projects: Project[]; clients: Client[]; tasks: Task[]; people: Person[]; newId: string | null; isAnyDragging: boolean;
+  currentUserShort: string;
   isDraggingProjTask: boolean;
   activeProjTaskId: string | null;
+  // Pulled in so ProjectListColumn can run the same displacement math as the list view.
+  activeProjTask: Task | null;
+  overProjTask: Task | null;
   sourceCollapsed: boolean;
   onToggleTask: (id: string) => void;
   onRenameTask: (id: string, title: string) => void;
-  onAddTaskToProject: (projectId: string) => void;
+  onDeleteTask: (id: string) => void;
+  onEditTask: (t: Task) => void;
+  onQuickEditTask?: (t: Task) => void;
+  onAddTaskToProject: (projectId: string, listId: ListId) => void;
   onAddTaskInList: (listId: ListId) => void;
+  onAddProjectInList: (listId: ListId, clientId?: string) => void;
   onAddClient: () => void;
   onRenameClient: (id: string, name: string) => void;
   onRenameClientShort: (id: string, short: string) => void;
@@ -546,41 +1056,128 @@ function ProjectViewMode({
   onAddProject: (clientId?: string) => void;
   onRenameProject: (id: string, name: string) => void;
   onDeleteProject: (id: string) => void;
+  onAddPerson: () => void;
+  onDeletePerson: (id: string) => void;
+  taskOrder?: TaskOrder;
 }) {
-  const sortedClients = [...clients].sort((a, b) => a.name.localeCompare(b.name));
+  // Personal pins to the top; all other clients sort alphabetically.
+  const sortedClients = [...clients].sort((a, b) => {
+    if (a.id === PERSONAL_CLIENT_ID) return -1;
+    if (b.id === PERSONAL_CLIENT_ID) return 1;
+    return a.name.localeCompare(b.name);
+  });
   const bodyFont = "font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap";
 
   const Header = ({ title, onAdd }: { title: string; onAdd?: () => void }) => (
-    <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[50px]">
+    <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[74px]">
       <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">{title}</p>
       {onAdd && <AddPlus onClick={onAdd} />}
     </div>
   );
 
-  const ClientSubHeader = ({ client }: { client: Client }) => (
-    <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px]">
-      <p className={`${bodyFont} text-[#656464]`}>{client.name}</p>
-      <AddPlus onClick={() => onAddProject(client.id)} />
-    </div>
-  );
+  const ClientSubHeader = ({ client, listId }: { client: Client; listId: ListId }) => {
+    const { setNodeRef, isOver } = useDroppable({ id: `clientsub:${listId}:${client.id}`, data: { type: 'clientHeader', clientId: client.id, listId } });
+    return (
+      <div ref={setNodeRef} className={`group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px] ${isOver ? 'bg-white/[0.06] ring-1 ring-[#7363FF]/40' : ''}`}>
+        <p className={`${bodyFont} text-[#656464]`}>{client.name}</p>
+        <AddPlus onClick={() => onAddProject(client.id)} />
+      </div>
+    );
+  };
 
-  const tasksForProjectList = (p: Project, listId: ListId) => tasks.filter((t) => t.list === listId && (t.projectId === p.id || (!t.projectId && (t.title.toLowerCase().startsWith(p.name.toLowerCase() + '-') || t.title.toLowerCase() === p.name.toLowerCase()))));
+  // Parenthood is defined strictly by projectId. A task without a projectId is always "unassigned"
+  // and renders at the very top of the column ï¿½ never absorbed by a project via title heuristics.
+  // Milestones (type === 'scheduled') are pulled out and rendered separately at the top of the column.
+  const tasksForProjectList = (p: Project, listId: ListId) => {
+    // Within a project's task list in project view, Today tasks always sort above Next tasks.
+    // Inside each section, preserve the user's manual order.
+    const sectionRank: Record<SectionId, number> = { inbox: 0, today: 1, next: 2 };
+    return tasks
+      .filter((t) => t.list === listId && t.projectId === p.id && t.type !== 'scheduled')
+      .sort((a, b) => {
+        const sr = (sectionRank[a.section] ?? 99) - (sectionRank[b.section] ?? 99);
+        if (sr !== 0) return sr;
+        return a.order - b.order;
+      });
+  };
+
+  // A milestone belongs to a column if the task itself is in that list, OR if its project is pinned to that list.
+  const milestonesForList = (listId: ListId) => {
+    return tasks
+      .filter((t) => {
+        if (t.type !== 'scheduled') return false;
+        if (t.projectId) {
+          const proj = projects.find((p) => p.id === t.projectId);
+          if (proj?.list) return proj.list === listId;
+        }
+        return t.list === listId;
+      })
+      .sort((a, b) => {
+        const ad = a.deadline || '\uffff';
+        const bd = b.deadline || '\uffff';
+        if (ad !== bd) return ad < bd ? -1 : 1;
+        return a.title.localeCompare(b.title);
+      });
+  };
 
   const renderListColumn = (listId: ListId, title: string) => {
     // Tasks already shown under some project (either matched by projectId or by legacy title heuristic)
     const claimed = new Set<string>();
     for (const p of projects) for (const t of tasksForProjectList(p, listId)) claimed.add(t.id);
-    const unassigned = tasks.filter((t) => t.list === listId && !t.projectId && !claimed.has(t.id));
+    const unassigned = tasks.filter((t) => t.list === listId && !t.projectId && !claimed.has(t.id) && t.type !== 'scheduled');
     const noClientProjects = projects.filter((p) => !p.clientId && (p.list ? p.list === listId : tasksForProjectList(p, listId).length > 0));
+    const milestones = milestonesForList(listId);
+    return <ProjectListColumn key={listId} listId={listId} title={title} unassigned={unassigned} noClientProjects={noClientProjects} milestones={milestones} />;
+  };
+  // Slot height for a project row ï¿½ matches the motion.div height animation in ProjectTaskRow.
+  const PROJ_ROW_H = 37;
+  // Same displacement math the list view runs:
+  //  - both active+over in this bucket ? cards strictly between them slide by ï¿½slot height
+  //  - active in a different bucket but over here ? the hovered slot opens an insertionGap above
+  const projAnimProps = (bucket: Task[], task: Task, index: number): { displacementOffset: number; insertionGap: number } => {
+    if (!activeProjTask || !overProjTask || activeProjTask.id === task.id) return { displacementOffset: 0, insertionGap: 0 };
+    const aIdx = bucket.findIndex((t) => t.id === activeProjTask.id);
+    const oIdx = bucket.findIndex((t) => t.id === overProjTask.id);
+    const activeInBucket = aIdx >= 0;
+    const overInBucket = oIdx >= 0;
+    if (!activeInBucket && !overInBucket) return { displacementOffset: 0, insertionGap: 0 };
+    if (activeInBucket && overInBucket) {
+      if (aIdx < oIdx && index > aIdx && index <= oIdx) return { displacementOffset: -PROJ_ROW_H, insertionGap: 0 };
+      if (aIdx > oIdx && index >= oIdx && index < aIdx) return { displacementOffset: PROJ_ROW_H, insertionGap: 0 };
+    } else if (!activeInBucket && overInBucket) {
+      if (index === oIdx) return { displacementOffset: 0, insertionGap: PROJ_ROW_H };
+    }
+    return { displacementOffset: 0, insertionGap: 0 };
+  };
+  const ProjectListColumn = ({ listId, title, unassigned, noClientProjects, milestones }: { listId: ListId; title: string; unassigned: Task[]; noClientProjects: Project[]; milestones: Task[] }) => {
+    const { setNodeRef } = useDroppable({ id: `projlist:${listId}`, data: { type: 'projList', listId } });
     return (
-    <div key={listId} className="flex-1 min-w-[340px] max-w-[440px]">
-      <Header title={title} onAdd={() => onAddTaskInList(listId)} />
+    <div ref={setNodeRef} className={`flex-1 min-w-[340px] max-w-[440px]`}>
+      <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[74px]">
+        <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">{title}</p>
+        <HeaderAddMenu
+          clients={clients}
+          onAddBlankClient={onAddClient}
+          onAddBlankProject={(clientId) => onAddProjectInList(listId, clientId)}
+          onAddBlankTask={() => onAddTaskInList(listId)}
+        />
+      </div>
+      {milestones.length > 0 && (
+        <div className="mb-[37px]">
+          {milestones.map((t) => (
+            <ProjectTaskRow key={t.id} task={t} listId={listId} onToggle={() => onToggleTask(t.id)} onRename={(title) => onRenameTask(t.id, title)} onDelete={() => onDeleteTask(t.id)} onEdit={() => onEditTask(t)} isAnyDragging={isAnyDragging} autoFocus={t.id === newId} nonDraggable projects={projects} clients={clients} showContext />
+          ))}
+        </div>
+      )}
       {unassigned.length > 0 && (
         <div className="mb-[37px]">
           <SortableContext items={unassigned.map((t) => `projtask-${listId}-${t.id}`)} strategy={verticalListSortingStrategy}>
-            {unassigned.map((t) => (
-              <ProjectTaskRow key={t.id} task={t} listId={listId} onToggle={() => onToggleTask(t.id)} onRename={(title) => onRenameTask(t.id, title)} isAnyDragging={isAnyDragging} autoFocus={t.id === newId} collapsed={sourceCollapsed && activeProjTaskId === t.id} />
-            ))}
+            {unassigned.map((t, i) => {
+              const { displacementOffset, insertionGap } = projAnimProps(unassigned, t, i);
+              return (
+                <ProjectTaskRow key={t.id} task={t} listId={listId} onToggle={() => onToggleTask(t.id)} onRename={(title) => onRenameTask(t.id, title)} onDelete={() => onDeleteTask(t.id)} onEdit={() => onEditTask(t)} onQuickEdit={onQuickEditTask ? () => onQuickEditTask(t) : undefined} onAddSibling={() => addSiblingTask(t)} isAnyDragging={isAnyDragging} taskOrder={taskOrder} autoFocus={t.id === newId} collapsed={sourceCollapsed && activeProjTaskId === t.id} displacementOffset={displacementOffset} insertionGap={insertionGap} />
+              );
+            })}
           </SortableContext>
         </div>
       )}
@@ -593,9 +1190,12 @@ function ProjectViewMode({
                 <div key={p.id}>
                   <SortableProjectRow project={p} listId={listId} onRename={onRenameProject} onDelete={onDeleteProject} onAddTask={onAddTaskToProject} autoFocus={p.id === newId} isAnyDragging={isAnyDragging} />
                   <SortableContext items={projTasks.map((t) => `projtask-${listId}-${t.id}`)} strategy={verticalListSortingStrategy}>
-                    {projTasks.map((t) => (
-                      <ProjectTaskRow key={t.id} task={t} listId={listId} onToggle={() => onToggleTask(t.id)} onRename={(title) => onRenameTask(t.id, title)} isAnyDragging={isAnyDragging} autoFocus={t.id === newId} collapsed={sourceCollapsed && activeProjTaskId === t.id} />
-                    ))}
+                    {projTasks.map((t, i) => {
+                      const { displacementOffset, insertionGap } = projAnimProps(projTasks, t, i);
+                      return (
+                        <ProjectTaskRow key={t.id} task={t} listId={listId} onToggle={() => onToggleTask(t.id)} onRename={(title) => onRenameTask(t.id, title)} onDelete={() => onDeleteTask(t.id)} onEdit={() => onEditTask(t)} onQuickEdit={onQuickEditTask ? () => onQuickEditTask(t) : undefined} onAddSibling={() => addSiblingTask(t)} isAnyDragging={isAnyDragging} taskOrder={taskOrder} autoFocus={t.id === newId} collapsed={sourceCollapsed && activeProjTaskId === t.id} displacementOffset={displacementOffset} insertionGap={insertionGap} />
+                      );
+                    })}
                   </SortableContext>
                 </div>
               );
@@ -605,14 +1205,16 @@ function ProjectViewMode({
       )}
       {sortedClients.map((c, ci) => {
         const clientProjects = projects.filter((p) => p.clientId === c.id);
-        const visibleProjects = listId === 'projects' || isDraggingProjTask
-          ? clientProjects
-          : clientProjects.filter((p) => tasksForProjectList(p, listId).length > 0);
+        const visibleProjects = clientProjects.filter((p) => {
+          if (p.list) return p.list === listId;
+          // No explicit pin: show in "projects" as default home, plus anywhere it has tasks.
+          return listId === 'projects' || tasksForProjectList(p, listId).length > 0;
+        });
         if (visibleProjects.length === 0) return null;
         return (
           <div key={c.id}>
             {ci > 0 && <Spacer />}
-            <ClientSubHeader client={c} />
+            <ClientSubHeader client={c} listId={listId} />
             <SortableContext items={visibleProjects.map((p) => `projrow-${listId}-${p.id}`)} strategy={verticalListSortingStrategy}>
               {visibleProjects.map((p) => {
                 const projTasks = tasksForProjectList(p, listId);
@@ -620,9 +1222,12 @@ function ProjectViewMode({
                   <div key={p.id}>
                     <SortableProjectRow project={p} listId={listId} onRename={onRenameProject} onDelete={onDeleteProject} onAddTask={onAddTaskToProject} autoFocus={p.id === newId} isAnyDragging={isAnyDragging} />
                     <SortableContext items={projTasks.map((t) => `projtask-${listId}-${t.id}`)} strategy={verticalListSortingStrategy}>
-                      {projTasks.map((t) => (
-                        <ProjectTaskRow key={t.id} task={t} listId={listId} onToggle={() => onToggleTask(t.id)} onRename={(title) => onRenameTask(t.id, title)} isAnyDragging={isAnyDragging} autoFocus={t.id === newId} collapsed={sourceCollapsed && activeProjTaskId === t.id} />
-                      ))}
+                      {projTasks.map((t, i) => {
+                        const { displacementOffset, insertionGap } = projAnimProps(projTasks, t, i);
+                        return (
+                          <ProjectTaskRow key={t.id} task={t} listId={listId} onToggle={() => onToggleTask(t.id)} onRename={(title) => onRenameTask(t.id, title)} onDelete={() => onDeleteTask(t.id)} onEdit={() => onEditTask(t)} onQuickEdit={onQuickEditTask ? () => onQuickEditTask(t) : undefined} onAddSibling={() => addSiblingTask(t)} isAnyDragging={isAnyDragging} taskOrder={taskOrder} autoFocus={t.id === newId} collapsed={sourceCollapsed && activeProjTaskId === t.id} displacementOffset={displacementOffset} insertionGap={insertionGap} />
+                        );
+                      })}
                     </SortableContext>
                   </div>
                 );
@@ -638,9 +1243,14 @@ function ProjectViewMode({
   return (
     <div className="pt-[106px] pb-[140px] flex gap-0 min-w-[1760px]">
       <div className="flex-1 min-w-[340px] max-w-[440px]">
+        <Header title="Resources" onAdd={onAddPerson} />
+        {people.map((p) => (
+          <ResourceRow key={p.id} person={p} bodyFont={bodyFont} onDelete={() => onDeletePerson(p.id)} />
+        ))}
+        <Spacer />
         <Header title="Clients" onAdd={onAddClient} />
         {sortedClients.map((c) => (
-          <ClientRow key={c.id} client={c} autoFocus={c.id === newId} bodyFont={bodyFont} onRenameName={(v) => onRenameClient(c.id, v)} onRenameShort={(v) => onRenameClientShort(c.id, v)} onDelete={() => onDeleteClient(c.id)} />
+          <ClientRow key={c.id} client={c} autoFocus={c.id === newId} bodyFont={bodyFont} onRenameName={(v) => onRenameClient(c.id, v)} onRenameShort={(v) => onRenameClientShort(c.id, v)} onDelete={() => onDeleteClient(c.id)} currentUserShort={currentUserShort} />
         ))}
       </div>
       {renderListColumn('work', 'Work')}
@@ -662,12 +1272,9 @@ function dateToISO(d: Date): string {
 }
 
 function CalendarDayDroppable({ id, children, isEmpty, className = '' }: { id: string; children: React.ReactNode; isEmpty: boolean; className?: string }) {
-  const { setNodeRef, isOver } = useDroppable({ id });
-  return (
-    <div ref={setNodeRef} className={`transition-colors ${isEmpty ? 'min-h-[37px]' : ''} ${isOver ? 'bg-white/[0.03]' : ''} ${className}`}>
-      {children}
-    </div>
-  );
+  const { setNodeRef } = useDroppable({ id });
+  // No tint, no hint line ï¿½ displaced cards under the cursor show where the drop will land.
+  return <div ref={setNodeRef} className={`${isEmpty ? 'min-h-[37px]' : ''} ${className}`}>{children}</div>;
 }
 
 function CalendarColumnDroppable({ date, children }: { date: string; children: React.ReactNode }) {
@@ -686,34 +1293,110 @@ const CAL_LISTS: { id: ListId; label: string }[] = [
   { id: 'projects', label: 'Projects' },
 ];
 
-function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onDelete, onEdit, isAnyDragging, dimmed }: {
-  task: Task; cellId: string; projects: Project[]; clients: Client[];
-  onToggle: () => void; onRename: (title: string) => void; onDelete: () => void; onEdit: () => void;
-  isAnyDragging: boolean; dimmed?: boolean;
-}) {
+// Presentational body of a calendar card ï¿½ no drag wiring, no callbacks. Shared between the
+// live CalendarCard and the DragOverlay so the floating ghost matches the source pixel-for-pixel.
+function CalendarCardBody({ task, projects, clients }: { task: Task; projects: Project[]; clients: Client[] }) {
   const project = task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
-  const client = project?.clientId ? clients.find((c) => c.id === project.clientId) : undefined;
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id, data: { type: 'task', task, calendarCellId: cellId } });
-  const style = { transform: CSS.Transform.toString(transform), transition: isAnyDragging ? transition : 'none' };
+  const resolvedClientId = task.clientId ?? project?.clientId;
+  const client = resolvedClientId ? clients.find((c) => c.id === resolvedClientId) : undefined;
   const isScheduled = task.type === 'scheduled';
-  const titleColor = task.completed ? 'text-[#5e5e5e] line-through' : isScheduled ? 'text-[#8465ff]' : 'text-white';
+  const isNext = task.section === 'next';
+  const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID;
+  const titleColor = task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : isNext ? 'text-[#a8a8a8]' : 'text-white';
   const metaColor = isScheduled ? 'text-[#8465ff]' : 'text-[#656464]';
   return (
-    <div ref={setNodeRef} style={style} className={`relative mx-[6px] mb-[4px] rounded-md bg-[#333333] group ${dimmed ? 'opacity-60' : ''} ${isDragging ? 'opacity-0' : ''}`}>
-      <div onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing px-[10px] py-[6px] flex flex-col gap-[2px]">
+    <div className="pl-[10px] pr-[10px] py-[6px] flex flex-row items-start gap-[10px]">
+      {!isScheduled && (
+        <div className="shrink-0 flex items-center justify-center pt-[3px]">
+          <TaskCheckbox completed={task.completed} onToggle={() => {}} />
+        </div>
+      )}
+      <div className="flex-1 min-w-0 flex flex-col gap-[2px]">
         <div className="flex flex-row items-center gap-[4px]">
-          {!isScheduled && (
-            <div onPointerDown={(e) => e.stopPropagation()}>
-              <TaskCheckbox completed={task.completed} onToggle={onToggle} />
-            </div>
-          )}
           {project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis text-[#656464]`}>{project.name}</p>}
           <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleColor}`}>{task.title}</span>
         </div>
-        <div className="flex flex-row items-center gap-[6px] pl-[20px]">
+        <div className="flex flex-row items-center gap-[6px]">
           {client && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${metaColor}`}>{client.short}</p>}
-          {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} />)}
+          {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} />)}
           {task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${isScheduled ? 'text-[#8465ff]' : 'text-[#656464]'}`}>{formatDeadline(task.deadline)}</p>}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onDelete, onEdit, onQuickEdit, onAddSibling, isAnyDragging, dimmed, displacementOffset = 0, insertionGap = 0 }: {
+  task: Task; cellId: string; projects: Project[]; clients: Client[];
+  onToggle: () => void; onRename: (title: string) => void; onDelete: () => void; onEdit: () => void;
+  onQuickEdit?: () => void;
+  onAddSibling?: () => void;
+  isAnyDragging: boolean; dimmed?: boolean;
+  // Same displacement system the list view uses: cards under the dragged item shift to make room.
+  displacementOffset?: number; insertionGap?: number;
+}) {
+  const project = task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
+  const resolvedClientId = task.clientId ?? project?.clientId;
+  const client = resolvedClientId ? clients.find((c) => c.id === resolvedClientId) : undefined;
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id, data: { type: 'task', task, calendarCellId: cellId } });
+  const style = { transform: CSS.Transform.toString(transform), transition: isAnyDragging ? `transform ${MOTION.base}ms ${MOTION.easeOut}` : 'none' };
+  const isScheduled = task.type === 'scheduled';
+  const isNext = task.section === 'next';
+  const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID;
+  const titleColor = task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : isNext ? 'text-[#a8a8a8]' : 'text-white';
+  const metaColor = isScheduled ? 'text-[#8465ff]' : 'text-[#656464]';
+  // Source-collapse: outer wrapper uses max-height (CSS can't transition from auto, but it CAN
+  // transition from a fixed max-height to 0) + marginBottom so the column reflows when this card
+  // becomes the active drag.
+  // Displacement: a motion.div wrapper animates y / marginTop so OTHER cards slide out of the way
+  // to reveal where the dragged card will land ï¿½ same trick the list view uses.
+  return (
+    <Displaced offset={displacementOffset} gap={insertionGap} active={isAnyDragging}>
+    {/* Source-collapse: when this card becomes the active drag, the slot it occupies
+        smoothly closes (max-height ? 0) AND fades ï¿½ combined, it feels like the card
+        physically dissolves into the column rather than just snapping out of layout. */}
+    <div
+      className="overflow-hidden"
+      style={{
+        maxHeight: isDragging ? 0 : 200,
+        marginBottom: isDragging ? 0 : 4,
+        opacity: isDragging ? 0 : 1,
+        transition: `max-height ${MOTION.base}ms ${MOTION.easeOut}, margin-bottom ${MOTION.base}ms ${MOTION.easeOut}, opacity ${MOTION.fast}ms ${MOTION.easeStandard}`,
+      }}
+    >
+    <div
+      ref={setNodeRef}
+      style={{ ...style, opacity: isDragging ? 0 : 1, transition: isAnyDragging ? `${style.transition || 'none'}, opacity 120ms ease-out` : 'opacity 120ms ease-out' }}
+      className={`relative mx-[6px] rounded-md bg-[#333333] border border-[#444444] group ${dimmed ? 'opacity-60' : ''}`}
+    >
+      <div onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} onContextMenu={(e) => { if (onQuickEdit) { e.preventDefault(); e.stopPropagation(); onQuickEdit(); } }} {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing pl-[10px] pr-[10px] py-[6px] flex flex-row items-start gap-[10px] overflow-hidden">
+        {!isScheduled && (
+          <div onPointerDown={(e) => e.stopPropagation()} className="shrink-0 flex items-center justify-center pt-[3px]">
+            <TaskCheckbox completed={task.completed} onToggle={onToggle} />
+          </div>
+        )}
+        <div className="flex-1 min-w-0 flex flex-col gap-[2px]">
+          <div className="flex flex-row items-center gap-[4px]">
+            {project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis text-[#656464]`}>{project.name}</p>}
+            <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleColor}`}>{task.title}</span>
+          </div>
+          <div className="flex flex-row items-center gap-[6px]">
+            {client && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${metaColor}`}>{client.short}</p>}
+            {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} />)}
+            {task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${isScheduled ? 'text-[#8465ff]' : 'text-[#656464]'}`}>{formatDeadline(task.deadline)}</p>}
+            {/* + button hugs the inline task info on the second row. Trash stays pinned at top-right via absolute. */}
+            {onAddSibling && (
+              <button
+                type="button"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => { e.stopPropagation(); onAddSibling(); }}
+                className="p-[2px] opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity"
+                aria-label="Add task in same project"
+              >
+                <Plus size={12} />
+              </button>
+            )}
+          </div>
         </div>
       </div>
       <button
@@ -726,24 +1409,32 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
         <Trash2 size={12} />
       </button>
     </div>
+    </div>
+    </Displaced>
   );
 }
 
 function WeekCalendarMode({
-  tasks, projects, clients, onToggleTask, onRenameTask, onDeleteTask, onEditTask, isAnyDragging,
+  tasks, projects, clients, onToggleTask, onRenameTask, onDeleteTask, onEditTask, onQuickEditTask, onAddSiblingTask, isAnyDragging,
+  activeTask, overTask, activeCellId, activeSlotHeight,
 }: {
   tasks: Task[]; projects: Project[]; clients: Client[];
   onToggleTask: (id: string) => void;
   onRenameTask: (id: string, title: string) => void;
   onDeleteTask: (id: string) => void;
   onEditTask: (t: Task) => void;
+  onQuickEditTask?: (t: Task) => void;
+  onAddSiblingTask: (t: Task) => void;
   isAnyDragging: boolean;
+  // Drag context piped from App so the calendar can run the same displacement math the list view runs.
+  activeTask: Task | null; overTask: Task | null; activeCellId: string | null; activeSlotHeight: number;
 }) {
   const [weekOffset, setWeekOffset] = useState(0);
-  const base = startOfWeek(new Date());
-  const weekStart = addDaysToDate(base, weekOffset * 7);
+  // Column 1 = yesterday, column 2 = today, columns 3ï¿½7 = next 5 days. weekOffset shifts the whole window by 7-day increments.
+  const today = new Date(); today.setHours(0, 0, 0, 0);
+  const weekStart = addDaysToDate(today, -1 + weekOffset * 7);
   const days = Array.from({ length: 7 }, (_, i) => addDaysToDate(weekStart, i));
-  const dayNames = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+  const dayNameShort = (d: Date) => d.toLocaleDateString('en-US', { weekday: 'short' });
   const bodyFont = "font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap";
   const todayIso = dateToISO(new Date());
 
@@ -751,19 +1442,89 @@ function WeekCalendarMode({
   const dayOffsetFromToday = (d: Date) => Math.round((d.getTime() - todayAnchor.getTime()) / 86400000);
   const PER_DAY_CAP = 12;
 
+  const isWeekendDate = (x: Date) => x.getDay() === 0 || x.getDay() === 6;
+
+  // Returns the 1-based stripe slot for day d when assigning the 'next' bucket across upcoming days.
+  // For Projects, every future day counts. For Work/Admin, weekends are skipped so striping lands
+  // only on weekdays ï¿½ Sat/Sun stay clean unless something is explicitly dropped there.
+  const stripeSlotForDay = (listId: ListId, d: Date): number | null => {
+    const off = dayOffsetFromToday(d);
+    if (off <= 0) return null;
+    if (listId !== 'projects' && isWeekendDate(d)) return null;
+    let slot = 0;
+    for (let i = 1; i <= off; i++) {
+      const day = addDaysToDate(todayAnchor, i);
+      if (listId === 'projects' || !isWeekendDate(day)) slot++;
+    }
+    return slot;
+  };
+
   const tasksForCell = (listId: ListId, d: Date): Task[] => {
     const off = dayOffsetFromToday(d);
     const iso = dateToISO(d);
     if (off === 0) {
-      return tasks.filter((t) => t.list === listId && t.section === 'today').sort((a, b) => a.order - b.order);
+      // Today column: every today-section task lives here, regardless of any explicit deadline.
+      return tasks.filter((t) => t.list === listId && t.section === 'today' && t.type !== 'scheduled').sort((a, b) => a.order - b.order);
     }
     if (off > 0) {
-      const nextBucket = tasks.filter((t) => t.list === listId && t.section === 'next').sort((a, b) => a.order - b.order);
-      const start = (off - 1) * PER_DAY_CAP;
-      return nextBucket.slice(start, start + PER_DAY_CAP);
+      // Future days: a task with deadline === iso is pinned to this exact day (this is how a
+      // work/admin task ends up on a weekend ï¿½ drop it there, the drop handler writes the deadline,
+      // and we render it on that day instead of striping it through the next weekday).
+      const pinned = tasks.filter((t) => t.list === listId && t.section === 'next' && t.type !== 'scheduled' && t.deadline === iso).sort((a, b) => a.order - b.order);
+      const slot = stripeSlotForDay(listId, d);
+      let striped: Task[] = [];
+      if (slot !== null) {
+        // Striped pool excludes anything that's pinned somewhere (its date already chose where it goes).
+        const nextBucket = tasks.filter((t) => t.list === listId && t.section === 'next' && t.type !== 'scheduled' && !t.deadline).sort((a, b) => a.order - b.order);
+        const start = (slot - 1) * PER_DAY_CAP;
+        striped = nextBucket.slice(start, start + PER_DAY_CAP);
+      }
+      return [...pinned, ...striped];
     }
     // Past days: completed tasks whose deadline matches this day
-    return tasks.filter((t) => t.list === listId && t.completed && t.deadline === iso).sort((a, b) => a.order - b.order);
+    return tasks.filter((t) => t.list === listId && t.completed && t.deadline === iso && t.type !== 'scheduled').sort((a, b) => a.order - b.order);
+  };
+
+  // Milestones (scheduled tasks) render at the top of the column matching their deadline.
+  // Anything dated outside the visible 7-day window stacks at the top of today's column.
+  const visibleIsoSet = useMemo(() => new Set(days.map((d) => dateToISO(d))), [days]);
+  const lastVisibleIso = dateToISO(days[days.length - 1]);
+  const milestonesByIso = useMemo(() => {
+    const map: Record<string, Task[]> = {};
+    for (const t of tasks) {
+      if (t.type !== 'scheduled' || !t.deadline) continue;
+      if (!visibleIsoSet.has(t.deadline)) continue;
+      (map[t.deadline] ||= []).push(t);
+    }
+    for (const iso in map) map[iso].sort((a, b) => a.title.localeCompare(b.title));
+    return map;
+  }, [tasks, visibleIsoSet]);
+  const overflowMilestones = useMemo(() => {
+    return tasks
+      .filter((t) => t.type === 'scheduled' && t.deadline && t.deadline > lastVisibleIso)
+      .sort((a, b) => (a.deadline! < b.deadline! ? -1 : a.deadline! > b.deadline! ? 1 : a.title.localeCompare(b.title)));
+  }, [tasks, lastVisibleIso]);
+
+  const MilestoneCard = ({ task, showDate }: { task: Task; showDate: boolean }) => {
+    const project = task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
+    const resolvedClientId = task.clientId ?? project?.clientId;
+    const client = resolvedClientId ? clients.find((c) => c.id === resolvedClientId) : undefined;
+    const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID;
+    return (
+      <div onDoubleClick={(e) => { e.stopPropagation(); onEditTask(task); }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onQuickEditTask?.(task); }} className="relative mx-[6px] mb-[4px] rounded-md bg-[#333333] border border-[#444444] cursor-pointer">
+        <div className="px-[10px] py-[6px] flex flex-col gap-[2px]">
+          <div className="flex flex-row items-center gap-[4px]">
+            {project && <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis text-[#656464]">{project.name}</p>}
+            <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis text-[#8465ff]">{task.title}</span>
+          </div>
+          <div className="flex flex-row items-center gap-[6px]">
+            {client && <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap text-[#8465ff]">{client.short}</p>}
+            {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone="scheduled" hollow={isPersonal} dim={task.completed} />)}
+            {showDate && task.deadline && <p className="font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap text-[#8465ff]">{formatDeadline(task.deadline)}</p>}
+          </div>
+        </div>
+      </div>
+    );
   };
 
   const formatRange = () => {
@@ -771,8 +1532,8 @@ function WeekCalendarMode({
     const mon = weekStart.toLocaleDateString('en-US', { month: 'short' });
     const monEnd = end.toLocaleDateString('en-US', { month: 'short' });
     return mon === monEnd
-      ? `${mon} ${weekStart.getDate()}–${end.getDate()}, ${end.getFullYear()}`
-      : `${mon} ${weekStart.getDate()} – ${monEnd} ${end.getDate()}, ${end.getFullYear()}`;
+      ? `${mon} ${weekStart.getDate()}â€“${end.getDate()}, ${end.getFullYear()}`
+      : `${mon} ${weekStart.getDate()} â€“ ${monEnd} ${end.getDate()}, ${end.getFullYear()}`;
   };
 
   return (
@@ -791,36 +1552,76 @@ function WeekCalendarMode({
           const isToday = iso === todayIso;
           return (
             <CalendarColumnDroppable key={iso} date={iso}>
-              <div className={`h-[37px] flex items-baseline gap-2 px-[16px] mb-[12px] ${i === 0 || i === 6 ? 'text-[#656464]' : 'text-white'}`}>
-                <p className="font-['NB_International:Regular',sans-serif]">{dayNames[i]}</p>
+              <div className={`h-[37px] flex items-baseline gap-2 px-[16px] mb-[74px] ${isToday ? 'text-[#8465ff]' : (d.getDay() === 0 || d.getDay() === 6 ? 'text-[#656464]' : 'text-white')}`}>
+                <p className="font-['NB_International:Regular',sans-serif]">{dayNameShort(d)}</p>
                 <p className={bodyFont}>{d.getDate()}</p>
-                {isToday && <p className="text-[#8465ff]">(Today)</p>}
+                {isToday && <p className={bodyFont}>(Today)</p>}
               </div>
+              {/* The last visible column gets the overflow stack of milestones whose deadlines fall beyond the window. */}
+              {iso === lastVisibleIso && overflowMilestones.length > 0 && (
+                <div className="mb-[12px]">
+                  {overflowMilestones.map((t) => <MilestoneCard key={t.id} task={t} showDate />)}
+                </div>
+              )}
+              {/* Milestones for this day, pinned above the per-list sections. Date is implied by the column, so it's hidden. */}
+              {(milestonesByIso[iso] || []).length > 0 && (
+                <div className="mb-[12px]">
+                  {milestonesByIso[iso].map((t) => <MilestoneCard key={t.id} task={t} showDate={false} />)}
+                </div>
+              )}
               {CAL_LISTS.map(({ id: listId, label }) => {
                 const bucket = tasksForCell(listId, d);
                 const items = bucket.map((t) => t.id);
                 const isPast = dayOffsetFromToday(d) < 0;
+                // Weekends are projects-only by default. Work/Admin sections appear only if they have
+                // content for that day, or while a drag is active so the user can drop onto them.
+                const isWeekend = d.getDay() === 0 || d.getDay() === 6;
+                if (isWeekend && listId !== 'projects' && bucket.length === 0 && !isAnyDragging) return null;
+                // Displacement math (mirrors getAnimationProps in list view):
+                //  - If active and over are BOTH in this bucket: cards strictly between them slide by ï¿½slotH.
+                //  - If active is in a DIFFERENT bucket and over is in this bucket: the over-index card gets
+                //    an insertionGap above it, opening the slot the dragged card will land in.
+                const aIdx = activeTask ? bucket.findIndex((t) => t.id === activeTask.id) : -1;
+                const oIdx = overTask ? bucket.findIndex((t) => t.id === overTask.id) : -1;
+                const activeInBucket = aIdx >= 0;
+                const overInBucket = oIdx >= 0;
                 return (
                   <CalendarDayDroppable key={listId} id={`cal:${iso}:${listId}`} isEmpty={bucket.length === 0} className="pb-[37px] last:pb-0">
                     <div className="h-[20px] px-[16px] flex items-center mb-[6px]">
                       <p className={`${bodyFont} text-[#5e5e5e]`}>{label}</p>
                     </div>
                     <SortableContext items={items} strategy={verticalListSortingStrategy}>
-                        {bucket.map((t) => (
-                          <CalendarCard
-                            key={t.id}
-                            task={t}
-                            cellId={`cal:${iso}:${listId}`}
-                            onToggle={() => onToggleTask(t.id)}
-                            onRename={(title) => onRenameTask(t.id, title)}
-                            onDelete={() => onDeleteTask(t.id)}
-                            onEdit={() => onEditTask(t)}
-                            isAnyDragging={isAnyDragging}
-                            dimmed={isPast}
-                            projects={projects}
-                            clients={clients}
-                          />
-                        ))}
+                        {bucket.map((t, index) => {
+                          let displacementOffset = 0;
+                          let insertionGap = 0;
+                          if (activeTask && overTask && t.id !== activeTask.id) {
+                            if (activeInBucket && overInBucket) {
+                              if (aIdx < oIdx && index > aIdx && index <= oIdx) displacementOffset = -activeSlotHeight;
+                              else if (aIdx > oIdx && index >= oIdx && index < aIdx) displacementOffset = activeSlotHeight;
+                            } else if (!activeInBucket && overInBucket) {
+                              if (index === oIdx) insertionGap = activeSlotHeight;
+                            }
+                          }
+                          return (
+                            <CalendarCard
+                              key={t.id}
+                              task={t}
+                              cellId={`cal:${iso}:${listId}`}
+                              onToggle={() => onToggleTask(t.id)}
+                              onRename={(title) => onRenameTask(t.id, title)}
+                              onDelete={() => onDeleteTask(t.id)}
+                              onEdit={() => onEditTask(t)}
+                              onQuickEdit={onQuickEditTask ? () => onQuickEditTask(t) : undefined}
+                              onAddSibling={() => onAddSiblingTask(t)}
+                              isAnyDragging={isAnyDragging}
+                              dimmed={isPast}
+                              projects={projects}
+                              clients={clients}
+                              displacementOffset={displacementOffset}
+                              insertionGap={insertionGap}
+                            />
+                          );
+                        })}
                     </SortableContext>
                   </CalendarDayDroppable>
                 );
@@ -833,7 +1634,7 @@ function WeekCalendarMode({
   );
 }
 
-function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePersonShort, onDeletePerson, currentUserShort, onSetCurrentUser }: {
+function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePersonShort, onDeletePerson, currentUserShort, onSetCurrentUser, taskOrder, onSetTaskOrder }: {
   people: Person[]; newId: string | null;
   onAddPerson: () => void;
   onRenamePerson: (id: string, name: string) => void;
@@ -841,6 +1642,8 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
   onDeletePerson: (id: string) => void;
   currentUserShort: string;
   onSetCurrentUser: (short: string) => void;
+  taskOrder: TaskOrder;
+  onSetTaskOrder: (v: TaskOrder) => void;
 }) {
   const bodyFont = "font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap";
   return (
@@ -860,7 +1663,34 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
           })}
           {people.length === 0 && <span className="text-[#666] text-[12px]">Add a person below first.</span>}
         </div>
-        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[50px]">
+        {/* Task display order — three options. Persisted per-browser via localStorage. */}
+        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[20px]">
+          <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Task order</p>
+        </div>
+        <div className="px-[31px] mb-[50px] flex flex-col gap-2">
+          {([
+            { id: 'cpt' as TaskOrder, parts: ['Client - Project', 'Task'] as const },
+            { id: 'ptc' as TaskOrder, parts: ['Project', 'Task', 'Client'] as const },
+            { id: 'tcp' as TaskOrder, parts: ['Task', 'Client - Project'] as const },
+          ]).map((opt) => {
+            const active = taskOrder === opt.id;
+            return (
+              <button key={opt.id} type="button" onClick={() => onSetTaskOrder(opt.id)} className={`text-left text-[13px] transition-colors ${active ? 'text-[#8465ff] font-bold' : 'hover:text-white'}`}>
+                {opt.parts.map((part, i) => (
+                  <Fragment key={i}>
+                    {i > 0 && <span>{'\u00A0\u00A0\u00A0'}</span>}
+                    {/* When inactive, the "Task" word stays white; the other parts (project/client
+                        labels) read as gray. When active, the active button color (purple) wins. */}
+                    <span className={active ? '' : (part === 'Task' ? 'text-white' : 'text-[#656464]')}>
+                      {part}
+                    </span>
+                  </Fragment>
+                ))}
+              </button>
+            );
+          })}
+        </div>
+        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[74px]">
           <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">People</p>
           <AddPlus onClick={onAddPerson} />
         </div>
@@ -883,18 +1713,50 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
   );
 }
 
-function SortableProjectRow({ project, listId, onRename, onDelete, onAddTask, autoFocus, isAnyDragging }: { project: Project; listId: ListId; onRename: (id: string, name: string) => void; onDelete: (id: string) => void; onAddTask: (projectId: string) => void; autoFocus?: boolean; isAnyDragging?: boolean }) {
+function SortableProjectRow({ project, listId, onRename, onDelete, onAddTask, autoFocus, isAnyDragging }: { project: Project; listId: ListId; onRename: (id: string, name: string) => void; onDelete: (id: string) => void; onAddTask: (projectId: string, listId: ListId) => void; autoFocus?: boolean; isAnyDragging?: boolean }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: `projrow-${listId}-${project.id}`, data: { type: 'project', project, listId } });
   const style = { transform: CSS.Transform.toString(transform), transition: isAnyDragging ? 'transform 360ms cubic-bezier(0.22, 1, 0.36, 1)' : 'none', opacity: isDragging ? 0 : 1 };
   const bodyFont = "font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap";
   return (
-    <motion.div ref={setNodeRef} style={style} className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px]">
-      <div {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing flex items-center">
-        <Folder size={12} className="text-[#656464]" />
-      </div>
+    <motion.div
+      ref={setNodeRef}
+      style={style}
+      className="relative group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px] overflow-hidden"
+      whileHover={!isDragging ? { backgroundColor: "rgba(255, 255, 255, 0.03)", transition: { duration: 0.15 } } : {}}
+    >
+      <motion.div
+        {...attributes}
+        {...listeners}
+        className="opacity-0 group-hover:opacity-100 cursor-grab active:cursor-grabbing -ml-5 p-1 text-[#5e5e5e] hover:text-white transition-all duration-200"
+        whileHover={{ scale: 1.1 }}
+        whileTap={{ scale: 0.95 }}
+      >
+        <svg width="12" height="18" viewBox="0 0 12 18" fill="none">
+          <path d="M6 1L6 17" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+          <path d="M2.5 3.5L6 0L9.5 3.5" stroke="currentColor" strokeWidth="1" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+          <path d="M2.5 14.5L6 18L9.5 14.5" stroke="currentColor" strokeWidth="1" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </motion.div>
+      <Folder size={12} className="text-[#656464] shrink-0" />
       <EditableText value={project.name} onChange={(v) => onRename(project.id, v)} className={`${bodyFont} text-white`} autoFocus={autoFocus} placeholder="New Project" />
-      <AddPlus onClick={() => onAddTask(project.id)} />
-      <TrashBtn onClick={() => onDelete(project.id)} />
+      <div className="ml-auto -mr-[22px] flex items-center gap-1">
+        <button
+          type="button"
+          onClick={() => onAddTask(project.id, listId)}
+          className="p-1 opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity"
+          aria-label="Add task"
+        >
+          <Plus size={14} />
+        </button>
+        <button
+          type="button"
+          onClick={() => onDelete(project.id)}
+          className="p-1 opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity"
+          aria-label="Delete project"
+        >
+          <Trash2 size={14} />
+        </button>
+      </div>
     </motion.div>
   );
 }
@@ -909,31 +1771,91 @@ function LIndent() {
   );
 }
 
-function ProjectTaskRow({ task, listId, onToggle, onRename, isAnyDragging, autoFocus, collapsed }: { task: Task; listId: ListId; onToggle: () => void; onRename: (t: string) => void; isAnyDragging?: boolean; autoFocus?: boolean; collapsed?: boolean }) {
+function ProjectTaskRow({ task, listId, onToggle, onRename, onDelete, onEdit, onQuickEdit, onAddSibling, isAnyDragging, autoFocus, collapsed, nonDraggable = false, projects = [], clients = [], showContext = false, displacementOffset = 0, insertionGap = 0, taskOrder = 'ptc' }: { task: Task; listId: ListId; onToggle: () => void; onRename: (t: string) => void; onDelete?: () => void; onEdit?: () => void; onQuickEdit?: () => void; onAddSibling?: () => void; isAnyDragging?: boolean; autoFocus?: boolean; collapsed?: boolean; nonDraggable?: boolean; projects?: Project[]; clients?: Client[]; showContext?: boolean; displacementOffset?: number; insertionGap?: number; taskOrder?: TaskOrder }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: `projtask-${listId}-${task.id}`, data: { type: 'projTask', task, listId } });
-  const style = { transform: CSS.Transform.toString(transform), transition: isAnyDragging ? 'transform 360ms cubic-bezier(0.22, 1, 0.36, 1)' : 'none' };
+  const style = { transform: CSS.Transform.toString(transform), transition: isAnyDragging ? `transform ${MOTION.base}ms ${MOTION.easeOut}` : 'none' };
   const bodyFont = "font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap";
-  const titleColor = task.completed ? 'text-[#5e5e5e]' : 'text-white';
+  const isScheduled = task.type === 'scheduled';
+  const isNext = task.section === 'next';
+  const titleColor = isScheduled ? 'text-[#8465ff]' : task.completed ? 'text-[#383838]' : isNext ? 'text-[#a8a8a8]' : 'text-white';
+  const metaColor = task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : 'text-[#656464]';
+  const project = showContext && task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
+  // Prefer the task's explicit clientId, fall back to the project's owning client.
+  const resolvedClientId = showContext ? (task.clientId ?? project?.clientId) : undefined;
+  const client = resolvedClientId ? clients.find((c) => c.id === resolvedClientId) : undefined;
+  // Personal-client tasks render the hollow assignee badge regardless of whether project context is shown.
+  const ownerProject = task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
+  const isPersonal = (task.clientId ?? ownerProject?.clientId) === PERSONAL_CLIENT_ID;
   return (
+    <Displaced offset={displacementOffset} gap={insertionGap} active={!!isAnyDragging}>
+    {/* Whole-card drag â€” see SortableTaskItem for the rationale. */}
+    {/* Source slot keeps its 37px layout space â€” see SortableTaskItem for rationale. */}
     <motion.div
       ref={setNodeRef}
       style={style}
-      className="relative shrink-0 w-full group overflow-hidden"
-      animate={{ height: collapsed ? 0 : 37, opacity: isDragging ? 0 : 1 }}
-      transition={{ height: { type: 'spring', stiffness: 220, damping: 34, mass: 0.9 }, opacity: { duration: 0.12, ease: 'easeOut' } }}
-    ><div className="box-border flex flex-row gap-2 h-[37px] items-center pl-[43px] pr-[31px] w-full">
-      <div {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing flex items-center opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity">
-        <svg width="10" height="14" viewBox="0 0 12 18" fill="none">
-          <path d="M6 1L6 17" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
-          <path d="M2.5 3.5L6 0L9.5 3.5" stroke="currentColor" strokeWidth="1" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-          <path d="M2.5 14.5L6 18L9.5 14.5" stroke="currentColor" strokeWidth="1" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-        </svg>
-      </div>
-      <LIndent />
-      <TaskCheckbox completed={task.completed} onToggle={onToggle} />
-      <EditableText value={task.title} onChange={onRename} autoFocus={autoFocus} placeholder="New Task" className={`${bodyFont} ${titleColor} ${task.completed ? 'line-through' : ''}`} />
+      data-task-row={task.id}
+      {...(nonDraggable ? {} : attributes)}
+      {...(nonDraggable ? {} : listeners)}
+      className={`relative shrink-0 w-full group overflow-hidden ${nonDraggable ? '' : 'cursor-grab active:cursor-grabbing'}`}
+      animate={{ opacity: isDragging ? 0 : 1 }}
+      transition={{ opacity: { duration: 0.12, ease: 'easeOut' } }}
+      whileHover={!isDragging ? { backgroundColor: "rgba(255, 255, 255, 0.03)", transition: { duration: 0.15 } } : {}}
+      onDoubleClick={(e) => { if (onEdit) { e.stopPropagation(); onEdit(); } }}
+      onContextMenu={(e) => { if (onQuickEdit) { e.preventDefault(); e.stopPropagation(); onQuickEdit(); } }}
+    >
+      <div className="box-border flex flex-row gap-2 h-[37px] items-center pl-[43px] pr-[31px] w-full">
+        {/* Visual grab affordance only â€” the whole row is the drag handle, this is the icon hint. */}
+        {!nonDraggable && (
+          <div className="opacity-0 group-hover:opacity-100 -ml-5 p-1 text-[#5e5e5e] transition-opacity duration-200">
+            <svg width="12" height="18" viewBox="0 0 12 18" fill="none">
+              <path d="M6 1L6 17" stroke="currentColor" strokeWidth="1" strokeLinecap="round" />
+              <path d="M2.5 3.5L6 0L9.5 3.5" stroke="currentColor" strokeWidth="1" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+              <path d="M2.5 14.5L6 18L9.5 14.5" stroke="currentColor" strokeWidth="1" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
+          </div>
+        )}
+        <LIndent />
+        {!isScheduled && <TaskCheckbox completed={task.completed} onToggle={onToggle} />}
+        <div className="flex flex-row items-center gap-[4px]">
+          {taskOrderSlots(taskOrder, !!project, !!client).map((slot, i) => {
+            const metaCls = `${bodyFont} ${task.completed ? 'text-[#383838]' : 'text-[#656464]'}`;
+            if (slot === 'project' && project) return <p key={`p-${i}`} className={metaCls}>{project.name}</p>;
+            if (slot === 'client' && client) return <p key={`c-${i}`} className={`${bodyFont} ${metaColor}`}>{client.short}</p>;
+            if (slot === 'cp' && client && project) return <p key={`cp-${i}`} className={metaCls}>{`${client.short}-${project.name}`}</p>;
+            if (slot === 'title') return <EditableText key={`t-${i}`} value={task.title} onChange={onRename} autoFocus={autoFocus} placeholder="New Task" onEnter={onAddSibling} className={`${bodyFont} ${titleColor}`} />;
+            return null;
+          })}
+        </div>
+        {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} />)}
+        {task.deadline && (
+          <p className={`font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : isNext ? 'text-[#a8a8a8]' : 'text-white'}`}>{formatDeadline(task.deadline)}</p>
+        )}
+        {/* + sits inline immediately after the task info; trash uses ml-auto below to pin to the right edge. */}
+        {onAddSibling && (
+          <button
+            type="button"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => { e.stopPropagation(); onAddSibling(); }}
+            className="p-1 opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity"
+            aria-label="Add task in same project"
+          >
+            <Plus size={14} />
+          </button>
+        )}
+        {onDelete && (
+          <button
+            type="button"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => { e.stopPropagation(); onDelete(); }}
+            className="ml-auto -mr-[22px] p-1 opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity"
+            aria-label="Delete task"
+          >
+            <Trash2 size={14} />
+          </button>
+        )}
       </div>
     </motion.div>
+    </Displaced>
   );
 }
 
@@ -949,21 +1871,385 @@ function useStorageList<K extends StorageKey, T>(key: K) {
   return [value, setter] as const;
 }
 
+// ─── TaskQuickEdit ────────────────────────────────────────────────────────────
+// Right-side panel that opens on double-click (edit mode: stays open) or right-click
+// (quick mode: closes after one change). Every selection auto-saves through onUpdateTask
+// — there's no Save button. Click off (the dim overlay) to close.
+//
+// Sections, top to bottom: task preview row · type · list · client · project (filtered
+// by selected client) · assignees · date quick-picks · month calendar.
+function TaskQuickEdit({
+  task, projects, clients, people, mode, anchor, newId,
+  onClose, onUpdateTask, onAddProject, onAddClient, onAddPerson,
+  onRenameClient, onRenameProject, onRenamePerson,
+  onDeleteClient, onDeleteProject, onDeletePerson,
+}: {
+  task: Task;
+  projects: Project[]; clients: Client[]; people: Person[];
+  mode: 'edit' | 'quick';
+  // anchor: { x, width } positions the panel over a specific column. null/undefined = centered.
+  anchor?: { x: number; width: number } | null;
+  // Id of an entity that was just created via a + button — that entity renders as an inline
+  // EditableText with placeholder + autofocus instead of a regular Pill.
+  newId?: string | null;
+  onClose: () => void;
+  onUpdateTask: (id: string, patch: Partial<Omit<Task, 'id' | 'order'>>) => void;
+  onAddProject: (p: Omit<Project, 'id'>) => void;
+  onAddClient: () => void;
+  onAddPerson: () => void;
+  onRenameClient: (id: string, name: string) => void;
+  onRenameProject: (id: string, name: string) => void;
+  onRenamePerson: (id: string, name: string) => void;
+  // Delete callbacks — used when a freshly-created entity is left empty (user clicked + but
+  // didn't type anything). The entity is removed instead of leaving a blank pill behind.
+  onDeleteClient: (id: string) => void;
+  onDeleteProject: (id: string) => void;
+  onDeletePerson: (id: string) => void;
+}) {
+  // Auto-disambiguate initials: if two people share a first letter, both render with their
+  // first two letters (so the badge becomes a small pill). Falls back to 3+ chars on triple
+  // collisions. Returned map: person.id → display short.
+  const displayShorts = (() => {
+    const map: Record<string, string> = {};
+    for (const p of people) {
+      let len = 1;
+      let candidate = (p.short || p.name || '?').substring(0, len).toUpperCase();
+      const others = people.filter((o) => o.id !== p.id);
+      while (len < 4 && others.some((o) => (o.short || o.name || '?').substring(0, len).toUpperCase() === candidate)) {
+        len++;
+        candidate = (p.short || p.name || '?').substring(0, len).toUpperCase();
+      }
+      map[p.id] = candidate;
+    }
+    return map;
+  })();
+  // Auto-apply: write through to storage on every change. In quick mode also dismiss.
+  const apply = (patch: Partial<Omit<Task, 'id' | 'order'>>) => {
+    onUpdateTask(task.id, patch);
+    if (mode === 'quick') onClose();
+  };
+  // Resources are toggle-only and never close the panel — picking assignees is naturally a
+  // multi-select operation, so quick-mode auto-close would feel jarring.
+  const applyAssignees = (patch: Partial<Omit<Task, 'id' | 'order'>>) => {
+    onUpdateTask(task.id, patch);
+  };
+  const ownerProject = task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
+  const resolvedClientId = task.clientId ?? ownerProject?.clientId ?? '';
+  const sortedClients = [...clients].sort((a, b) => {
+    if (a.id === PERSONAL_CLIENT_ID) return -1;
+    if (b.id === PERSONAL_CLIENT_ID) return 1;
+    return a.name.localeCompare(b.name);
+  });
+  const projectsForClient = resolvedClientId ? projects.filter((p) => p.clientId === resolvedClientId) : [];
+  const client = resolvedClientId ? clients.find((c) => c.id === resolvedClientId) : undefined;
+  const isMilestone = task.type === 'scheduled';
+  const todayIso = todayISO();
+  const tomorrowIso = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; })();
+  const nextWeekIso = (() => { const d = new Date(); d.setDate(d.getDate() + 7); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; })();
+
+  // Pill (default): bold-white when active, dim-gray otherwise. Used for list / client / project / etc.
+  const Pill = ({ active, onClick, children }: { active?: boolean; onClick: () => void; children: React.ReactNode }) => (
+    <button onClick={onClick} className={`text-[14px] font-['Untitled_Sans',sans-serif] whitespace-nowrap transition-colors ${active ? 'text-white font-bold' : 'text-[#656464] hover:text-white'}`}>{children}</button>
+  );
+  // PillType: same shape, but uses purple when active. Reserved for the Task / Milestone toggle —
+  // singling out the type as the most "categorical" decision visually.
+  const PillType = ({ active, onClick, children }: { active?: boolean; onClick: () => void; children: React.ReactNode }) => (
+    <button onClick={onClick} className={`text-[14px] font-['Untitled_Sans',sans-serif] whitespace-nowrap transition-colors ${active ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>{children}</button>
+  );
+  const PlusBtn = ({ onClick }: { onClick: () => void }) => (
+    <button onClick={onClick} className="text-[#656464] hover:text-white transition-colors p-0" aria-label="Add"><Plus size={14} /></button>
+  );
+
+  // Calendar: simple month view with the deadline highlighted in purple.
+  const [calMonth, setCalMonth] = useState(() => {
+    const d = task.deadline ? new Date(task.deadline + 'T00:00:00') : new Date();
+    return new Date(d.getFullYear(), d.getMonth(), 1);
+  });
+  const monthLabel = calMonth.toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' });
+  const firstDow = calMonth.getDay();
+  const daysInMonth = new Date(calMonth.getFullYear(), calMonth.getMonth() + 1, 0).getDate();
+  const cells: { date: Date | null; iso: string | null; inMonth: boolean }[] = [];
+  for (let i = 0; i < firstDow; i++) {
+    const d = new Date(calMonth);
+    d.setDate(-(firstDow - 1 - i));
+    cells.push({ date: d, iso: dateToISO(d), inMonth: false });
+  }
+  for (let i = 1; i <= daysInMonth; i++) {
+    const d = new Date(calMonth.getFullYear(), calMonth.getMonth(), i);
+    cells.push({ date: d, iso: dateToISO(d), inMonth: true });
+  }
+  while (cells.length % 7 !== 0) {
+    const d = new Date(calMonth);
+    d.setMonth(d.getMonth() + 1);
+    d.setDate(cells.length - firstDow - daysInMonth + 1);
+    cells.push({ date: d, iso: dateToISO(d), inMonth: false });
+  }
+
+  // Click-off-to-close: the outer overlay catches clicks; the inner panel stops propagation.
+  return (
+    <motion.div
+      className="fixed inset-0 z-50 bg-black/45"
+      initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+      transition={{ duration: 0.15 }}
+      onClick={onClose}
+      onContextMenu={(e) => { e.preventDefault(); onClose(); }}
+    >
+      <motion.div
+        className="absolute top-0 h-full w-[440px] bg-[#1f1f1f] flex flex-col gap-[37px] overflow-y-auto pt-[106px]"
+        // Position: when an anchor (column rect) is given, place panel over that column. Otherwise
+        // center horizontally with calc() (using transform would conflict with framer's y-anim).
+        style={anchor ? { left: Math.max(0, Math.min(anchor.x, window.innerWidth - 440)) } : { left: 'calc(50% - 220px)' }}
+        initial={{ opacity: 0, y: -16 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -16 }}
+        transition={{ type: 'spring', stiffness: 320, damping: 36, mass: 0.7 }}
+        onClick={(e) => e.stopPropagation()}
+        onContextMenu={(e) => e.stopPropagation()}
+      >
+        {/* Close button — absolute so it doesn't push the content down. The pt-[106px] on the
+            parent aligns the task-preview row with the column headers (e.g. "Projects") in the
+            list view behind the panel. */}
+        <button onClick={onClose} className="absolute top-6 right-6 text-[#656464] hover:text-white transition-colors z-10" aria-label="Close">
+          <X size={18} />
+        </button>
+
+        {/* Task preview row — same look as in the lists. Title is inline-editable. */}
+        <div className="px-[31px] flex flex-row items-center gap-2">
+          {!isMilestone && <TaskCheckbox completed={task.completed} onToggle={() => apply({ completed: !task.completed })} />}
+          <EditableText
+            value={task.title}
+            onChange={(v) => onUpdateTask(task.id, { title: v })}
+            placeholder="New Task"
+            // Auto-enter edit mode for freshly created tasks so the cursor is already blinking
+            // inside the empty title alongside the gray "New Task" placeholder.
+            autoFocus={task.id === newId}
+            className={`font-['Untitled_Sans',sans-serif] text-[14px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : 'text-white'}`}
+          />
+          {client && <span className={`font-['Untitled_Sans',sans-serif] text-[14px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : 'text-[#656464]'}`}>{client.short}</span>}
+          {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isMilestone ? 'scheduled' : 'todo'} dim={task.completed} />)}
+          {task.deadline && (
+            <>
+              {!isMilestone && <DeadlineArrow dim={task.completed} />}
+              <span className={`font-['NB_International:Regular',sans-serif] text-[14.333px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : 'text-white'}`}>{formatDeadline(task.deadline)}</span>
+            </>
+          )}
+        </div>
+
+        {/* Type: Task / Milestone — uses the purple variant since type is the most categorical choice.
+            mt-[37px] adds a SECOND spacer-row below the task preview for extra breathing room. */}
+        <div className="px-[31px] flex flex-row gap-4 items-center mt-[37px]">
+          <PillType active={!isMilestone} onClick={() => apply({ type: 'todo' })}>Task</PillType>
+          <PillType active={isMilestone} onClick={() => apply({ type: 'scheduled' })}>Milestone</PillType>
+        </div>
+
+        {/* List: Work / Projects / Admin */}
+        <div className="px-[31px] flex flex-row gap-4 items-center">
+          {(['work', 'projects', 'admin'] as ListId[]).map((l) => (
+            <Pill key={l} active={task.list === l} onClick={() => apply({ list: l })}>{LIST_TITLES[l]}</Pill>
+          ))}
+        </div>
+
+        {/* Clients — selecting changes the task's clientId and clears project (so the project
+            list filters to the new client cleanly). Just-created clients render inline-editable. */}
+        <div className="px-[31px] flex flex-row flex-wrap gap-x-4 gap-y-3 items-center">
+          {sortedClients.map((c) => c.id === newId ? (
+            <EditableText key={c.id} value={c.name} placeholder="New Client" autoFocus onChange={(v) => onRenameClient(c.id, v)} onDiscardIfEmpty={() => onDeleteClient(c.id)} className="text-[14px] font-['Untitled_Sans',sans-serif] whitespace-nowrap text-white font-bold" />
+          ) : (
+            <Pill key={c.id} active={resolvedClientId === c.id} onClick={() => apply({ clientId: c.id, projectId: undefined })}>{c.name || 'New Client'}</Pill>
+          ))}
+          <PlusBtn onClick={onAddClient} />
+        </div>
+
+        {/* Projects — only shown when the selected client actually has projects (or the user
+            wants to add one). + creates a new project under the current client. */}
+        {resolvedClientId && (
+          <div className="px-[31px] flex flex-row flex-wrap gap-x-4 gap-y-3 items-center">
+            {projectsForClient.map((p) => p.id === newId ? (
+              <EditableText key={p.id} value={p.name} placeholder="New Project" autoFocus onChange={(v) => onRenameProject(p.id, v)} onDiscardIfEmpty={() => onDeleteProject(p.id)} className="text-[14px] font-['Untitled_Sans',sans-serif] whitespace-nowrap text-white font-bold" />
+            ) : (
+              <Pill key={p.id} active={task.projectId === p.id} onClick={() => apply({ projectId: p.id })}>{p.name || 'New Project'}</Pill>
+            ))}
+            <PlusBtn onClick={() => onAddProject({ name: '', clientId: resolvedClientId })} />
+          </div>
+        )}
+
+        {/* Assignees — toggleable; click to add or remove from the task's assignees list */}
+        <div className="px-[31px] flex flex-row flex-wrap gap-x-4 gap-y-3 items-center">
+          {people.map((p) => {
+            const has = task.assignees.includes(p.short);
+            const displayLetter = displayShorts[p.id] || p.short || '?';
+            if (p.id === newId) {
+              return (
+                <div key={p.id} className="flex flex-row items-center gap-2">
+                  <AssigneeBadge letter={displayLetter} tone="todo" active />
+                  <EditableText value={p.name} placeholder="New Person" autoFocus onChange={(v) => onRenamePerson(p.id, v)} onDiscardIfEmpty={() => onDeletePerson(p.id)} className="text-[14px] font-['Untitled_Sans',sans-serif] whitespace-nowrap text-white font-bold" />
+                </div>
+              );
+            }
+            return (
+              <button key={p.id} onClick={() => applyAssignees({ assignees: has ? task.assignees.filter((a) => a !== p.short) : [...task.assignees, p.short] })} className={`flex flex-row items-center gap-2 transition-opacity ${has ? '' : 'opacity-50 hover:opacity-100'}`}>
+                <AssigneeBadge letter={displayLetter} tone={isMilestone ? 'scheduled' : 'todo'} active={has} />
+                <span className={`text-[14px] font-['Untitled_Sans',sans-serif] whitespace-nowrap ${has ? 'text-white font-bold' : 'text-[#656464]'}`}>{p.name || 'New Person'}</span>
+              </button>
+            );
+          })}
+          <PlusBtn onClick={onAddPerson} />
+        </div>
+
+        {/* Date quick-picks */}
+        <div className="px-[31px] flex flex-row gap-4 items-center flex-wrap">
+          <Pill active={task.deadline === todayIso} onClick={() => apply({ deadline: todayIso })}>Today</Pill>
+          {task.deadline && task.deadline !== todayIso && task.deadline !== tomorrowIso && task.deadline !== nextWeekIso && (
+            <span className="text-white text-[14px] font-bold whitespace-nowrap">{new Date(task.deadline + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' })}</span>
+          )}
+          {task.deadline && (
+            <button onClick={() => apply({ deadline: undefined, startDate: undefined })} className="text-[#656464] hover:text-white transition-colors p-1" aria-label="Clear date">
+              <Trash2 size={14} />
+            </button>
+          )}
+          <Pill active={task.deadline === tomorrowIso} onClick={() => apply({ deadline: tomorrowIso })}>Tomorrow</Pill>
+          <Pill active={task.deadline === nextWeekIso} onClick={() => apply({ deadline: nextWeekIso })}>Next Week</Pill>
+        </div>
+
+        {/* Month calendar — header + day grid. Selected deadline in purple. */}
+        <div className="px-[31px] pb-6 flex flex-col gap-3">
+          <div className="flex flex-row justify-between items-center text-[#656464]">
+            <button onClick={() => setCalMonth(new Date(calMonth.getFullYear(), calMonth.getMonth() - 1, 1))} className="hover:text-white"><ChevronLeft size={14} /></button>
+            <span className="text-[13px] font-['Untitled_Sans',sans-serif]">{monthLabel}</span>
+            <button onClick={() => setCalMonth(new Date(calMonth.getFullYear(), calMonth.getMonth() + 1, 1))} className="hover:text-white"><ChevronRight size={14} /></button>
+          </div>
+          <div className="grid grid-cols-7 gap-y-2 text-center text-[12px]">
+            {['S','M','T','W','T','F','S'].map((d, i) => (
+              <div key={`dow-${i}`} className="text-[#656464] font-['Untitled_Sans',sans-serif]">{d}</div>
+            ))}
+            {cells.map((c, i) => {
+              const isStart = !!(task.startDate && c.iso === task.startDate);
+              const isEnd = !!(task.deadline && c.iso === task.deadline && task.startDate);
+              const isSingleDate = !!(task.deadline && !task.startDate && c.iso === task.deadline);
+              const isInRange = !!(task.startDate && task.deadline && c.iso && c.iso > task.startDate && c.iso < task.deadline);
+              const isSelected = isStart || isEnd || isSingleDate;
+              const isToday = c.iso === todayIso;
+              const onPick = () => {
+                if (!c.iso) return;
+                // Airbnb-style two-step: first click sets a single date; a second click on a
+                // different date promotes it to a range (start..end). A third click resets.
+                if (task.startDate && task.deadline) {
+                  apply({ startDate: undefined, deadline: c.iso });
+                } else if (task.deadline && c.iso !== task.deadline) {
+                  const a = c.iso < task.deadline ? c.iso : task.deadline;
+                  const b = c.iso < task.deadline ? task.deadline : c.iso;
+                  apply({ startDate: a, deadline: b });
+                } else if (task.deadline === c.iso) {
+                  apply({ deadline: undefined, startDate: undefined });
+                } else {
+                  apply({ deadline: c.iso, startDate: undefined });
+                }
+              };
+              // Background "bar" fills the full cell width during a range so neighbouring
+              // cells visually connect into a single continuous pill. Endpoints render their
+              // own purple circle ON TOP of the bar — the rounded edge merges seamlessly.
+              const barLeft = isStart && !isEnd ? '50%' : '0';
+              const barRight = isEnd && !isStart ? '50%' : '0';
+              const showBar = isInRange || (isStart && !isEnd) || (isEnd && !isStart);
+              return (
+                <div key={`day-${i}`} className="relative h-7 flex items-center justify-center">
+                  {showBar && (
+                    <div className="absolute h-7 inset-y-0 bg-[#7363FF]" style={{ left: barLeft, right: barRight }} />
+                  )}
+                  <button
+                    onClick={onPick}
+                    className={`relative z-10 h-7 w-7 rounded-full flex items-center justify-center transition-colors text-[13px] font-bold ${isSelected ? 'bg-[#7363FF] text-[#1f1f1f]' : isInRange ? 'text-[#1f1f1f]' : isToday ? 'text-[#8465ff]' : c.inMonth ? 'text-white hover:bg-white/10 font-normal' : 'text-[#454545] hover:bg-white/[0.03] font-normal'}`}
+                  >
+                    {c.date?.getDate()}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
 export default function App() {
   const [tasks, setTasks] = useStorageList<'tasks', Task>('tasks');
   const [projects, setProjects] = useStorageList<'projects', Project>('projects');
   const [clients, setClients] = useStorageList<'clients', Client>('clients');
   const [people, setPeople] = useStorageList<'people', Person>('people');
+  // Hoisted up-front because several useCallbacks below reference currentUserShort in their dep arrays
+  // (e.g. to seed new tasks with the current user as assignee).
+  const [currentUserShort, setCurrentUserShortState] = useState<string>(() => {
+    if (typeof window === 'undefined') return '';
+    return window.localStorage.getItem('todo-app-user-short') || '';
+  });
+  const setCurrentUserShort = useCallback((s: string) => {
+    setCurrentUserShortState(s);
+    try { window.localStorage.setItem('todo-app-user-short', s); } catch {}
+  }, []);
   const [mode, setMode] = useState<AppMode>('dashboard');
   const [showAdd, setShowAdd] = useState(false);
   const [prefillList, setPrefillList] = useState<ListId | null>(null);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
+  // 'edit' = double-click, panel stays open until you click off. 'quick' = right-click,
+  // panel closes after a single change is applied (one-shot mode for quick re-categorising).
+  const [editMode, setEditMode] = useState<'edit' | 'quick'>('edit');
+  // Display order for task meta. Per-user preference, persisted in localStorage.
+  //   'cpt' = Client-Project Task    (e.g. FOG-Essentialist  Send Comps)
+  //   'ptc' = Project  Task  Client  (current default — e.g. Essentialist Send Comps  FOG)
+  //   'tcp' = Task Client-Project    (e.g. Send Comps  FOG-Essentialist)
+  const [taskOrder, setTaskOrderState] = useState<'cpt' | 'ptc' | 'tcp'>(() => {
+    if (typeof window === 'undefined') return 'ptc';
+    const v = window.localStorage.getItem('todo-app-task-order');
+    return v === 'cpt' || v === 'tcp' ? v : 'ptc';
+  });
+  const setTaskOrder = useCallback((v: 'cpt' | 'ptc' | 'tcp') => {
+    setTaskOrderState(v);
+    try { window.localStorage.setItem('todo-app-task-order', v); } catch {}
+  }, []);
+  // Anchor rect: panel opens over this column. Captured at click time from the row's nearest
+  // column ancestor. null → centered (used by the bottom + button).
+  const [editAnchor, setEditAnchor] = useState<{ x: number; width: number } | null>(null);
+  const captureAnchorFromEvent = (e?: { currentTarget?: EventTarget | null }): { x: number; width: number } | null => {
+    if (!e?.currentTarget) return null;
+    const el = e.currentTarget as HTMLElement;
+    // Walk up to the column wrapper (uses `flex-1 min-w-[340px]`).
+    const col = el.closest('.flex-1.min-w-\\[340px\\]') as HTMLElement | null;
+    if (!col) return null;
+    const r = col.getBoundingClientRect();
+    return { x: r.left, width: r.width };
+  };
+  const openEdit = useCallback((t: Task, e?: { currentTarget?: EventTarget | null }) => { setEditingTask(t); setEditMode('edit'); setEditAnchor(captureAnchorFromEvent(e)); }, []);
+  const openQuick = useCallback((t: Task, e?: { currentTarget?: EventTarget | null }) => { setEditingTask(t); setEditMode('quick'); setEditAnchor(captureAnchorFromEvent(e)); }, []);
+  // Bottom + button: create a blank task and immediately open the edit panel for it, anchored
+  // to the Work column (since new tasks default to list='work'). Title starts empty — the panel's
+  // EditableText shows "New Task" as a gray placeholder which disappears on first keystroke.
+  const addAndEditTask = useCallback(() => {
+    const id = `t-${Date.now()}`;
+    const newTask: Task = { id, title: '', type: 'todo', assignees: currentUserShort ? [currentUserShort] : [], completed: false, list: 'work', section: 'today', order: 0 };
+    setTasks((prev) => [...prev, newTask]);
+    setEditingTask(newTask);
+    setNewId(id);
+    setEditMode('edit');
+    // Anchor over the Work column at click time. Find it via DOM.
+    const cols = document.querySelectorAll('.flex-1.min-w-\\[340px\\]');
+    // Column order in dashboard mode: dashboard, work, projects, admin → work is index 1.
+    const workCol = cols[1] as HTMLElement | undefined;
+    setEditAnchor(workCol ? { x: workCol.getBoundingClientRect().left, width: workCol.getBoundingClientRect().width } : null);
+  }, [currentUserShort, setTasks]);
   const [activeId, setActiveId] = useState<string | null>(null);
+  // Underlying task id (without any sortable prefix). For per-list columns this matches activeId,
+  // but for prefixed contexts (dashboard sub-lists) activeId is e.g. "dash:work:taskId" while
+  // activeTaskId stays "taskId" so tasks.find(t.id === activeTaskId) resolves the real task.
+  const [activeTaskId, setActiveTaskIdState] = useState<string | null>(null);
   const [activeType, setActiveType] = useState<'task' | 'project' | 'projTask' | null>(null);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [activeProjTask, setActiveProjTask] = useState<Task | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
   const [activeRectWidth, setActiveRectWidth] = useState<number | undefined>(undefined);
+  const [activeRectHeight, setActiveRectHeight] = useState<number | undefined>(undefined);
+  // When the active drag originated from a calendar card, this holds its source cell id (e.g. "cal:2026-04-25:work").
+  // The DragOverlay uses this to render a CalendarCard-shaped overlay (rounded, 2-row) instead of a list-row.
+  // It also gates off the list-mode column-offset and source-collapse behavior, which don't make sense in calendar.
+  const [activeCalendarCellId, setActiveCalendarCellId] = useState<string | null>(null);
   const [columnOffset, setColumnOffset] = useState(0);
   const [sourceCollapsed, setSourceCollapsed] = useState(false);
   const collapseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -990,11 +2276,25 @@ export default function App() {
     }
   }, [tasks, setTasks]);
 
+  // Migration: ensure the seeded Personal client exists for rooms created before it was added.
+  useEffect(() => {
+    if (!clients.some((c) => c.id === PERSONAL_CLIENT_ID)) {
+      setClients((prev) => (prev.some((c) => c.id === PERSONAL_CLIENT_ID) ? prev : [{ id: PERSONAL_CLIENT_ID, name: 'Personal', short: '' }, ...prev]));
+    }
+  }, [clients, setClients]);
+
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
-  const measuringConfig = { droppable: { strategy: MeasuringStrategy.Always } };
+  // BeforeDragging (vs Always): measure droppable rects ONCE at drag start, not on every render.
+  // Why: our Displaced primitive moves cards via CSS transform to make room for the dragged item.
+  // CSS transforms affect getBoundingClientRect â€” so with Always, dnd-kit re-measured the displaced
+  // (visually-shifted) rects, recomputed `over`, the displacement target changed, cards moved again,
+  // and the cycle created a tiny vertical feedback loop that visibly nudged the dragged overlay.
+  // BeforeDragging anchors collision detection to the original pre-drag layout, so displacement is
+  // purely visual feedback with no measurement loop.
+  const measuringConfig = { droppable: { strategy: MeasuringStrategy.BeforeDragging } };
 
   const toggleTask = useCallback((id: string) => {
     setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, completed: !t.completed } : t)));
@@ -1020,14 +2320,14 @@ export default function App() {
   }, []);
 
   const addProject = useCallback((p: Omit<Project, 'id'>) => setProjects((prev) => [...prev, { ...p, id: `p-${Date.now()}` }]), []);
-  const addTaskToProject = useCallback((projectId: string) => {
+  const addTaskToProject = useCallback((projectId: string, listId: ListId = 'projects') => {
     const id = `task-${Date.now()}`;
     setTasks((prev) => {
-      const maxOrder = prev.filter((x) => x.list === 'projects' && x.section === 'today').reduce((m, x) => Math.max(m, x.order), -1);
-      return [...prev, { id, title: '', type: 'todo', assignees: [], completed: false, list: 'projects', section: 'today', order: maxOrder + 1, projectId }];
+      const maxOrder = prev.filter((x) => x.list === listId && x.section === 'today').reduce((m, x) => Math.max(m, x.order), -1);
+      return [...prev, { id, title: '', type: 'todo', assignees: currentUserShort ? [currentUserShort] : [], completed: false, list: listId, section: 'today', order: maxOrder + 1, projectId }];
     });
     setNewId(id);
-  }, []);
+  }, [currentUserShort]);
   const addClient = useCallback((c: Omit<Client, 'id'>) => setClients((prev) => [...prev, { ...c, id: `c-${Date.now()}` }]), []);
   const [newId, setNewId] = useState<string | null>(null);
   const addBlankClient = useCallback(() => {
@@ -1040,7 +2340,41 @@ export default function App() {
     setProjects((prev) => [...prev, { id, name: '', clientId, list }]);
     setNewId(id);
   }, []);
-  const addPerson = useCallback(() => setPeople((prev) => [...prev, { id: `pr-${Date.now()}`, name: 'New Person', short: '?' }]), []);
+  const addBlankTaskInList = useCallback((listId: ListId) => {
+    const id = `task-${Date.now()}`;
+    setTasks((prev) => {
+      const maxOrder = prev.filter((x) => x.list === listId && x.section === 'today').reduce((m, x) => Math.max(m, x.order), -1);
+      return [...prev, { id, title: '', type: 'todo', assignees: currentUserShort ? [currentUserShort] : [], completed: false, list: listId, section: 'today', order: maxOrder + 1 }];
+    });
+    setNewId(id);
+  }, [currentUserShort]);
+  const addBlankTaskInSection = useCallback((listId: ListId, section: SectionId) => {
+    const id = `task-${Date.now()}`;
+    setTasks((prev) => {
+      const maxOrder = prev.filter((x) => x.list === listId && x.section === section).reduce((m, x) => Math.max(m, x.order), -1);
+      return [...prev, { id, title: '', type: 'todo', assignees: currentUserShort ? [currentUserShort] : [], completed: false, list: listId, section, order: maxOrder + 1 }];
+    });
+    setNewId(id);
+  }, [currentUserShort]);
+  // Add a blank task as a sibling of an existing one: same list/section/project, inserted right after it.
+  const addSiblingTask = useCallback((sibling: Task) => {
+    const id = `task-${Date.now()}`;
+    setTasks((prev) => {
+      const bucket = prev.filter((t) => t.list === sibling.list && t.section === sibling.section).sort((a, b) => a.order - b.order);
+      const idx = bucket.findIndex((t) => t.id === sibling.id);
+      const newTask: Task = { id, title: '', type: 'todo', assignees: currentUserShort ? [currentUserShort] : [], completed: false, list: sibling.list, section: sibling.section, order: 0, projectId: sibling.projectId };
+      const insertAt = idx >= 0 ? idx + 1 : bucket.length;
+      const reordered = [...bucket.slice(0, insertAt), newTask, ...bucket.slice(insertAt)].map((t, i) => ({ ...t, order: i }));
+      const untouched = prev.filter((t) => !(t.list === sibling.list && t.section === sibling.section));
+      return [...untouched, ...reordered];
+    });
+    setNewId(id);
+  }, [currentUserShort]);
+  const addPerson = useCallback(() => {
+    const id = `pr-${Date.now()}`;
+    setPeople((prev) => [...prev, { id, name: '', short: '?' }]);
+    setNewId(id);
+  }, []);
   const deleteProject = useCallback((id: string) => setProjects((prev) => prev.filter((p) => p.id !== id)), []);
   const deleteClient = useCallback((id: string) => setClients((prev) => prev.filter((c) => c.id !== id)), []);
   const renameProject = useCallback((id: string, name: string) => setProjects((prev) => prev.map((p) => (p.id === id ? { ...p, name } : p))), []);
@@ -1076,7 +2410,22 @@ export default function App() {
       return prev.map((p) => (p.id === id ? { ...p, short } : p));
     });
   }, []);
-  const deletePerson = useCallback((id: string) => setPeople((prev) => prev.filter((p) => p.id !== id)), []);
+  const deletePerson = useCallback((id: string) => {
+    // When a person is removed, also strip their short from every task's assignees so we don't
+    // leave orphaned badges (still rendering the deleted person's initial) on tasks.
+    setPeople((prev) => {
+      const removed = prev.find((p) => p.id === id);
+      const removedShort = removed?.short;
+      if (removedShort) {
+        setTasks((tasksPrev) => tasksPrev.map((t) => (
+          t.assignees.includes(removedShort)
+            ? { ...t, assignees: t.assignees.filter((a) => a !== removedShort) }
+            : t
+        )));
+      }
+      return prev.filter((p) => p.id !== id);
+    });
+  }, [setTasks]);
 
   const handleDragStart = useCallback((e: DragStartEvent) => {
     const type = e.active.data.current?.type;
@@ -1097,14 +2446,36 @@ export default function App() {
       return;
     }
     setActiveId(e.active.id as string);
+    setActiveTaskIdState((e.active.data.current?.task as Task | undefined)?.id ?? String(e.active.id));
     setActiveType('task');
     const rect = e.active.rect.current.initial;
-    if (rect) setActiveRectWidth(rect.width);
+    if (rect) { setActiveRectWidth(rect.width); setActiveRectHeight(rect.height); }
+    // Calendar cards tag their useSortable data with calendarCellId; remember it so the overlay
+    // and the column-offset effect can both branch on calendar vs list origin.
+    const cellId = (e.active.data.current?.calendarCellId as string | undefined) || null;
+    setActiveCalendarCellId(cellId);
     setColumnOffset(0);
   }, []);
 
+  // Source-collapse: ALWAYS trigger after a short delay, regardless of cursor direction. Previously
+  // this was tied to horizontal column-offset, which meant vertical-only drags (e.g. moving a task
+  // between sections in the same column) never collapsed â€” and worse, the source slot would flicker
+  // open again any time the cursor returned to column 0. Decoupling fixes both.
   useEffect(() => {
     if (!activeId) return;
+    const t = setTimeout(() => setSourceCollapsed(true), 220);
+    return () => { clearTimeout(t); };
+  }, [activeId]);
+
+  useEffect(() => {
+    if (!activeId) return;
+    // Column-offset snap: drag right/left and the overlay snaps to adjacent columns once you pass
+    // half a column width. List view only ï¿½ calendar columns are narrow (200px) so a half-column
+    // dead-zone fires constantly as the cursor crosses days, and the spring chasing the snap target
+    // makes the overlay feel like it's lagging the cursor. Calendar overlay tracks the cursor 1:1.
+    if (activeCalendarCellId) return;
+    // Dashboard drags are strictly horizontally locked â€” never snap to an adjacent column.
+    if (activeId.startsWith('dash:')) return;
     const onMove = (ev: PointerEvent) => {
       if (startXRef.current === null) startXRef.current = ev.clientX;
       const colWidth = activeRectWidth || 440;
@@ -1115,15 +2486,6 @@ export default function App() {
       if (target !== pendingOffsetRef.current) {
         pendingOffsetRef.current = target;
         setColumnOffset(target);
-        if (collapseTimerRef.current) { clearTimeout(collapseTimerRef.current); collapseTimerRef.current = null; }
-        if (target !== 0) {
-          collapseTimerRef.current = setTimeout(() => {
-            setSourceCollapsed(true);
-            collapseTimerRef.current = null;
-          }, 500);
-        } else {
-          setSourceCollapsed(false);
-        }
       }
     };
     window.addEventListener('pointermove', onMove);
@@ -1131,7 +2493,7 @@ export default function App() {
       window.removeEventListener('pointermove', onMove);
       startXRef.current = null;
     };
-  }, [activeId, activeRectWidth]);
+  }, [activeId, activeRectWidth, activeCalendarCellId]);
 
   const handleDragOver = useCallback((event: DragOverEvent) => {
     const { over } = event;
@@ -1153,7 +2515,7 @@ export default function App() {
   const handleDragEnd = useCallback((event: DragEndEvent) => {
     const { active, over } = event;
     setOverId(null);
-    const clearOverlay = () => { setActiveId(null); setActiveType(null); setActiveProject(null); setActiveProjTask(null); };
+    const clearOverlay = () => { setActiveId(null); setActiveTaskIdState(null); setActiveType(null); setActiveProject(null); setActiveProjTask(null); setActiveCalendarCellId(null); };
     const resetDragRefs = () => {
       setColumnOffset(0); pendingOffsetRef.current = 0;
       if (dwellTimerRef.current) { clearTimeout(dwellTimerRef.current); dwellTimerRef.current = null; }
@@ -1163,8 +2525,20 @@ export default function App() {
     if (active.data.current?.type === 'projTask') {
       const srcTask = active.data.current.task as Task;
       const overData = over?.data.current;
+      // Drop on a resource row ? assign that resource (additive) to this task and skip the move logic.
+      if (overData?.type === 'resource') {
+        const short = overData.personShort as string;
+        if (short) {
+          setTasks((prev) => prev.map((t) => (t.id === srcTask.id && !t.assignees.includes(short) ? { ...t, assignees: [...t.assignees, short] } : t)));
+        }
+        resetDragRefs();
+        clearOverlay(); return;
+      }
       let targetList: ListId = srcTask.list;
       let targetProjectId: string | undefined = srcTask.projectId;
+      // Section follows the over-task too â€” without this, dropping a Next task onto a Today task
+      // kept the source's section, which made cross-section moves in project view feel broken.
+      let targetSection: SectionId = srcTask.section;
       if (overData?.type === 'project') {
         targetProjectId = (overData.project as Project).id;
         if (overData.listId) targetList = overData.listId as ListId;
@@ -1172,14 +2546,22 @@ export default function App() {
         const overTask = overData.task as Task;
         targetProjectId = overTask.projectId;
         targetList = overTask.list;
+        targetSection = overTask.section;
+      } else if (overData?.type === 'projList') {
+        // Drop on empty column ? move the task to that list, keep the same project.
+        targetList = overData.listId as ListId;
+      } else if (overData?.type === 'clientHeader' && overData.listId) {
+        // Drop on a client subheader in a column ? move task to that column; drop project linkage.
+        targetList = overData.listId as ListId;
+        targetProjectId = undefined;
       }
-      if (targetList !== srcTask.list || targetProjectId !== srcTask.projectId) {
+      if (targetList !== srcTask.list || targetProjectId !== srcTask.projectId || targetSection !== srcTask.section) {
         setTasks((prev) => {
           // Remove source first to avoid double-counting when source/target bucket overlap
           const without = prev.filter((t) => t.id !== srcTask.id);
-          const moved: Task = { ...srcTask, list: targetList, projectId: targetProjectId };
+          const moved: Task = { ...srcTask, list: targetList, projectId: targetProjectId, section: targetSection };
           // Build target bucket, insert moved at correct position
-          const targetBucket = without.filter((t) => t.list === targetList && t.section === srcTask.section);
+          const targetBucket = without.filter((t) => t.list === targetList && t.section === targetSection);
           let insertIdx = targetBucket.length;
           if (overData?.type === 'projTask') {
             const overTask = overData.task as Task;
@@ -1188,11 +2570,11 @@ export default function App() {
           }
           targetBucket.splice(insertIdx, 0, moved);
           const reorderedTarget = targetBucket.map((t, i) => ({ ...t, order: i }));
-          // Source bucket (after source removal) — may equal target if same list
-          const sameBucket = srcTask.list === targetList;
+          // Source bucket (after source removal) â€” may equal target if same list+section
+          const sameBucket = srcTask.list === targetList && srcTask.section === targetSection;
           const sourceBucket = sameBucket ? [] : without.filter((t) => t.list === srcTask.list && t.section === srcTask.section).map((t, i) => ({ ...t, order: i }));
           const untouched = without.filter((t) =>
-            !(t.list === targetList && t.section === srcTask.section) &&
+            !(t.list === targetList && t.section === targetSection) &&
             (sameBucket || !(t.list === srcTask.list && t.section === srcTask.section))
           );
           return [...untouched, ...sourceBucket, ...reorderedTarget];
@@ -1204,12 +2586,36 @@ export default function App() {
     if (active.data.current?.type === 'project' && over) {
       const srcProject = active.data.current.project as Project;
       const overData = over.data.current;
+      // Drop on a resource row ? assign that resource to every task that belongs to this project.
+      if (overData?.type === 'resource') {
+        const short = overData.personShort as string;
+        if (short) {
+          setTasks((prev) => prev.map((t) => (t.projectId === srcProject.id && !t.assignees.includes(short) ? { ...t, assignees: [...t.assignees, short] } : t)));
+        }
+        resetDragRefs();
+        clearOverlay(); return;
+      }
+      // Drop on an empty list column ? pin this project to that list.
+      if (overData?.type === 'projList') {
+        const targetList = overData.listId as ListId;
+        setProjects((prev) => prev.map((p) => (p.id === srcProject.id ? { ...p, list: targetList } : p)));
+        setTasks((prev) => prev.map((t) => (t.projectId === srcProject.id ? { ...t, list: targetList } : t)));
+        resetDragRefs();
+        clearOverlay(); return;
+      }
       let targetClientId: string | undefined = srcProject.clientId;
-      if (overData?.type === 'project') targetClientId = (overData.project as Project).clientId;
-      else if (overData?.type === 'clientHeader') targetClientId = (overData.clientId as string);
+      let targetList: ListId | undefined = srcProject.list;
+      if (overData?.type === 'project') {
+        targetClientId = (overData.project as Project).clientId;
+        targetList = (overData.listId as ListId) ?? targetList;
+      } else if (overData?.type === 'clientHeader') {
+        targetClientId = (overData.clientId as string);
+        // When a client subheader carries a listId (project-view columns), pin the project to that list.
+        if (overData.listId) targetList = overData.listId as ListId;
+      }
       const overProjectId = overData?.type === 'project' ? (overData.project as Project).id : null;
       setProjects((prev) => {
-        let next = prev.map((p) => (p.id === srcProject.id ? { ...p, clientId: targetClientId } : p));
+        let next = prev.map((p) => (p.id === srcProject.id ? { ...p, clientId: targetClientId, list: targetList } : p));
         if (overProjectId && overProjectId !== srcProject.id) {
           const oldI = next.findIndex((p) => p.id === srcProject.id);
           const newI = next.findIndex((p) => p.id === overProjectId);
@@ -1217,15 +2623,23 @@ export default function App() {
         }
         return next;
       });
+      // If the project has a pinned list, move its tasks to that list so they render in the right column.
+      if (targetList) {
+        setTasks((prev) => prev.map((t) => (t.projectId === srcProject.id ? { ...t, list: targetList as ListId } : t)));
+      }
       resetDragRefs();
       clearOverlay(); return;
     }
-    if (!over || active.id === over.id) { setActiveId(null); setColumnOffset(0); pendingOffsetRef.current = 0; if (dwellTimerRef.current) { clearTimeout(dwellTimerRef.current); dwellTimerRef.current = null; } if (collapseTimerRef.current) { clearTimeout(collapseTimerRef.current); collapseTimerRef.current = null; } setSourceCollapsed(false); return; }
+    if (!over || active.id === over.id) { setActiveId(null); setActiveTaskIdState(null); setColumnOffset(0); pendingOffsetRef.current = 0; if (dwellTimerRef.current) { clearTimeout(dwellTimerRef.current); dwellTimerRef.current = null; } if (collapseTimerRef.current) { clearTimeout(collapseTimerRef.current); collapseTimerRef.current = null; } setSourceCollapsed(false); return; }
+    // Underlying task ids â€” active/over .id may carry a sortable prefix (e.g. dashboard "dash:work:")
+    // so look up the actual task via data.task when present.
+    const activeTaskId = (active.data.current?.task as Task | undefined)?.id ?? String(active.id);
+    const overTaskId = (over.data.current?.task as Task | undefined)?.id ?? String(over.id);
     const overIdStr = String(over.id);
     if (overIdStr.startsWith('cal:')) {
       const [, targetDate, targetListRaw] = overIdStr.split(':');
       const droppedList = targetListRaw as ListId;
-      const srcTask = tasks.find((t) => t.id === active.id);
+      const srcTask = tasks.find((t) => t.id === activeTaskId);
       if (srcTask) {
         // Default: snap back to source category. Hold Ctrl/Cmd to allow category change.
         const targetList: ListId = ctrlDownRef.current ? droppedList : srcTask.list;
@@ -1255,24 +2669,46 @@ export default function App() {
       clearOverlay(); return;
     }
     if (overIdStr.startsWith('section:')) {
-      const [, targetList, targetSection] = overIdStr.split(':') as ['section', ListId, SectionId];
-      const srcTask = tasks.find((t) => t.id === active.id);
-      if (srcTask && (srcTask.list !== targetList || srcTask.section !== targetSection)) {
+      const [, targetList, targetSectionRaw] = overIdStr.split(':') as ['section', ListId, string];
+      const srcTask = tasks.find((t) => t.id === activeTaskId);
+      const targetIsMilestones = targetSectionRaw === 'milestones';
+      // If dropping on Milestones, mark task as scheduled (pin it to that list's milestone group); section is preserved.
+      // If dropping a milestone into a regular section, convert it back to a todo in that section.
+      const targetType: Task['type'] = targetIsMilestones ? 'scheduled' : 'todo';
+      const targetSection: SectionId = targetIsMilestones ? srcTask?.section ?? 'today' : (targetSectionRaw as SectionId);
+      // Buckets: milestones is its own display bucket per list; regular sections are their own buckets.
+      const srcBucketKey = srcTask ? (srcTask.type === 'scheduled' ? `${srcTask.list}:milestones` : `${srcTask.list}:${srcTask.section}`) : '';
+      const tgtBucketKey = `${targetList}:${targetIsMilestones ? 'milestones' : targetSection}`;
+      if (srcTask && srcBucketKey !== tgtBucketKey) {
         setTasks((prev) => {
-          const fromOthers = prev.filter((t) => t.list === srcTask.list && t.section === srcTask.section && t.id !== srcTask.id).map((t, i) => ({ ...t, order: i }));
-          const toBucket = prev.filter((t) => t.list === targetList && t.section === targetSection && t.id !== srcTask.id);
-          const moved: Task = { ...srcTask, list: targetList, section: targetSection };
+          const inBucket = (t: Task, key: string) => {
+            const [l, s] = key.split(':');
+            if (s === 'milestones') return t.list === (l as ListId) && t.type === 'scheduled';
+            return t.list === (l as ListId) && t.section === (s as SectionId) && t.type !== 'scheduled';
+          };
+          const fromOthers = prev.filter((t) => inBucket(t, srcBucketKey) && t.id !== srcTask.id).map((t, i) => ({ ...t, order: i }));
+          const toBucket = prev.filter((t) => inBucket(t, tgtBucketKey) && t.id !== srcTask.id);
+          const moved: Task = { ...srcTask, list: targetList, section: targetSection, type: targetType };
           const reorderedTo = [...toBucket, moved].map((t, i) => ({ ...t, order: i }));
-          const untouched = prev.filter((t) => !(t.list === srcTask.list && t.section === srcTask.section) && !(t.list === targetList && t.section === targetSection));
+          const untouched = prev.filter((t) => !inBucket(t, srcBucketKey) && !inBucket(t, tgtBucketKey) && t.id !== srcTask.id);
           return [...untouched, ...fromOthers, ...reorderedTo];
         });
       }
       resetDragRefs();
       clearOverlay(); return;
     }
-    const a = tasks.find((t) => t.id === active.id);
-    const o = tasks.find((t) => t.id === over.id);
-    if (!a || !o) { setActiveId(null); setColumnOffset(0); pendingOffsetRef.current = 0; if (dwellTimerRef.current) { clearTimeout(dwellTimerRef.current); dwellTimerRef.current = null; } if (collapseTimerRef.current) { clearTimeout(collapseTimerRef.current); collapseTimerRef.current = null; } setSourceCollapsed(false); return; }
+    const a = tasks.find((t) => t.id === activeTaskId);
+    const o = tasks.find((t) => t.id === overTaskId);
+    if (!a || !o) { setActiveId(null); setActiveTaskIdState(null); setColumnOffset(0); pendingOffsetRef.current = 0; if (dwellTimerRef.current) { clearTimeout(dwellTimerRef.current); dwellTimerRef.current = null; } if (collapseTimerRef.current) { clearTimeout(collapseTimerRef.current); collapseTimerRef.current = null; } setSourceCollapsed(false); return; }
+    // Dashboard cards are horizontally locked: a drag from one dashboard sub-list (e.g. "dash:work:")
+    // can only resolve to drops within the SAME sub-list. Drops on a different sub-list, or on a
+    // per-list column's copy of the task, are ignored â€” no list-changing moves from the dashboard.
+    const prefixOf = (id: string) => { const i = id.lastIndexOf(':'); return i >= 0 ? id.substring(0, i + 1) : ''; };
+    const activePrefix = prefixOf(String(active.id));
+    const overPrefix = prefixOf(String(over.id));
+    if (activePrefix.startsWith('dash:') && activePrefix !== overPrefix) {
+      setActiveId(null); setActiveTaskIdState(null); setActiveType(null); setActiveCalendarCellId(null); setColumnOffset(0); pendingOffsetRef.current = 0; if (dwellTimerRef.current) { clearTimeout(dwellTimerRef.current); dwellTimerRef.current = null; } if (collapseTimerRef.current) { clearTimeout(collapseTimerRef.current); collapseTimerRef.current = null; } setSourceCollapsed(false); return;
+    }
     if (a.list === o.list && a.section === o.section) {
       setTasks((prev) => {
         const list = prev.filter((t) => t.list === a.list && t.section === a.section).sort((x, y) => x.order - y.order);
@@ -1285,23 +2721,40 @@ export default function App() {
     } else {
       handleCrossSectionMove(a, o);
     }
-    setActiveId(null); setActiveType(null); setColumnOffset(0); pendingOffsetRef.current = 0; if (dwellTimerRef.current) { clearTimeout(dwellTimerRef.current); dwellTimerRef.current = null; } if (collapseTimerRef.current) { clearTimeout(collapseTimerRef.current); collapseTimerRef.current = null; } setSourceCollapsed(false);
+    setActiveId(null); setActiveTaskIdState(null); setActiveType(null); setActiveCalendarCellId(null); setColumnOffset(0); pendingOffsetRef.current = 0; if (dwellTimerRef.current) { clearTimeout(dwellTimerRef.current); dwellTimerRef.current = null; } if (collapseTimerRef.current) { clearTimeout(collapseTimerRef.current); collapseTimerRef.current = null; } setSourceCollapsed(false);
   }, [tasks]);
 
-  const [currentUserShort, setCurrentUserShortState] = useState<string>(() => {
-    if (typeof window === 'undefined') return '';
-    return window.localStorage.getItem('todo-app-user-short') || '';
-  });
-  const setCurrentUserShort = useCallback((s: string) => {
-    setCurrentUserShortState(s);
-    try { window.localStorage.setItem('todo-app-user-short', s); } catch {}
-  }, []);
   // Default to first person if unset
   useEffect(() => {
     if (!currentUserShort && people.length > 0) setCurrentUserShort(people[0].short);
   }, [currentUserShort, people, setCurrentUserShort]);
 
-  // One-time migration: Russell → Benno
+  // Global Enter shortcut. Three behaviours:
+  //   • Cursor hovering a task row → spawn a sibling of that task (same as clicking the row's +).
+  //   • Nothing hovered → spawn a fresh task at the bottom of Today/Work.
+  //   • Editing a title → handled by the title's own onKeyDown (which also spawns a sibling).
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+      const t = e.target as HTMLElement | null;
+      if (!t) return;
+      // Skip if focus is on anything that already accepts Enter (text inputs, contentEditable).
+      if (t.isContentEditable) return;
+      if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT') return;
+      if (t.tagName === 'BUTTON') return; // let buttons handle their own Enter
+      // Is the cursor hovering a task row? Each row carries data-task-row={id}.
+      const hoveredRow = document.querySelector('[data-task-row]:hover') as HTMLElement | null;
+      const hoveredId = hoveredRow?.getAttribute('data-task-row');
+      const hoveredTask = hoveredId ? tasks.find((x) => x.id === hoveredId) : undefined;
+      e.preventDefault();
+      if (hoveredTask) addSiblingTask(hoveredTask);
+      else addBlankTaskInSection('work', 'today');
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [addBlankTaskInSection, addSiblingTask, tasks]);
+
+  // One-time migration: Russell â†’ Benno
   const migratedRef = useRef(false);
   useEffect(() => {
     if (migratedRef.current) return;
@@ -1317,32 +2770,129 @@ export default function App() {
     }
   }, [people, setPeople, setTasks, currentUserShort, setCurrentUserShort]);
 
+  // For a milestone, the column is determined by the project it belongs to: the project's explicit list
+  // if any, else the dominant list of that project's tasks, else the milestone's own list.
+  const projectListMap = useMemo(() => {
+    const m: Record<string, ListId> = {};
+    for (const p of projects) {
+      if (p.list) { m[p.id] = p.list; continue; }
+      const counts: Partial<Record<ListId, number>> = {};
+      for (const t of tasks) if (t.projectId === p.id) counts[t.list] = (counts[t.list] || 0) + 1;
+      let best: ListId | null = null;
+      let bestN = 0;
+      for (const k of Object.keys(counts) as ListId[]) {
+        const n = counts[k] || 0;
+        if (n > bestN) { best = k; bestN = n; }
+      }
+      if (best) m[p.id] = best;
+    }
+    return m;
+  }, [projects, tasks]);
+
+  const effectiveListFor = useCallback((t: Task): ListId => {
+    if (t.type !== 'scheduled') return t.list;
+    if (t.projectId && projectListMap[t.projectId]) return projectListMap[t.projectId];
+    return t.list;
+  }, [projectListMap]);
+
+  // Tasks in the "Personal" client are scoped to their assignees: other users never see them.
+  // This filter is applied to every display path (list, project, calendar, dashboard) so Personal
+  // work stays off the team's radar.
+  const visibleTasks = useMemo(
+    () => tasks.filter((t) => t.clientId !== PERSONAL_CLIENT_ID || t.assignees.includes(currentUserShort)),
+    [tasks, currentUserShort]
+  );
+
   const tasksByKey = useMemo(() => {
     const m: Record<string, Task[]> = {};
-    for (const t of tasks) {
-      const k = `${t.list}:${t.section}`;
-      (m[k] ||= []).push(t);
+    // Split milestones (type === 'scheduled') out of regular section buckets and into a per-list `milestones` bucket.
+    // Milestones go into the column of their project, not their own list.
+    for (const t of visibleTasks) {
+      if (t.type === 'scheduled') {
+        const k = `${effectiveListFor(t)}:milestones`;
+        (m[k] ||= []).push(t);
+      } else {
+        const k = `${t.list}:${t.section}`;
+        (m[k] ||= []).push(t);
+      }
     }
-    for (const k of Object.keys(m)) m[k].sort((a, b) => a.order - b.order);
+    for (const k of Object.keys(m)) {
+      if (k.endsWith(':milestones')) {
+        // Sort milestones by deadline ascending; undated last; ties broken by title.
+        m[k].sort((a, b) => {
+          const ad = a.deadline || '\uffff';
+          const bd = b.deadline || '\uffff';
+          if (ad !== bd) return ad < bd ? -1 : 1;
+          return a.title.localeCompare(b.title);
+        });
+      } else {
+        m[k].sort((a, b) => a.order - b.order);
+      }
+    }
     // Dashboard = aggregated view of work+projects+admin filtered to current user
-    const dashSections: SectionId[] = ['inbox', 'today', 'next'];
-    for (const s of dashSections) {
+    const dashBuckets = ['milestones', 'inbox', 'today', 'next'] as const;
+    for (const s of dashBuckets) {
       const agg: Task[] = [];
       for (const l of ['work', 'projects', 'admin'] as ListId[]) {
         for (const t of (m[`${l}:${s}`] || [])) {
           if (t.assignees.includes(currentUserShort)) agg.push(t);
         }
       }
+      if (s === 'milestones') {
+        agg.sort((a, b) => {
+          const ad = a.deadline || '\uffff';
+          const bd = b.deadline || '\uffff';
+          if (ad !== bd) return ad < bd ? -1 : 1;
+          return a.title.localeCompare(b.title);
+        });
+      }
       m[`dashboard:${s}`] = agg;
     }
+    // Per-list dashboard sub-sections under Today: each list's today tasks for the current user.
+    // Order preserved from the underlying today bucket.
+    for (const l of ['work', 'projects', 'admin'] as ListId[]) {
+      const agg = (m[`${l}:today`] || []).filter((t) => t.assignees.includes(currentUserShort));
+      m[`dashboard:list:${l}`] = agg;
+    }
     return m;
-  }, [tasks]);
+  }, [visibleTasks, currentUserShort, effectiveListFor]);
 
-  const activeTask = activeId ? tasks.find((t) => t.id === activeId) : null;
-  const overTask = overId ? tasks.find((t) => t.id === overId) : null;
+  const activeTask = activeTaskId ? tasks.find((t) => t.id === activeTaskId) : null;
+  // overId may carry a sortable prefix (e.g. "dash:work:taskId"). Strip it so we can resolve the
+  // real task â€” otherwise hovering over a dashboard card returns null and displacement bails out.
+  const overTask = useMemo(() => {
+    if (!overId) return null;
+    const s = String(overId);
+    const i = s.lastIndexOf(':');
+    const taskId = i >= 0 ? s.substring(i + 1) : s;
+    return tasks.find((t) => t.id === taskId) ?? null;
+  }, [overId, tasks]);
+  // For project view, over IDs are namespaced as `projtask-${listId}-${taskId}`. Resolve the underlying task
+  // so ProjectListColumn can run the same displacement math the list view runs.
+  const overProjTask = useMemo(() => {
+    if (!overId) return null;
+    const s = String(overId);
+    if (!s.startsWith('projtask-')) return null;
+    const rest = s.slice('projtask-'.length); // `${listId}-${taskId}`
+    const dash = rest.indexOf('-');
+    if (dash < 0) return null;
+    const taskId = rest.slice(dash + 1);
+    return tasks.find((t) => t.id === taskId) ?? null;
+  }, [overId, tasks]);
 
-  const getAnimationProps = useCallback((task: Task, index: number, list: Task[]) => {
+  const getAnimationProps = useCallback((task: Task, index: number, list: Task[], idPrefix = '') => {
     if (!activeTask || !overTask || activeTask.id === task.id) return { displacementOffset: 0, insertionGap: 0 };
+    // The same task can be rendered in multiple sortable contexts (e.g. dashboard sub-list AND its
+    // owning per-list column). Each rendering passes its own idPrefix. Only animate the rendering
+    // whose context the active drag actually originated in â€” otherwise picking up a dashboard task
+    // also displaces the per-list column's copy of it (visual duplicates, overlaps).
+    const prefixOf = (id: string | null | undefined) => {
+      if (!id) return '';
+      const i = id.lastIndexOf(':');
+      return i >= 0 ? id.substring(0, i + 1) : '';
+    };
+    const activePrefix = prefixOf(activeId);
+    if (activePrefix !== idPrefix) return { displacementOffset: 0, insertionGap: 0 };
     const sameBucket = (x: Task, y: Task) => x.list === y.list && x.section === y.section;
     const inActiveBucket = sameBucket(activeTask, task);
     const inOverBucket = sameBucket(overTask, task);
@@ -1360,42 +2910,66 @@ export default function App() {
       if (aI > oI && index >= oI && index < aI) return { displacementOffset: 41, insertionGap: 0 };
     }
     return { displacementOffset: 0, insertionGap: 0 };
-  }, [activeTask, overTask]);
+  }, [activeTask, overTask, activeId, overId]);
 
-  const renderBucket = (list: Task[]) => (
-    <SortableContext items={list.map((t) => t.id)} strategy={verticalListSortingStrategy}>
+  const renderBucket = (list: Task[], idPrefix = '') => (
+    <SortableContext items={list.map((t) => `${idPrefix}${t.id}`)} strategy={verticalListSortingStrategy}>
       <AnimatePresence>
         {list.map((task, index) => {
-          const { displacementOffset, insertionGap } = getAnimationProps(task, index, list);
+          const { displacementOffset, insertionGap } = getAnimationProps(task, index, list, idPrefix);
           return (
-            <SortableTaskItem key={task.id} task={task} onToggle={() => toggleTask(task.id)} onRename={(title) => renameTask(task.id, title)} onDelete={() => deleteTask(task.id)} onEdit={() => setEditingTask(task)} displacementOffset={displacementOffset} insertionGap={insertionGap} isAnyDragging={!!activeTask} collapsed={sourceCollapsed && task.id === activeId} projects={projects} clients={clients} />
+            <SortableTaskItem key={`${idPrefix}${task.id}`} task={task} idPrefix={idPrefix} onToggle={() => toggleTask(task.id)} onRename={(title) => renameTask(task.id, title)} onDelete={() => deleteTask(task.id)} onEdit={(e) => openEdit(task, e)} onQuickEdit={(e) => openQuick(task, e)} onAddSibling={() => addSiblingTask(task)} autoFocus={task.id === newId} displacementOffset={displacementOffset} insertionGap={insertionGap} isAnyDragging={!!activeTask} collapsed={sourceCollapsed && `${idPrefix}${task.id}` === activeId} projects={projects} clients={clients} taskOrder={taskOrder} />
           );
         })}
       </AnimatePresence>
     </SortableContext>
   );
 
+  // Milestones are read-only in the column: not draggable, sorted by deadline. Still rendered through
+  // SortableTaskItem (with nonDraggable) so visuals stay identical to other rows.
+  const renderMilestoneBucket = (list: Task[]) => (
+    <>
+      {list.map((task) => (
+        <SortableTaskItem
+          key={task.id}
+          task={task}
+          onToggle={() => toggleTask(task.id)}
+          onRename={(title) => renameTask(task.id, title)}
+          onDelete={() => deleteTask(task.id)}
+          onEdit={() => openEdit(task)}
+          isAnyDragging={!!activeTask}
+          projects={projects}
+          clients={clients}
+          nonDraggable
+        />
+      ))}
+    </>
+  );
+
   const renderReadonlyBucket = (list: Task[]) => (
     <>
       {list.map((task) => {
         const project = task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
-        const client = project?.clientId ? clients.find((c) => c.id === project.clientId) : undefined;
+        const resolvedClientId = task.clientId ?? project?.clientId;
+        const client = resolvedClientId ? clients.find((c) => c.id === resolvedClientId) : undefined;
         const isScheduled = task.type === 'scheduled';
-        const titleColor = isScheduled ? 'text-[#8465ff]' : task.completed ? 'text-[#5e5e5e]' : 'text-white';
-        const metaColor = isScheduled ? 'text-[#8465ff]' : 'text-[#656464]';
+        const isNext = task.section === 'next';
+        const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID;
+        const titleColor = isScheduled ? 'text-[#8465ff]' : task.completed ? 'text-[#383838]' : isNext ? 'text-[#a8a8a8]' : 'text-white';
+        const metaColor = task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : 'text-[#656464]';
         return (
-          <div key={`dash-${task.id}`} onDoubleClick={() => setEditingTask(task)} className={`h-[37px] box-border flex flex-row gap-2 items-center px-[31px] w-full group ${task.completed ? 'bg-[#2d2d2d]' : 'hover:bg-white/[0.03]'}`}>
+          <div key={`dash-${task.id}`} onDoubleClick={() => openEdit(task)} onContextMenu={(e) => { e.preventDefault(); openQuick(task); }} className="h-[37px] box-border flex flex-row gap-2 items-center px-[31px] w-full group hover:bg-white/[0.03]">
             {!isScheduled && <TaskCheckbox completed={task.completed} onToggle={() => toggleTask(task.id)} />}
             <div className="flex flex-row items-center gap-[4px]">
-              {project && <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap text-[#656464]">{project.name}</p>}
+              {project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : 'text-[#656464]'}`}>{project.name}</p>}
               <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap ${titleColor}`}>{task.title}</span>
               {client && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap ${metaColor}`}>{client.short}</p>}
             </div>
-            {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} />)}
+            {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} />)}
             {task.deadline && (
               <>
-                {!isScheduled && <DeadlineArrow />}
-                <p className={`font-['NB_International:Regular',sans-serif] text-[14.333px] whitespace-nowrap ${isScheduled ? 'text-[#8465ff]' : 'text-white'}`}>{formatDeadline(task.deadline)}</p>
+                {!isScheduled && <DeadlineArrow dim={task.completed} />}
+                <p className={`font-['NB_International:Regular',sans-serif] text-[14.333px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : isNext ? 'text-[#a8a8a8]' : 'text-white'}`}>{formatDeadline(task.deadline)}</p>
               </>
             )}
             <button
@@ -1413,21 +2987,62 @@ export default function App() {
   );
 
   const renderColumn = (listId: ListId) => {
-    const bucket = listId === 'dashboard' ? renderReadonlyBucket : renderBucket;
-    const wrap = (section: SectionId, node: React.ReactNode) =>
+    // Dashboard tasks are now draggable too â€” using the same renderBucket as the per-list columns.
+    // Reordering within a sub-list (admin/work/projects) updates order; dragging across sub-lists
+    // moves the task to the target's list (handled by handleCrossSectionMove).
+    const bucket = renderBucket;
+    const milestoneBucket = listId === 'dashboard' ? renderReadonlyBucket : renderMilestoneBucket;
+    const wrap = (section: string, node: React.ReactNode) =>
       listId === 'dashboard' ? node : <SectionDroppable id={`section:${listId}:${section}`}>{node}</SectionDroppable>;
+    // Milestones only surface in per-list columns; the dashboard omits them so they aren't duplicated.
+    const milestones = listId === 'dashboard' ? [] : (tasksByKey[`${listId}:milestones`] || []);
     return (
       <div key={listId} className="flex-1 min-w-[340px] max-w-[440px]">
-        <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-white text-[14.333px] px-[35px] mb-[50px]">
+        <p className={`font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] px-[35px] mb-[74px] ${listId === 'dashboard' ? 'text-[#8465ff]' : 'text-white'}`}>
           {LIST_TITLES[listId]}
+          {listId === 'dashboard' && (
+            <span> ({people.find((p) => p.short === currentUserShort)?.name || currentUserShort})</span>
+          )}
         </p>
-        {wrap('inbox', bucket(tasksByKey[`${listId}:inbox`] || []))}
-        <Spacer />
-        <SectionHeader title="Today" />
-        {wrap('today', bucket(tasksByKey[`${listId}:today`] || []))}
-        <Spacer />
-        <SectionHeader title="Next" />
-        {wrap('next', bucket(tasksByKey[`${listId}:next`] || []))}
+        {milestones.length > 0 && wrap('milestones', milestoneBucket(milestones))}
+        {(tasksByKey[`${listId}:inbox`] || []).length > 0 && wrap('inbox', bucket(tasksByKey[`${listId}:inbox`] || []))}
+        {listId === 'dashboard' ? (
+          // Categorize the dashboard's Today items by list. Inbox + Next are intentionally hidden here.
+          <>
+            <SectionHeader title="Today" />
+            {(['admin', 'work', 'projects'] as ListId[]).map((l) => {
+              const items = tasksByKey[`dashboard:list:${l}`] || [];
+              if (items.length === 0) return null;
+              return (
+                <Fragment key={`dash-list-${l}`}>
+                  <Spacer />
+                  <SectionHeader title={LIST_TITLES[l]} />
+                  {/* idPrefix isolates the dashboard's sortable ids from the per-list columns,
+                      so the same task rendered in both places doesn't share a drag state. */}
+                  {bucket(items, `dash:${l}:`)}
+                </Fragment>
+              );
+            })}
+          </>
+        ) : (
+          // Headers live INSIDE their section's droppable so dropping ON the "Today" / "Next"
+          // label (or anywhere in that section's empty space) lands in that section. Previously
+          // the headers were free-standing siblings â€” drops on them fell through.
+          <>
+            {wrap('today', (
+              <>
+                <SectionHeader title="Today" onAdd={() => addBlankTaskInSection(listId, 'today')} />
+                {bucket(tasksByKey[`${listId}:today`] || [])}
+              </>
+            ))}
+            {wrap('next', (
+              <>
+                <SectionHeader title="Next" onAdd={() => addBlankTaskInSection(listId, 'next')} />
+                {bucket(tasksByKey[`${listId}:next`] || [])}
+              </>
+            ))}
+          </>
+        )}
       </div>
     );
   };
@@ -1441,7 +3056,7 @@ export default function App() {
     const activeList = activeTask.list;
     const allowListChange = ctrlDownRef.current;
 
-    // Resolve the target day from any collision — whether on a cal cell or a task card in a different cell.
+    // Resolve the target day from any collision â€” whether on a cal cell or a task card in a different cell.
     const dayFromCollision = (c: { id: string | number }): string | null => {
       const id = String(c.id);
       if (id.startsWith('cal:')) return id.split(':')[1] || null;
@@ -1485,7 +3100,7 @@ export default function App() {
       }
     }
     if (cellHits.length > 0) return cellHits;
-    // No direct cell/card hit — fall back to a column hit, redirecting to source-list cell for that day.
+    // No direct cell/card hit â€” fall back to a column hit, redirecting to source-list cell for that day.
     if (columnHit) {
       return [{ id: `cal:${columnHit.date}:${activeList}`, data: { droppableContainer: null as any, value: 1 } } as unknown as (typeof collisions)[number]];
     }
@@ -1512,16 +3127,24 @@ export default function App() {
           <ProjectViewMode
             projects={projects}
             clients={clients}
-            tasks={tasks}
+            tasks={visibleTasks}
+            people={people}
             newId={newId}
             isAnyDragging={!!activeId}
             isDraggingProjTask={activeType === 'projTask'}
             activeProjTaskId={activeProjTask?.id ?? null}
+            activeProjTask={activeProjTask}
+            overProjTask={overProjTask}
             sourceCollapsed={sourceCollapsed}
             onToggleTask={toggleTask}
             onRenameTask={renameTask}
+            onDeleteTask={deleteTask}
+            onEditTask={openEdit}
+            onQuickEditTask={openQuick}
+            taskOrder={taskOrder}
             onAddTaskToProject={addTaskToProject}
-            onAddTaskInList={(l) => addBlankProject(undefined, l)}
+            onAddTaskInList={addBlankTaskInList}
+            onAddProjectInList={(l, clientId) => addBlankProject(clientId, l)}
             onAddClient={addBlankClient}
             onRenameClient={renameClient}
             onRenameClientShort={renameClientShort}
@@ -1529,18 +3152,27 @@ export default function App() {
             onAddProject={addBlankProject}
             onRenameProject={renameProject}
             onDeleteProject={deleteProject}
+            onAddPerson={addPerson}
+            onDeletePerson={deletePerson}
+            currentUserShort={currentUserShort}
           />
         )}
         {mode === 'calendar' && (
           <WeekCalendarMode
-            tasks={tasks}
+            tasks={visibleTasks}
             projects={projects}
             clients={clients}
             onToggleTask={toggleTask}
             onRenameTask={renameTask}
             onDeleteTask={deleteTask}
-            onEditTask={(t) => setEditingTask(t)}
+            onEditTask={openEdit}
+            onQuickEditTask={openQuick}
+            onAddSiblingTask={addSiblingTask}
             isAnyDragging={!!activeId}
+            activeTask={activeTask}
+            overTask={overTask}
+            activeCellId={activeCalendarCellId}
+            activeSlotHeight={(activeRectHeight ?? 50) + 4}
           />
         )}
         {mode === 'settings' && (
@@ -1553,10 +3185,12 @@ export default function App() {
             onDeletePerson={deletePerson}
             currentUserShort={currentUserShort}
             onSetCurrentUser={setCurrentUserShort}
+            taskOrder={taskOrder}
+            onSetTaskOrder={setTaskOrder}
           />
         )}
 
-        <BottomBar mode={mode} onSetMode={setMode} onAdd={() => setShowAdd(true)} />
+        <BottomBar mode={mode} onSetMode={setMode} onAdd={addAndEditTask} />
 
         <AnimatePresence>
           {showAdd && (
@@ -1569,50 +3203,94 @@ export default function App() {
               clients={clients}
               people={people}
               defaultList={prefillList ?? undefined}
+              defaultAssignee={currentUserShort || undefined}
             />
           )}
           {editingTask && (
-            <AddModal
-              key={editingTask.id}
-              onClose={() => setEditingTask(null)}
-              onAddTask={addTask}
-              onUpdateTask={updateTask}
-              onAddProject={addProject}
-              onAddClient={addClient}
+            // Pull the LIVE task from storage so changes (toggling assignees, picking a second
+            // date for a range, etc.) are reflected immediately. editingTask is only the initial
+            // pointer — its fields are stale the moment we mutate the task.
+            <TaskQuickEdit
+              key={editingTask.id + ':' + editMode}
+              task={tasks.find((t) => t.id === editingTask.id) ?? editingTask}
               projects={projects}
               clients={clients}
               people={people}
-              editingTask={editingTask}
+              mode={editMode}
+              anchor={editAnchor}
+              newId={newId}
+              onClose={() => {
+                // If the user opened the panel via the bottom + (creating a new task) and never
+                // typed a title, discard the empty task so we don't leave a blank row behind.
+                if (editingTask && editingTask.id === newId) {
+                  const live = tasks.find((t) => t.id === editingTask.id);
+                  if (live && !live.title.trim()) deleteTask(editingTask.id);
+                }
+                setEditingTask(null);
+                setEditAnchor(null);
+              }}
+              onUpdateTask={updateTask}
+              onAddProject={(p) => addBlankProject(p.clientId, p.list)}
+              onAddClient={addBlankClient}
+              onAddPerson={addPerson}
+              onRenameClient={renameClient}
+              onRenameProject={renameProject}
+              onRenamePerson={renamePerson}
+              onDeleteClient={deleteClient}
+              onDeleteProject={deleteProject}
+              onDeletePerson={deletePerson}
             />
           )}
         </AnimatePresence>
 
         <DragOverlay dropAnimation={null} style={{ cursor: 'grabbing' }}>
           {activeTask && activeType === 'task' ? (
-            <motion.div
-              initial={{ scale: 1, x: 0 }}
-              animate={{
-                scale: 1.02,
-                x: columnOffset * (activeRectWidth || 440),
-                boxShadow: "0 7.5px 15px -2.5px rgba(0, 0, 0, 0.7), 0 5px 6.25px -1.25px rgba(0, 0, 0, 0.5)",
-              }}
-              transition={{
-                scale: { type: "spring", stiffness: 600, damping: 30, mass: 0.4 },
-                x: { type: "spring", stiffness: 320, damping: 34, mass: 0.7 },
-              }}
-              className="bg-[#333333] border border-[#444444]"
-              style={{ width: activeRectWidth }}
-            >
-              <SortableTaskItem task={activeTask} onToggle={() => {}} isDragOverlay projects={projects} clients={clients} />
-            </motion.div>
+            activeCalendarCellId ? (
+              // Calendar drag: free-floating ghost that tracks the cursor 1:1 ï¿½ no column-snap spring
+              // fighting the cursor (calendar columns are narrow, snapping makes it feel laggy).
+              // Drop shadow restored at 1/4 size, 1/2 opacity vs. the original. Subtle enough that
+              // the per-frame repaint cost is negligible while still conveying that the card is lifted.
+              <motion.div
+                initial={{ scale: 1 }}
+                animate={{
+                  scale: 1.02,
+                  boxShadow: "0 1.875px 7.5px -0.625px rgba(0, 0, 0, 0.35), 0 1.25px 3.125px -0.3125px rgba(0, 0, 0, 0.25)",
+                }}
+                transition={{ scale: { type: "spring", stiffness: 600, damping: 30, mass: 0.4 } }}
+                className="rounded-md bg-[#333333] overflow-hidden"
+                style={{ width: activeRectWidth, height: activeRectHeight, willChange: 'transform' }}
+              >
+                <CalendarCardBody task={activeTask} projects={projects} clients={clients} />
+              </motion.div>
+            ) : (
+              <motion.div
+                initial={{ scale: 1, x: 0 }}
+                animate={{
+                  scale: 1.02,
+                  x: columnOffset * (activeRectWidth || 440),
+                  boxShadow: "0 1.875px 7.5px -0.625px rgba(0, 0, 0, 0.35), 0 1.25px 3.125px -0.3125px rgba(0, 0, 0, 0.25)",
+                }}
+                transition={{
+                  scale: { type: "spring", stiffness: 600, damping: 30, mass: 0.4 },
+                  x: { type: "spring", stiffness: 320, damping: 34, mass: 0.7 },
+                }}
+                className="bg-[#333333]"
+                style={{ width: activeRectWidth, willChange: 'transform' }}
+              >
+                <SortableTaskItem task={activeTask} onToggle={() => {}} isDragOverlay projects={projects} clients={clients} />
+              </motion.div>
+            )
           ) : null}
           {activeProject ? (
             <motion.div
               initial={{ scale: 1 }}
-              animate={{ scale: 1.02, boxShadow: "0 7.5px 15px -2.5px rgba(0, 0, 0, 0.7), 0 5px 6.25px -1.25px rgba(0, 0, 0, 0.5)" }}
+              animate={{
+                scale: 1.02,
+                boxShadow: "0 1.875px 7.5px -0.625px rgba(0, 0, 0, 0.35), 0 1.25px 3.125px -0.3125px rgba(0, 0, 0, 0.25)",
+              }}
               transition={{ scale: { type: "spring", stiffness: 600, damping: 30, mass: 0.4 } }}
-              className="bg-[#333333] border border-[#444444] h-[37px] box-border flex flex-row gap-2 items-center px-[31px]"
-              style={{ width: activeRectWidth }}
+              className="bg-[#333333] h-[37px] box-border flex flex-row gap-2 items-center px-[31px]"
+              style={{ width: activeRectWidth, willChange: 'transform' }}
             >
               <Folder size={12} className="text-[#656464]" />
               <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] text-white whitespace-nowrap">{activeProject.name}</span>
@@ -1624,18 +3302,18 @@ export default function App() {
               animate={{
                 scale: 1.02,
                 x: columnOffset * (activeRectWidth || 440),
-                boxShadow: "0 7.5px 15px -2.5px rgba(0, 0, 0, 0.7), 0 5px 6.25px -1.25px rgba(0, 0, 0, 0.5)",
+                boxShadow: "0 1.875px 7.5px -0.625px rgba(0, 0, 0, 0.35), 0 1.25px 3.125px -0.3125px rgba(0, 0, 0, 0.25)",
               }}
               transition={{
                 scale: { type: "spring", stiffness: 600, damping: 30, mass: 0.4 },
                 x: { type: "spring", stiffness: 320, damping: 34, mass: 0.7 },
               }}
-              className="bg-[#333333] border border-[#444444] h-[37px] box-border flex flex-row gap-2 items-center pl-[43px] pr-[31px]"
-              style={{ width: activeRectWidth }}
+              className="bg-[#333333] h-[37px] box-border flex flex-row gap-2 items-center pl-[43px] pr-[31px]"
+              style={{ width: activeRectWidth, willChange: 'transform' }}
             >
               <LIndent />
               <TaskCheckbox completed={activeProjTask.completed} onToggle={() => {}} />
-              <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap ${activeProjTask.completed ? 'text-[#5e5e5e] line-through' : 'text-white'}`}>{activeProjTask.title}</span>
+              <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap ${activeProjTask.completed ? 'text-[#383838]' : 'text-white'}`}>{activeProjTask.title}</span>
             </motion.div>
           ) : null}
         </DragOverlay>

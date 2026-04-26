@@ -15,6 +15,10 @@ export interface Task {
   section: SectionId;
   order: number;
   projectId?: string;
+  // Optional explicit client link. Normally client is derived from projectId → project.clientId,
+  // but a task can be linked directly to a client when it has no project (e.g. a milestone tied
+  // to a client without a concrete project).
+  clientId?: string;
 }
 
 export interface Project { id: string; name: string; clientId?: string; list?: ListId; }
@@ -24,7 +28,12 @@ export interface Person { id: string; name: string; short: string; }
 export const LIST_TITLES: Record<ListId, string> = { dashboard: 'Dashboard', work: 'Work', projects: 'Projects', admin: 'Admin' };
 export const LISTS: ListId[] = ['dashboard', 'work', 'projects', 'admin'];
 
+// Id of the special "Personal" client. Tasks under this client are scoped to their assignees
+// only — they never show on anyone else's dashboard, list, or project view.
+export const PERSONAL_CLIENT_ID = 'personal';
+
 export const initialClients: Client[] = [
+  { id: PERSONAL_CLIENT_ID, name: 'Personal', short: '' },
   { id: 'c1', name: 'Fear of God', short: 'FOG' },
   { id: 'c2', name: 'Rivington', short: 'Riv' },
   { id: 'c3', name: 'Fresh Start Pack', short: 'FSP' },
