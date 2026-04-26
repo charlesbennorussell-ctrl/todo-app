@@ -1817,23 +1817,19 @@ function WeekCalendarMode({
     const resolvedClientId = task.clientId ?? project?.clientId;
     const client = resolvedClientId ? clients.find((c) => c.id === resolvedClientId) : undefined;
     const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID;
-    // Milestone meta follows the user's task-order setting too. cpt/tcp combine client+project
-    // on the first row; ptc keeps client on the second row alongside assignees + date.
-    const clientOnFirstRow = taskOrder !== 'ptc';
+    // Milestone calendar cards match regular calendar cards: square + hover-tint bg + no
+    // stroke; Title always on line 1; meta on line 2. Milestone purple is preserved on the
+    // title and the second-row meta to mark them visually.
     return (
-      <div onDoubleClick={(e) => { e.stopPropagation(); onEditTask(task); }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onQuickEditTask?.(task); }} className="relative mx-[6px] mb-[4px] rounded-md bg-[#333333] border border-[#444444] cursor-pointer">
+      <div onDoubleClick={(e) => { e.stopPropagation(); onEditTask(task); }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onQuickEditTask?.(task); }} className="relative mx-[6px] mb-[4px] bg-white/[0.03] cursor-pointer">
         <div className="px-[10px] py-[6px] flex flex-col gap-[2px]">
           <div className="flex flex-row items-center gap-[4px]">
-            {taskOrderSlots(taskOrder, !!project, clientOnFirstRow ? !!client : false).map((slot, i) => {
-              if (slot === 'project' && project) return <p key={`p-${i}`} className="font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis text-[#656464]">{project.name}</p>;
-              if (slot === 'client' && client) return <p key={`c-${i}`} className="font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap text-[#8465ff]">{client.short}</p>;
-              if (slot === 'cp' && client && project) return <p key={`cp-${i}`} className="font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis text-[#656464]">{client.short}<Arrowhead />{project.name}</p>;
-              if (slot === 'title') return <span key={`t-${i}`} className="font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis text-[#8465ff]">{task.title}</span>;
-              return null;
-            })}
+            <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis text-[#8465ff]">{task.title}</span>
           </div>
           <div className="flex flex-row items-center gap-[6px]">
-            {!clientOnFirstRow && client && <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap text-[#8465ff]">{client.short}</p>}
+            {client && project && <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap text-[#8465ff]">{client.short}<Arrowhead tone="milestone" />{project.name}</p>}
+            {client && !project && <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap text-[#8465ff]">{client.short}</p>}
+            {!client && project && <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap text-[#8465ff]">{project.name}</p>}
             {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone="scheduled" hollow={isPersonal} dim={task.completed} />)}
             {showDate && task.deadline && <p className="font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap text-[#8465ff]">{formatDeadline(task.deadline)}</p>}
           </div>
