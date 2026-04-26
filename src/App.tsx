@@ -257,7 +257,7 @@ function SortableTaskItem({
   task, onToggle, onRename, onDelete, onEdit, onQuickEdit, onAddSibling, onReschedule, autoFocus = false, isDragOverlay = false, displacementOffset = 0, insertionGap = 0, isAnyDragging = false, collapsed = false, projects = [], clients = [], nonDraggable = false, idPrefix = '', taskOrder = 'ptc', density = 0,
   showIndent = false, hideContext = false,
 }: {
-  task: Task; onToggle: () => void; onRename?: (title: string) => void; onDelete?: () => void; onEdit?: (e?: React.MouseEvent) => void; onQuickEdit?: (e?: React.MouseEvent) => void; onAddSibling?: () => void; onReschedule?: (kind: 'tomorrow' | 'nextWeek') => void; autoFocus?: boolean; isDragOverlay?: boolean; displacementOffset?: number; insertionGap?: number; isAnyDragging?: boolean; collapsed?: boolean; projects?: Project[]; clients?: Client[]; nonDraggable?: boolean;
+  task: Task; onToggle: () => void; onRename?: (title: string) => void; onDelete?: () => void; onEdit?: (e?: React.MouseEvent) => void; onQuickEdit?: (e?: React.MouseEvent) => void; onAddSibling?: () => void; onReschedule?: (kind: 'today' | 'tomorrow' | 'nextWeek' | 'shiftBack') => void; autoFocus?: boolean; isDragOverlay?: boolean; displacementOffset?: number; insertionGap?: number; isAnyDragging?: boolean; collapsed?: boolean; projects?: Project[]; clients?: Client[]; nonDraggable?: boolean;
   taskOrder?: TaskOrder;
   // Responsive density level (0=full ... 7=tightest). See App's density comment for the cascade.
   density?: number;
@@ -630,15 +630,25 @@ function SortableTaskItem({
                 Future / undated dates have no click affordance. */}
             {(() => {
               const late = isLateDeadline(task.deadline);
-              const isToday = task.deadline === todayISO();
-              const clickable = (late || isToday) && !!onReschedule;
+              // Every dated task is clickable when onReschedule is wired (was: only late+today).
+              // Future tasks now respond to shift+double-click (move date earlier) and double-click
+              // (push to tomorrow) so the user can advance any deadline without opening the editor.
+              const clickable = !!onReschedule;
               const cls = `font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : late ? 'text-[#FF7171]' : isNext ? 'text-[#a8a8a8]' : 'text-white'} ${clickable ? 'cursor-pointer' : ''}`;
               return (
                 <p
                   className={cls}
                   onClick={clickable ? (e) => { if (e.altKey) { e.stopPropagation(); onReschedule!('nextWeek'); } } : undefined}
-                  onDoubleClick={clickable ? (e) => { e.stopPropagation(); onReschedule!('tomorrow'); } : undefined}
-                  title={clickable ? 'Double-click → tomorrow • Alt+click → next week' : undefined}
+                  onDoubleClick={clickable ? (e) => {
+                    e.stopPropagation();
+                    // shift+double-click → move date one day EARLIER (tomorrow → today, etc.)
+                    if (e.shiftKey) { onReschedule!('shiftBack'); return; }
+                    // overdue tasks get promoted to today (was: tomorrow); on-time / future tasks
+                    // get pushed to tomorrow (the legacy "snooze one day" behavior).
+                    if (late) onReschedule!('today');
+                    else onReschedule!('tomorrow');
+                  } : undefined}
+                  title={clickable ? 'Double-click → ' + (late ? 'today' : 'tomorrow') + ' • Shift+double-click → one day earlier • Alt+click → next week' : undefined}
                 >
                   {density >= 2 ? formatDeadlineShort(task.deadline) : formatDeadline(task.deadline)}
                 </p>
@@ -2695,15 +2705,37 @@ export default function App() {
     setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
   }, []);
   // Quick reschedule shortcut used by late-date click handlers in the row renderers.
-  //   'tomorrow' → deadline = tomorrow's ISO + section = 'tomorrow'
+  //   'today'    → deadline = today + section = 'today'
+  //   'tomorrow' → deadline = tomorrow + section = 'tomorrow'
   //   'nextWeek' → deadline = today + 7 days + section = 'next'
-  const rescheduleTaskTo = useCallback((id: string, kind: 'tomorrow' | 'nextWeek') => {
-    const today = new Date(); today.setHours(0, 0, 0, 0);
-    const target = new Date(today);
-    target.setDate(today.getDate() + (kind === 'tomorrow' ? 1 : 7));
-    const iso = `${target.getFullYear()}-${String(target.getMonth() + 1).padStart(2, '0')}-${String(target.getDate()).padStart(2, '0')}`;
-    const section: SectionId = kind === 'tomorrow' ? 'tomorrow' : 'next';
-    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, deadline: iso, section } : t)));
+  //   'shiftBack'→ deadline = current deadline - 1 day (tomorrow → today, today → yesterday…)
+  const rescheduleTaskTo = useCallback((id: string, kind: 'today' | 'tomorrow' | 'nextWeek' | 'shiftBack') => {
+    setTasks((prev) => prev.map((t) => {
+      if (t.id !== id) return t;
+      const today = new Date(); today.setHours(0, 0, 0, 0);
+      let target: Date;
+      if (kind === 'shiftBack') {
+        // Shift the existing deadline back by one day. If no deadline yet, treat as starting from today.
+        const start = t.deadline ? new Date(t.deadline + 'T00:00:00') : new Date(today);
+        target = new Date(start);
+        target.setDate(start.getDate() - 1);
+      } else {
+        target = new Date(today);
+        if (kind === 'tomorrow') target.setDate(today.getDate() + 1);
+        else if (kind === 'nextWeek') target.setDate(today.getDate() + 7);
+        // 'today' → leave at today
+      }
+      const iso = `${target.getFullYear()}-${String(target.getMonth() + 1).padStart(2, '0')}-${String(target.getDate()).padStart(2, '0')}`;
+      // Section follows the new date: today/past → today, tomorrow → tomorrow, future → next.
+      const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+      const tomorrowDate = new Date(today); tomorrowDate.setDate(today.getDate() + 1);
+      const tomorrowIso = `${tomorrowDate.getFullYear()}-${String(tomorrowDate.getMonth() + 1).padStart(2, '0')}-${String(tomorrowDate.getDate()).padStart(2, '0')}`;
+      let section: SectionId;
+      if (iso <= todayIso) section = 'today';
+      else if (iso === tomorrowIso) section = 'tomorrow';
+      else section = 'next';
+      return { ...t, deadline: iso, section };
+    }));
   }, []);
 
   const addProject = useCallback((p: Omit<Project, 'id'>) => setProjects((prev) => [...prev, { ...p, id: `p-${Date.now()}` }]), []);
