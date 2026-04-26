@@ -399,21 +399,43 @@ function SortableTaskItem({
             // hideContext (project view 2): suppress project + client entirely — redundant.
             const showClient = !hideContext && !!client && density < 4;
             const showProject = !hideContext && !!project && density < 6;
-            return taskOrderSlots(taskOrder, showProject, showClient).map((slot, i) => {
+            // Milestones render their meta + title with " > " separators between adjacent slots
+            // ("RSL > Launch > PR Launch"). Regular tasks keep gap-based separation. We track
+            // whether the previous slot rendered something so we can inject a separator before
+            // the current one only when needed (no leading separator, no double separators).
+            let prevHadContent = false;
+            const sepIfMilestone = (key: string) => {
+              if (!isScheduled) return null;
+              if (!prevHadContent) return null;
+              return <span key={key} className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] text-[#656464] mx-[1px]">›</span>;
+            };
+            return taskOrderSlots(taskOrder, showProject, showClient).flatMap((slot, i) => {
               const metaCls = `font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : 'text-[#656464]'}`;
               // Progressive truncation: project name truncates first (density >= 1).
               const projectTruncate = density >= 1 ? 'truncate min-w-0 max-w-[120px]' : '';
-              if (slot === 'project' && project) return <p key={`p-${i}`} className={`${metaCls} ${projectTruncate}`}>{project.name}</p>;
-              if (slot === 'client' && client) return <p key={`c-${i}`} className={`font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap ${metaColor}`}>{client.short}</p>;
-              if (slot === 'cp' && client && project) {
-                return (
+              if (slot === 'project' && project && project.name) {
+                const sep = sepIfMilestone(`sep-p-${i}`);
+                prevHadContent = true;
+                return [sep, <p key={`p-${i}`} className={`${metaCls} ${projectTruncate}`}>{project.name}</p>].filter(Boolean) as React.ReactNode[];
+              }
+              if (slot === 'client' && client && client.short) {
+                const sep = sepIfMilestone(`sep-c-${i}`);
+                prevHadContent = true;
+                return [sep, <p key={`c-${i}`} className={`font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap ${metaColor}`}>{client.short}</p>].filter(Boolean) as React.ReactNode[];
+              }
+              if (slot === 'cp' && client && client.short && project && project.name) {
+                const sep = sepIfMilestone(`sep-cp-${i}`);
+                prevHadContent = true;
+                return [sep, (
                   <p key={`cp-${i}`} className={`${metaCls} ${projectTruncate}`}>
                     {`${client.short} > ${project.name}`}
                   </p>
-                );
+                )].filter(Boolean) as React.ReactNode[];
               }
             if (slot === 'title') {
-              return (
+              const sep = sepIfMilestone(`sep-t-${i}`);
+              prevHadContent = true;
+              const titleNode = (
           <span
             key={`t-${i}`}
             ref={titleRef}
@@ -542,6 +564,7 @@ function SortableTaskItem({
             style={(task.title || '').length <= 1 ? { minWidth: '40px' } : undefined}
           >{task.title}</span>
               );
+              return [sep, titleNode].filter(Boolean) as React.ReactNode[];
             }
             return null;
             });
