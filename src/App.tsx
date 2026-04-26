@@ -3461,9 +3461,19 @@ export default function App() {
       .filter((b) => b.projects.length > 0);
     return (
       <div key={listId} className="flex-1 min-w-[280px]">
-        <p className={`font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] px-[35px] mb-[74px] text-white`}>
-          {LIST_TITLES[listId]}
-        </p>
+        {/* Column header with the cascading add menu (HeaderAddMenu) for adding a client,
+            project (optionally under a client), or blank task into THIS column. */}
+        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[74px]">
+          <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">
+            {LIST_TITLES[listId]}
+          </p>
+          <HeaderAddMenu
+            clients={clients}
+            onAddBlankClient={addBlankClient}
+            onAddBlankProject={(clientId) => addBlankProject(clientId, listId)}
+            onAddBlankTask={() => addBlankTaskInList(listId)}
+          />
+        </div>
         {orphans.length > 0 && (
           <div className="mb-[37px]">
             {renderProjectBucket(orphans, `proj2:${listId}:none:`, false)}
@@ -3472,20 +3482,23 @@ export default function App() {
         {clientBlocks.map(({ client: c, projects: clientProjects }, ci) => (
           <div key={c.id}>
             {ci > 0 && <Spacer />}
-            {/* Client subheader — gray label, indented to align with project headers */}
-            <div className="h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px]">
+            {/* Client subheader — gray label + AddPlus to spawn a new project under this client
+                in this column. */}
+            <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px]">
               <p className={`${proj2BodyFont} text-[#656464]`}>{c.name}</p>
+              <AddPlus onClick={() => addBlankProject(c.id, listId)} />
             </div>
             {clientProjects.map((p) => {
               const projTasks = tasksByProject.get(p.id) || [];
               return (
                 <div key={p.id}>
-                  {/* Project header — folder icon + project name. No bottom margin so projects
-                      under the same client stack flush; the Spacer between clients still keeps
-                      separate clients visually distinct. */}
-                  <div className="h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]">
+                  {/* Project header — folder icon + project name + AddPlus to spawn a new task
+                      under this project. No bottom margin so projects under the same client
+                      stack flush; the Spacer between clients still keeps clients distinct. */}
+                  <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]">
                     <Folder size={12} className="text-[#656464]" />
                     <span className={`${proj2BodyFont} text-white`}>{p.name}</span>
+                    <AddPlus onClick={() => addTaskToProject(p.id, listId)} />
                   </div>
                   {projTasks.length > 0 && renderProjectBucket(projTasks, `proj2:${listId}:${p.id}:`, true)}
                 </div>
