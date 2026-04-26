@@ -3466,8 +3466,10 @@ export default function App() {
             {clientProjects.map((p) => {
               const projTasks = tasksByProject.get(p.id) || [];
               return (
-                <div key={p.id} className="mb-[37px]">
-                  {/* Project header — folder icon + project name */}
+                <div key={p.id}>
+                  {/* Project header — folder icon + project name. No bottom margin so projects
+                      under the same client stack flush; the Spacer between clients still keeps
+                      separate clients visually distinct. */}
                   <div className="h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]">
                     <Folder size={12} className="text-[#656464]" />
                     <span className={`${proj2BodyFont} text-white`}>{p.name}</span>
