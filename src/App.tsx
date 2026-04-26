@@ -1652,24 +1652,18 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
   // becomes the active drag.
   // Displacement: a motion.div wrapper animates y / marginTop so OTHER cards slide out of the way
   // to reveal where the dragged card will land ï¿½ same trick the list view uses.
+  // PORT: drag mechanics now mirror SortableTaskItem (list view) — single sortable wrapper,
+  // useSortable's transform straight on the row, opacity:0 to fade the source while dragging,
+  // dnd-kit's verticalListSortingStrategy handles in-cell displacement on its own. The legacy
+  // Displaced primitive + source-collapse max-height animation are gone; they were stacking
+  // multiple transforms and producing the messy drag the user reported.
   return (
-    <Displaced offset={displacementOffset} gap={insertionGap} active={isAnyDragging}>
-    {/* Source-collapse: when this card becomes the active drag, the slot it occupies
-        smoothly closes (max-height ? 0) AND fades ï¿½ combined, it feels like the card
-        physically dissolves into the column rather than just snapping out of layout. */}
-    <div
-      className="overflow-hidden"
-      style={{
-        maxHeight: isDragging ? 0 : 200,
-        marginBottom: isDragging ? 0 : 4,
-        opacity: isDragging ? 0 : 1,
-        transition: `max-height ${MOTION.base}ms ${MOTION.easeOut}, margin-bottom ${MOTION.base}ms ${MOTION.easeOut}, opacity ${MOTION.fast}ms ${MOTION.easeStandard}`,
-      }}
-    >
-    <div
+    <motion.div
       ref={setNodeRef}
-      style={{ ...style, opacity: isDragging ? 0 : 1, transition: isAnyDragging ? `${style.transition || 'none'}, opacity 120ms ease-out` : 'opacity 120ms ease-out' }}
-      className={`relative mx-[6px] group ${task.completed ? '' : 'bg-white/[0.03]'} ${dimmed ? 'opacity-60' : ''}`}
+      style={style}
+      className={`relative mx-[6px] mb-[4px] group ${task.completed ? '' : 'bg-white/[0.03]'} ${dimmed ? 'opacity-60' : ''}`}
+      animate={{ opacity: isDragging ? 0 : 1 }}
+      transition={{ opacity: { duration: 0.12, ease: 'easeOut' } }}
     >
       <div onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} onContextMenu={(e) => { if (onQuickEdit) { e.preventDefault(); e.stopPropagation(); onQuickEdit(); } }} {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing pl-[10px] pr-[10px] py-[6px] flex flex-row items-start gap-[10px] overflow-hidden">
         {!isScheduled && (
@@ -1715,9 +1709,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
       >
         <Trash2 size={12} />
       </button>
-    </div>
-    </div>
-    </Displaced>
+    </motion.div>
   );
 }
 
