@@ -2965,11 +2965,10 @@ export default function App() {
     if (!currentUserShort && people.length > 0) setCurrentUserShort(people[0].short);
   }, [currentUserShort, people, setCurrentUserShort]);
 
-  // 4 AM section refill. Each list (work/projects/admin) keeps Today and Tomorrow at a target
-  // of 3 tasks. At 4 AM we cascade:
-  //    Tomorrow → Today (if Today < 3)
-  //    Next     → Today (if Today still < 3 after tomorrow drained)
-  //    Next     → Tomorrow (if Tomorrow < 3)
+  // 4 AM section refill. Today is SACRED — only deadlined / date-ranged tasks land there
+  // (handled by the deadline auto-promote effect above). The refill cascade only tops up
+  // Tomorrow:
+  //    Next → Tomorrow (if Tomorrow < 3)
   // Day boundary is 4 AM (not midnight) so late-night work counts as the previous day — see
   // todayISO() in data.ts for the consumer-side shift. Runs on mount when last refill < today,
   // then schedules itself for the next 4 AM. Persisted via localStorage so each browser only
@@ -2982,30 +2981,17 @@ export default function App() {
         const lists: ListId[] = ['work', 'projects', 'admin'];
         for (const listId of lists) {
           const cmp = (a: Task, b: Task) => a.order - b.order;
-          const todayList = next.filter((t) => t.list === listId && t.section === 'today' && t.type !== 'scheduled' && !t.completed).sort(cmp);
           const tomorrowList = next.filter((t) => t.list === listId && t.section === 'tomorrow' && t.type !== 'scheduled' && !t.completed).sort(cmp);
           const nextList = next.filter((t) => t.list === listId && t.section === 'next' && t.type !== 'scheduled' && !t.completed).sort(cmp);
-          // 1) Tomorrow → Today
-          while (todayList.length < TARGET && tomorrowList.length > 0) {
-            const moved = tomorrowList.shift()!;
-            const idx = next.findIndex((t) => t.id === moved.id);
-            if (idx >= 0) { next[idx] = { ...next[idx], section: 'today' }; todayList.push(next[idx]); }
-          }
-          // 2) Next → Today (if still under target)
-          while (todayList.length < TARGET && nextList.length > 0) {
-            const moved = nextList.shift()!;
-            const idx = next.findIndex((t) => t.id === moved.id);
-            if (idx >= 0) { next[idx] = { ...next[idx], section: 'today' }; todayList.push(next[idx]); }
-          }
-          // 3) Next → Tomorrow (if Tomorrow under target)
+          // Top up Tomorrow from Next (Today is left untouched — it's deadline-driven only).
           while (tomorrowList.length < TARGET && nextList.length > 0) {
             const moved = nextList.shift()!;
             const idx = next.findIndex((t) => t.id === moved.id);
             if (idx >= 0) { next[idx] = { ...next[idx], section: 'tomorrow' }; tomorrowList.push(next[idx]); }
           }
-          // Re-number order within each section so newly moved tasks land at the end.
-          [todayList, tomorrowList, nextList].forEach((bucketList, bucketIdx) => {
-            const sec = (['today', 'tomorrow', 'next'] as SectionId[])[bucketIdx];
+          // Re-number order within Tomorrow + Next so newly moved tasks land at the end.
+          [tomorrowList, nextList].forEach((bucketList, bucketIdx) => {
+            const sec = (['tomorrow', 'next'] as SectionId[])[bucketIdx];
             bucketList.forEach((t, i) => {
               const idx = next.findIndex((x) => x.id === t.id);
               if (idx >= 0) next[idx] = { ...next[idx], section: sec, order: i };
