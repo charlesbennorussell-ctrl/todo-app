@@ -104,13 +104,49 @@ function shiftIso(iso: string, days: number): string {
   return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 }
 
+// Day offset between two ISO dates (today → iso). Negative = past, 0 = today, positive = future.
+function dayOffset(isoFrom: string, isoTo: string): number {
+  const [y1, m1, d1] = isoFrom.split('-').map(Number);
+  const [y2, m2, d2] = isoTo.split('-').map(Number);
+  const t1 = new Date(y1, m1 - 1, d1).getTime();
+  const t2 = new Date(y2, m2 - 1, d2).getTime();
+  return Math.round((t2 - t1) / 86400000);
+}
+
+// Map an offset (in days) to a human-friendly label, or null if no rename applies.
+//   0          → Today
+//   +1 / -1    → Tomorrow / Yesterday
+//   +2..+13    → "N Days" (linear day count up to 13)
+//   +14..+49   → "N Weeks" (rounded to the nearest whole week, max "7 Weeks")
+//   +50..+364  → "N Months" (rounded to nearest 30 days)
+//   +365+      → "N Years"  (rounded to nearest 365 days)
+//   past beyond -1 → calendar date.
+function relativeLabel(offset: number): string | null {
+  if (offset === 0) return 'Today';
+  if (offset === 1) return 'Tomorrow';
+  if (offset === -1) return 'Yesterday';
+  if (offset < -1) return null;
+  if (offset >= 2 && offset <= 13) return `${offset} Days`;
+  if (offset >= 14 && offset <= 49) {
+    const weeks = Math.round(offset / 7);
+    return weeks === 1 ? '1 Week' : `${weeks} Weeks`;
+  }
+  if (offset >= 50 && offset <= 364) {
+    const months = Math.round(offset / 30);
+    return months === 1 ? '1 Month' : `${months} Months`;
+  }
+  if (offset >= 365) {
+    const years = Math.round(offset / 365);
+    return years === 1 ? '1 Year' : `${years} Years`;
+  }
+  return null;
+}
+
 export function formatDeadline(iso?: string): string {
   if (!iso) return '';
   if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
-  const today = todayISO();
-  if (iso === today) return 'Today';
-  if (iso === shiftIso(today, 1)) return 'Tomorrow';
-  if (iso === shiftIso(today, -1)) return 'Yesterday';
+  const rel = relativeLabel(dayOffset(todayISO(), iso));
+  if (rel) return rel;
   const [y, m, d] = iso.split('-').map(Number);
   const date = new Date(y, m - 1, d);
   if (isNaN(date.getTime())) return iso;
@@ -120,15 +156,13 @@ export function formatDeadline(iso?: string): string {
 }
 
 // Compact MM-DD form used when columns are squeezed (responsive truncation cascade).
-// Today / Tomorrow / Yesterday still substitute (those tokens are not really shorter than
-// the date but more useful at any size).
+// Relative labels (Today / Tomorrow / N Days / weeks) still substitute — they're more useful
+// than the literal date even at narrow widths.
 export function formatDeadlineShort(iso?: string): string {
   if (!iso) return '';
   if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
-  const today = todayISO();
-  if (iso === today) return 'Today';
-  if (iso === shiftIso(today, 1)) return 'Tomorrow';
-  if (iso === shiftIso(today, -1)) return 'Yesterday';
+  const rel = relativeLabel(dayOffset(todayISO(), iso));
+  if (rel) return rel;
   const [, m, d] = iso.split('-');
   return `${m}-${d}`;
 }
