@@ -2553,19 +2553,20 @@ export default function App() {
     }
   }, [tasks, setTasks]);
 
-  // Auto-promote tasks to 'today' when their deadline is today (or already overdue). Skip
-  // 'tomorrow' deliberately — that's the user's explicit "snooze for the rest of the day"
-  // override. After the 4 AM rollover, the refill cascade (line ~2958) drains Tomorrow → Today
-  // so the snoozed task naturally surfaces the next day. Also skip 'today' (already there) and
+  // Auto-promote inbox tasks to 'today' when their deadline arrives. Inbox is the catch-all
+  // landing zone for tasks the user hasn't sorted yet — promoting from there is non-destructive.
+  // 'next' and 'tomorrow' are SKIPPED: those are explicit user placements (e.g. dragging a
+  // due-today task into Next to defer it past tomorrow). Auto-promoting from those would fight
+  // the user's drag and snap the task right back. Also skip 'today' (already there) and
   // milestones (type='scheduled' have their own handling).
   useEffect(() => {
     const today = todayISO();
     const needsPromote = tasks.some((t) =>
-      t.deadline && t.deadline <= today && t.type !== 'scheduled' && (t.section === 'next' || t.section === 'inbox')
+      t.deadline && t.deadline <= today && t.type !== 'scheduled' && t.section === 'inbox'
     );
     if (needsPromote) {
       setTasks((prev) => prev.map((t) =>
-        t.deadline && t.deadline <= today && t.type !== 'scheduled' && (t.section === 'next' || t.section === 'inbox')
+        t.deadline && t.deadline <= today && t.type !== 'scheduled' && t.section === 'inbox'
           ? { ...t, section: 'today' as SectionId }
           : t
       ));
