@@ -15,7 +15,7 @@ import {
   pointerWithin,
   useDroppable,
 } from '@dnd-kit/core';
-import { restrictToVerticalAxis } from '@dnd-kit/modifiers';
+import { restrictToVerticalAxis, restrictToHorizontalAxis } from '@dnd-kit/modifiers';
 import {
   arrayMove,
   SortableContext,
@@ -3179,13 +3179,12 @@ export default function App() {
 
   useEffect(() => {
     if (!activeId) return;
-    // Column-offset snap: drag right/left and the overlay snaps to adjacent columns once you pass
-    // half a column width. List view only ï¿½ calendar columns are narrow (200px) so a half-column
-    // dead-zone fires constantly as the cursor crosses days, and the spring chasing the snap target
-    // makes the overlay feel like it's lagging the cursor. Calendar overlay tracks the cursor 1:1.
-    if (activeCalendarCellId) return;
-    // Dashboard drags are strictly horizontally locked â€” never snap to an adjacent column.
+    // Column-offset snap: drag right/left and the overlay snaps to adjacent columns once you
+    // pass half a column width. Now active for calendar too — restrictToHorizontalAxis locks
+    // the Y to the source row, and the snap gives a clear "card jumped to next day" feedback.
+    // Dashboard drags are strictly horizontally locked — never snap to an adjacent column.
     if (activeId.startsWith('dash:')) return;
+    if (activeId.startsWith('projtask-') || activeId.startsWith('projrow-')) return;
     const onMove = (ev: PointerEvent) => {
       if (startXRef.current === null) startXRef.current = ev.clientX;
       const colWidth = activeRectWidth || 440;
@@ -4148,7 +4147,10 @@ export default function App() {
       onDragOver={handleDragOver}
       onDragEnd={handleDragEnd}
       measuring={measuringConfig}
-      modifiers={activeType === 'task' || activeType === 'projTask' ? [restrictToVerticalAxis] : []}
+      // Calendar drags are LOCKED HORIZONTAL — overlay slides between day columns and never
+      // leaves the source category's row (Work / Projects / Admin stays put). All other task
+      // drags (list view + project view) lock to vertical for in-column reorder.
+      modifiers={activeCalendarCellId ? [restrictToHorizontalAxis] : (activeType === 'task' || activeType === 'projTask' ? [restrictToVerticalAxis] : [])}
     >
       <div className="relative min-h-screen bg-[#282828] overflow-x-auto">
         {mode === 'dashboard' && (
@@ -4314,13 +4316,17 @@ export default function App() {
               // Drop shadow restored at 1/4 size, 1/2 opacity vs. the original. Subtle enough that
               // the per-frame repaint cost is negligible while still conveying that the card is lifted.
               <motion.div
-                initial={{ scale: 1 }}
+                initial={{ scale: 1, x: 0 }}
                 animate={{
                   scale: 1.02,
+                  x: columnOffset * (activeRectWidth || 200),
                   boxShadow: "0 1.875px 7.5px -0.625px rgba(0, 0, 0, 0.35), 0 1.25px 3.125px -0.3125px rgba(0, 0, 0, 0.25)",
                 }}
-                transition={{ scale: { type: "spring", stiffness: 600, damping: 30, mass: 0.4 } }}
-                className="bg-white/[0.03] overflow-hidden"
+                transition={{
+                  scale: { type: "spring", stiffness: 600, damping: 30, mass: 0.4 },
+                  x: { type: "spring", stiffness: 320, damping: 34, mass: 0.7 },
+                }}
+                className="bg-[#3a3a3a] overflow-hidden"
                 style={{ width: activeRectWidth, height: activeRectHeight, willChange: 'transform' }}
               >
                 <CalendarCardBody task={activeTask} projects={projects} clients={clients} taskOrder={taskOrder} />
