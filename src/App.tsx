@@ -2482,6 +2482,25 @@ export default function App() {
     }
   }, [tasks, setTasks]);
 
+  // Auto-promote tasks to 'today' when their deadline is today (or already overdue). Skip
+  // 'tomorrow' deliberately — that's the user's explicit "snooze for the rest of the day"
+  // override. After the 4 AM rollover, the refill cascade (line ~2958) drains Tomorrow → Today
+  // so the snoozed task naturally surfaces the next day. Also skip 'today' (already there) and
+  // milestones (type='scheduled' have their own handling).
+  useEffect(() => {
+    const today = todayISO();
+    const needsPromote = tasks.some((t) =>
+      t.deadline && t.deadline <= today && t.type !== 'scheduled' && (t.section === 'next' || t.section === 'inbox')
+    );
+    if (needsPromote) {
+      setTasks((prev) => prev.map((t) =>
+        t.deadline && t.deadline <= today && t.type !== 'scheduled' && (t.section === 'next' || t.section === 'inbox')
+          ? { ...t, section: 'today' as SectionId }
+          : t
+      ));
+    }
+  }, [tasks, setTasks]);
+
   // Migration: ensure the seeded Personal client exists for rooms created before it was added.
   useEffect(() => {
     if (!clients.some((c) => c.id === PERSONAL_CLIENT_ID)) {
