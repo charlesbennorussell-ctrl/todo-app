@@ -2622,12 +2622,16 @@ export default function App() {
     return () => { window.removeEventListener('keydown', dn); window.removeEventListener('keyup', up); window.removeEventListener('blur', blur); };
   }, []);
 
-  // Auto-promote tasks to 'today' when their start date arrives
+  // Auto-promote INBOX tasks to 'today' when their start date arrives. Same "rest of day
+  // override" rule as the deadline auto-promote: skip Next + Tomorrow so user drags into
+  // those sections aren't fought back to Today (e.g. drag from Today to Next was sometimes
+  // making the task vanish — startDate effect immediately re-promoted it). The 4 AM cycle
+  // (below) re-evaluates startDate at rollover, surfacing the task back into Today.
   useEffect(() => {
     const today = todayISO();
-    const needsPromote = tasks.some((t) => t.startDate && t.startDate <= today && t.section === 'next');
+    const needsPromote = tasks.some((t) => t.startDate && t.startDate <= today && t.section === 'inbox');
     if (needsPromote) {
-      setTasks((prev) => prev.map((t) => (t.startDate && t.startDate <= today && t.section === 'next' ? { ...t, section: 'today' as SectionId } : t)));
+      setTasks((prev) => prev.map((t) => (t.startDate && t.startDate <= today && t.section === 'inbox' ? { ...t, section: 'today' as SectionId } : t)));
     }
   }, [tasks, setTasks]);
 
@@ -3129,15 +3133,15 @@ export default function App() {
       const today = todayISO();
       setTasks((prev) => {
         let next = [...prev];
-        // STEP A — expire "rest of day" overrides. Any task with deadline ≤ today that the user
-        // had snoozed into Tomorrow / Next / Inbox yesterday is now back in scope. Promote it
-        // to Today so the user sees it. Today/Inbox/Next/Tomorrow placement was the user's call
-        // for THAT day; a new day = re-evaluation.
-        next = next.map((t) =>
-          t.deadline && t.deadline <= today && t.type !== 'scheduled' && !t.completed && t.section !== 'today'
-            ? { ...t, section: 'today' as SectionId }
-            : t
-        );
+        // STEP A — expire "rest of day" overrides. Any task whose deadline OR startDate has
+        // arrived (≤ today) that the user had snoozed into Tomorrow / Next / Inbox yesterday is
+        // now back in scope. Promote it to Today so the user sees it. Today/Inbox/Next/Tomorrow
+        // placement was the user's call for THAT day; a new day = re-evaluation.
+        next = next.map((t) => {
+          if (t.type === 'scheduled' || t.completed || t.section === 'today') return t;
+          const dueOrStarting = (t.deadline && t.deadline <= today) || (t.startDate && t.startDate <= today);
+          return dueOrStarting ? { ...t, section: 'today' as SectionId } : t;
+        });
         // STEP B — top up Tomorrow to TARGET=3 from Next. Today is left untouched (sacred —
         // only the deadline-driven promotion above adds to it).
         const lists: ListId[] = ['work', 'projects', 'admin'];
