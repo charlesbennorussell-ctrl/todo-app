@@ -1669,7 +1669,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
     <div
       ref={setNodeRef}
       style={{ ...style, opacity: isDragging ? 0 : 1, transition: isAnyDragging ? `${style.transition || 'none'}, opacity 120ms ease-out` : 'opacity 120ms ease-out' }}
-      className={`relative mx-[6px] bg-white/[0.03] group ${dimmed ? 'opacity-60' : ''}`}
+      className={`relative mx-[6px] group ${task.completed ? '' : 'bg-white/[0.03]'} ${dimmed ? 'opacity-60' : ''}`}
     >
       <div onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} onContextMenu={(e) => { if (onQuickEdit) { e.preventDefault(); e.stopPropagation(); onQuickEdit(); } }} {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing pl-[10px] pr-[10px] py-[6px] flex flex-row items-start gap-[10px] overflow-hidden">
         {!isScheduled && (
@@ -1685,11 +1685,12 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
             <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleColor}`}>{task.title}</span>
           </div>
           <div className="flex flex-row items-center gap-[6px]">
-            {client && project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap text-[#656464]`}>{client.short}<Arrowhead dim={task.completed} />{project.name}</p>}
-            {client && !project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${metaColor}`}>{client.short}</p>}
-            {!client && project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap text-[#656464]`}>{project.name}</p>}
+            {/* When completed, all line-2 meta drops to the same faint #383838 — visually quieted to match the title. */}
+            {client && project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : 'text-[#656464]'}`}>{client.short}<Arrowhead dim={task.completed} />{project.name}</p>}
+            {client && !project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : metaColor}`}>{client.short}</p>}
+            {!client && project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : 'text-[#656464]'}`}>{project.name}</p>}
             {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} />)}
-            {task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${isScheduled ? 'text-[#8465ff]' : isLateDeadline(task.deadline) ? 'text-[#FF7171]' : 'text-[#656464]'}`}>{formatDeadline(task.deadline)}</p>}
+            {task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : isLateDeadline(task.deadline) ? 'text-[#FF7171]' : 'text-[#656464]'}`}>{formatDeadline(task.deadline)}</p>}
             {/* + button hugs the inline task info on the second row. Trash stays pinned at top-right via absolute. */}
             {onAddSibling && (
               <button
@@ -1821,17 +1822,19 @@ function WeekCalendarMode({
     // stroke; Title always on line 1; meta on line 2. Milestone purple is preserved on the
     // title and the second-row meta to mark them visually.
     return (
-      <div onDoubleClick={(e) => { e.stopPropagation(); onEditTask(task); }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onQuickEditTask?.(task); }} className="relative mx-[6px] mb-[4px] bg-white/[0.03] cursor-pointer">
+      <div onDoubleClick={(e) => { e.stopPropagation(); onEditTask(task); }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onQuickEditTask?.(task); }} className={`relative mx-[6px] mb-[4px] cursor-pointer ${task.completed ? '' : 'bg-white/[0.03]'}`}>
         <div className="px-[10px] py-[6px] flex flex-col gap-[2px]">
+          {/* Completed milestones lose the box AND drop the milestone purple — every glyph
+              + text uniformly fades to #383838 to match a completed regular card. */}
           <div className="flex flex-row items-center gap-[4px]">
-            <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis text-[#8465ff]">{task.title}</span>
+            <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${task.completed ? 'text-[#383838]' : 'text-[#8465ff]'}`}>{task.title}</span>
           </div>
           <div className="flex flex-row items-center gap-[6px]">
-            {client && project && <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap text-[#8465ff]">{client.short}<Arrowhead tone="milestone" />{project.name}</p>}
-            {client && !project && <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap text-[#8465ff]">{client.short}</p>}
-            {!client && project && <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap text-[#8465ff]">{project.name}</p>}
+            {client && project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : 'text-[#8465ff]'}`}>{client.short}<Arrowhead dim={task.completed} tone="milestone" />{project.name}</p>}
+            {client && !project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : 'text-[#8465ff]'}`}>{client.short}</p>}
+            {!client && project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : 'text-[#8465ff]'}`}>{project.name}</p>}
             {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone="scheduled" hollow={isPersonal} dim={task.completed} />)}
-            {showDate && task.deadline && <p className="font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap text-[#8465ff]">{formatDeadline(task.deadline)}</p>}
+            {showDate && task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : 'text-[#8465ff]'}`}>{formatDeadline(task.deadline)}</p>}
           </div>
         </div>
       </div>
