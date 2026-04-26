@@ -286,6 +286,10 @@ function SortableTaskItem({
   // blurs out of an empty fresh task (clicks elsewhere) we start a 3-second fade-then-delete
   // timer. If they come back to it before the timer expires, we cancel the fade.
   const [fresh, setFresh] = useState(autoFocus && !task.title);
+  // Hover state — driven by both onMouseEnter/Leave AND a row-level onMouseMove. The
+  // mousemove acts as a backstop: if the browser throttles or drops mouseenter on a fast
+  // sweep, mousemove will still fire as the cursor crosses pixels and re-set hovered=true.
+  const [hovered, setHovered] = useState(false);
   const [fading, setFading] = useState(false);
   const fadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cancelFade = () => {
@@ -382,17 +386,22 @@ function SortableTaskItem({
       // Capture-phase pointerdown anywhere on the row aborts the fade-then-delete timer if
       // the user comes back to the task within the 3s window.
       onPointerDownCapture={fading ? cancelFade : undefined}
-      // Hover tint is CSS-only (.task-row-hover-tint in index.css) — browsers throttle JS
-      // mouseenter on fast sweeps; CSS :hover fires for every pixel the cursor crosses.
-      className={`relative shrink-0 w-full group overflow-hidden ${nonDraggable || isDragOverlay ? '' : 'cursor-grab active:cursor-grabbing'} ${isDragOverlay ? 'z-50 bg-[#333333]' : (isDragging ? '' : 'task-row-hover-tint')}`}
+      onMouseEnter={!isDragging && !isDragOverlay ? () => setHovered(true) : undefined}
+      onMouseMove={!isDragging && !isDragOverlay && !hovered ? () => setHovered(true) : undefined}
+      onMouseLeave={!isDragging && !isDragOverlay ? () => setHovered(false) : undefined}
+      className={`relative shrink-0 w-full group overflow-hidden ${nonDraggable || isDragOverlay ? '' : 'cursor-grab active:cursor-grabbing'} ${isDragOverlay ? 'z-50 bg-[#333333]' : ''}`}
       animate={{
         scale: isDragOverlay ? 1.02 : 1,
         // `fading` overrides the normal opacity to drive the 3-second fade-out before deletion.
         opacity: fading ? 0 : (isDragging ? 0 : 1),
+        // Hover tint: 60ms in / 300ms out, heavy ease in-out. Driven by JS state (smoother
+        // framer interpolation than CSS transitions during fast cursor changes).
+        ...(isDragOverlay ? {} : { backgroundColor: hovered && !isDragging ? "rgba(255, 255, 255, 0.03)" : "rgba(255, 255, 255, 0)" }),
       }}
       transition={{
         scale: { duration: 0.18 },
         opacity: fading ? { duration: 3, ease: 'linear' } : isDragging ? { duration: 0.12, ease: "easeOut" } : { duration: 0 },
+        backgroundColor: { duration: hovered ? 0.06 : 0.3, ease: [0.85, 0, 0.15, 1] },
       }}
     >
       <div onDoubleClick={(e) => { if (onEdit && !editing) { e.stopPropagation(); onEdit(e); } }} onContextMenu={(e) => { if (onQuickEdit) { e.preventDefault(); e.stopPropagation(); onQuickEdit(e); } }} className={`relative box-border flex flex-row gap-2 h-[37px] items-center pr-[31px] w-full ${showIndent ? 'pl-[43px]' : 'pl-[31px]'}`}>
