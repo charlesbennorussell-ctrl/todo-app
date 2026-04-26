@@ -2847,6 +2847,46 @@ export default function App() {
   // Words that title-case-style guides keep lowercased even mid-sentence (articles, short
   // conjunctions, prepositions). Used in 'title' mode only.
   const TITLE_CASE_LOWER = new Set(['a', 'an', 'and', 'as', 'at', 'but', 'by', 'for', 'in', 'nor', 'of', 'on', 'or', 'so', 'the', 'to', 'up', 'yet', 'via', 'vs', 'vs.']);
+  // Common-typo fixes — applied first, before the case logic. Map of lowercased core →
+  // canonical form (preserving the apostrophe / canonical capitalization).
+  const TYPO_FIXES: Record<string, string> = {
+    im: "I'm",
+    ive: "I've",
+    ill: "I'll",
+    id: "I'd",
+    dont: "don't",
+    cant: "can't",
+    wont: "won't",
+    isnt: "isn't",
+    arent: "aren't",
+    wasnt: "wasn't",
+    werent: "weren't",
+    didnt: "didn't",
+    doesnt: "doesn't",
+    hasnt: "hasn't",
+    havent: "haven't",
+    couldnt: "couldn't",
+    wouldnt: "wouldn't",
+    shouldnt: "shouldn't",
+    youre: "you're",
+    youll: "you'll",
+    youve: "you've",
+    youd: "you'd",
+    theyre: "they're",
+    theyll: "they'll",
+    theyve: "they've",
+    theyd: "they'd",
+    were: "we're", // ambiguous with past-tense "were" — see comment below
+    well: "we'll", // same caveat
+    weve: "we've",
+    wed: "we'd",
+    its: "it's", // ambiguous with possessive "its"
+    lets: "let's",
+  };
+  // The above includes a handful of ambiguous short forms ("its", "were", "well"). We deliberately
+  // SKIP those at runtime — too easy to wreck legitimate uses ("the dog wagged its tail",
+  // "all is well", "they were here"). Only unambiguous contraction-without-apostrophe fixes fire.
+  const SKIP_AMBIGUOUS = new Set(['its', 'were', 'well']);
   const sentenceCaseConvert = useCallback((s: string, mode: CaseMode): string => {
     if (!s || mode === 'off') return s;
     const vocabMap = new Map<string, string>();
@@ -2866,6 +2906,11 @@ export default function App() {
       // Vocabulary match — restore the canonical case from the vocab entry.
       const v = vocabMap.get(core.toLowerCase());
       if (v) return lead + v + trail;
+      // Common-typo fix: "Im" → "I'm", "dont" → "don't", etc. Skip ambiguous shorts.
+      const lowerCore = core.toLowerCase();
+      if (TYPO_FIXES[lowerCore] && !SKIP_AMBIGUOUS.has(lowerCore)) {
+        return lead + TYPO_FIXES[lowerCore] + trail;
+      }
       // Already ALL-CAPS (length ≥ 2, contains a letter) → presumed acronym, leave alone.
       if (core.length >= 2 && core === core.toUpperCase() && /\p{L}/u.test(core)) return part;
       // Mixed case (e.g. iPhone, eBay) — preserve user-typed unusual casing.
