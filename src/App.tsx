@@ -474,7 +474,13 @@ function SortableTaskItem({
               e.stopPropagation();
               // Any non-control keystroke means the user is engaging — kill the "fresh" flag so
               // a subsequent blur with empty title doesn't trigger the fade-then-delete timer.
-              if (e.key.length === 1) setFresh(false);
+              // ALSO cancel any in-flight fade: if the row already started fading (e.g. a stray
+              // blur fired between mount and the user typing the first character), typing must
+              // rescue the row instead of letting the 3s timer delete it mid-edit.
+              if (e.key.length === 1) {
+                setFresh(false);
+                if (fading) cancelFade();
+              }
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 (e.currentTarget as HTMLSpanElement).blur();
