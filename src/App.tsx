@@ -39,6 +39,8 @@ import {
   LISTS,
   PERSONAL_CLIENT_ID,
   formatDeadline,
+  formatDeadlineShort,
+  isLateDeadline,
   todayISO,
 } from './data';
 
@@ -142,14 +144,21 @@ function taskOrderSlots(order: TaskOrder, hasProject: boolean, hasClient: boolea
   return out;
 }
 
-function DeadlineArrow({ dim = false }: { dim?: boolean }) {
+function DeadlineArrow({ dim = false, small = false }: { dim?: boolean; small?: boolean }) {
+  // Custom inline SVG so we can shorten the LINE while keeping the arrowhead size and the
+  // line's stroke thickness constant. `small` (responsive density 3+) cuts the line length
+  // by ~50% (line goes from x=0..14 → x=7..14). Total wrapper width drops 18 → 11.
+  // -mt-[2px] aligns the icon to the text's cap-to-baseline band, matching TaskCheckbox.
+  // `dim` mirrors the muted palette used for completed tasks.
+  const fill = dim ? '#383838' : '#656464';
+  const wrapW = small ? 11 : 18;
+  // Coordinates inside a virtual 18×12 grid: arrowhead at right, line on its left.
+  const lineStart = small ? 7 : 0;
   return (
-    // -mt-[2px] matches the typographic alignment used on TaskCheckbox: lifts the icon so it sits
-    // visually inside the text's cap-height-to-baseline band, not centered on the row's bounding box.
-    // `dim` mirrors the muted palette used for completed tasks so the arrow fades with the rest of the row.
-    <div className="h-[12px] relative shrink-0 w-[18px] -mt-[2px]">
-      <svg className="absolute block inset-0 size-full" fill="none" viewBox="0 0 18 12">
-        <path d={arrowPaths.p25eb4200} fill={dim ? '#383838' : '#656464'} />
+    <div className="h-[12px] relative shrink-0 -mt-[2px]" style={{ width: wrapW }}>
+      <svg className="absolute block inset-0" width={wrapW} height={12} viewBox={`${lineStart} 0 ${18 - lineStart} 12`} fill="none">
+        <line x1={lineStart} y1="6" x2="14" y2="6" stroke={fill} strokeWidth="1" />
+        <polygon points="14,2 18,6 14,10" fill={fill} />
       </svg>
     </div>
   );
@@ -226,10 +235,12 @@ const Displaced = memo(function Displaced({
 });
 
 function SortableTaskItem({
-  task, onToggle, onRename, onDelete, onEdit, onQuickEdit, onAddSibling, autoFocus = false, isDragOverlay = false, displacementOffset = 0, insertionGap = 0, isAnyDragging = false, collapsed = false, projects = [], clients = [], nonDraggable = false, idPrefix = '', taskOrder = 'ptc',
+  task, onToggle, onRename, onDelete, onEdit, onQuickEdit, onAddSibling, onReschedule, autoFocus = false, isDragOverlay = false, displacementOffset = 0, insertionGap = 0, isAnyDragging = false, collapsed = false, projects = [], clients = [], nonDraggable = false, idPrefix = '', taskOrder = 'ptc', density = 0,
 }: {
-  task: Task; onToggle: () => void; onRename?: (title: string) => void; onDelete?: () => void; onEdit?: (e?: React.MouseEvent) => void; onQuickEdit?: (e?: React.MouseEvent) => void; onAddSibling?: () => void; autoFocus?: boolean; isDragOverlay?: boolean; displacementOffset?: number; insertionGap?: number; isAnyDragging?: boolean; collapsed?: boolean; projects?: Project[]; clients?: Client[]; nonDraggable?: boolean;
+  task: Task; onToggle: () => void; onRename?: (title: string) => void; onDelete?: () => void; onEdit?: (e?: React.MouseEvent) => void; onQuickEdit?: (e?: React.MouseEvent) => void; onAddSibling?: () => void; onReschedule?: (kind: 'tomorrow' | 'nextWeek') => void; autoFocus?: boolean; isDragOverlay?: boolean; displacementOffset?: number; insertionGap?: number; isAnyDragging?: boolean; collapsed?: boolean; projects?: Project[]; clients?: Client[]; nonDraggable?: boolean;
   taskOrder?: TaskOrder;
+  // Responsive density level (0=full ... 7=tightest). See App's density comment for the cascade.
+  density?: number;
   // Optional prefix for the dnd-kit sortable id. Lets the same task render in two places (e.g.
   // dashboard sub-list AND work column) without sharing a sortable id â€” otherwise picking up one
   // instance would mark BOTH as the active drag and fade them simultaneously.
@@ -242,6 +253,17 @@ function SortableTaskItem({
   const [editing, setEditing] = useState(autoFocus);
   const [draft, setDraft] = useState(task.title);
   const titleRef = useRef<HTMLSpanElement>(null);
+  // "Fresh" = task was just created via + and has not yet received any user input. When the user
+  // blurs out of an empty fresh task (clicks elsewhere) we start a 3-second fade-then-delete
+  // timer. If they come back to it before the timer expires, we cancel the fade.
+  const [fresh, setFresh] = useState(autoFocus && !task.title);
+  const [fading, setFading] = useState(false);
+  const fadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const cancelFade = () => {
+    if (fadeTimerRef.current) { clearTimeout(fadeTimerRef.current); fadeTimerRef.current = null; }
+    setFading(false);
+  };
+  useEffect(() => () => { if (fadeTimerRef.current) clearTimeout(fadeTimerRef.current); }, []);
   // Coordinates of the click that triggered the transition into edit mode. If set, the caret
   // is placed at that exact point in the text instead of being collapsed to start/end. Cleared
   // after one use. Lets the user click in the middle of a word and land the cursor there in
@@ -305,7 +327,7 @@ function SortableTaskItem({
     ? { transform: undefined, transition: 'none' }
     : { transform: CSS.Transform.toString(transform), transition: !isAnyDragging ? 'none' : `transform ${MOTION.base}ms ${MOTION.easeOut}` };
   const isScheduled = task.type === 'scheduled';
-  const isNext = task.section === 'next';
+  const isNext = task.section === 'next' || task.section === 'tomorrow';
   const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID;
   // Completed tasks fade to a near-background color across ALL their text â€” no strikethrough,
   // just visually quieted. #383838 is one step off the #282828 page background.
@@ -328,14 +350,18 @@ function SortableTaskItem({
       data-task-row={isDragOverlay ? undefined : task.id}
       {...(nonDraggable ? {} : attributes)}
       {...(nonDraggable ? {} : listeners)}
+      // Capture-phase pointerdown anywhere on the row aborts the fade-then-delete timer if
+      // the user comes back to the task within the 3s window.
+      onPointerDownCapture={fading ? cancelFade : undefined}
       className={`relative shrink-0 w-full group overflow-hidden ${nonDraggable || isDragOverlay ? '' : 'cursor-grab active:cursor-grabbing'} ${isDragOverlay ? 'z-50 bg-[#333333]' : ''}`}
       animate={{
         scale: isDragOverlay ? 1.02 : 1,
-        opacity: isDragging ? 0 : 1,
+        // `fading` overrides the normal opacity to drive the 3-second fade-out before deletion.
+        opacity: fading ? 0 : (isDragging ? 0 : 1),
       }}
       transition={{
         scale: { duration: 0.18 },
-        opacity: isDragging ? { duration: 0.12, ease: "easeOut" } : { duration: 0 },
+        opacity: fading ? { duration: 3, ease: 'linear' } : isDragging ? { duration: 0.12, ease: "easeOut" } : { duration: 0 },
       }}
       whileHover={!isDragging && !isDragOverlay ? { backgroundColor: "rgba(255, 255, 255, 0.03)", transition: { duration: 0.15 } } : {}}
     >
@@ -353,22 +379,29 @@ function SortableTaskItem({
           </div>
         )}
         {!isScheduled && <TaskCheckbox completed={task.completed} onToggle={onToggle} />}
-        {/* Title row — slot order is driven by the user's `taskOrder` setting. A literal "-"
-            appears between client and project whenever they're adjacent. */}
-        <div className="flex flex-row items-center gap-[4px]">
-          {taskOrderSlots(taskOrder, !!project, !!client).map((slot, i) => {
-            const metaCls = `font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : 'text-[#656464]'}`;
-            if (slot === 'project' && project) return <p key={`p-${i}`} className={metaCls}>{project.name}</p>;
-            if (slot === 'client' && client) return <p key={`c-${i}`} className={`font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap ${metaColor}`}>{client.short}</p>;
-            // Client + project combined into one span with NO whitespace around the dash.
-            if (slot === 'cp' && client && project) {
-              const order = taskOrder === 'cpt';
-              return (
-                <p key={`cp-${i}`} className={metaCls}>
-                  {order ? `${client.short}-${project.name}` : `${client.short}-${project.name}`}
-                </p>
-              );
-            }
+        {/* Title row — slot order is driven by the user's `taskOrder` setting.
+            Density-driven slot filtering: client hidden at >=4, project hidden at >=6.
+            shrink-0 keeps the title-row at content width; the title is NEVER squeezed. */}
+        <div className="flex flex-row items-center gap-[4px] min-w-0 overflow-hidden shrink-0">
+          {(() => {
+            // Compute which meta slots are "active" given the current density. The slot helper
+            // already arranges them by user-chosen order — we just suppress the ones the cascade
+            // has hidden by passing hasProject/hasClient = false at the right thresholds.
+            const showClient = !!client && density < 4;
+            const showProject = !!project && density < 6;
+            return taskOrderSlots(taskOrder, showProject, showClient).map((slot, i) => {
+              const metaCls = `font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : 'text-[#656464]'}`;
+              // Progressive truncation: project name truncates first (density >= 1).
+              const projectTruncate = density >= 1 ? 'truncate min-w-0 max-w-[120px]' : '';
+              if (slot === 'project' && project) return <p key={`p-${i}`} className={`${metaCls} ${projectTruncate}`}>{project.name}</p>;
+              if (slot === 'client' && client) return <p key={`c-${i}`} className={`font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap ${metaColor}`}>{client.short}</p>;
+              if (slot === 'cp' && client && project) {
+                return (
+                  <p key={`cp-${i}`} className={`${metaCls} ${projectTruncate}`}>
+                    {`${client.short}-${project.name}`}
+                  </p>
+                );
+              }
             if (slot === 'title') {
               return (
           <span
@@ -377,6 +410,7 @@ function SortableTaskItem({
             contentEditable={editing && !isDragOverlay}
             suppressContentEditableWarning
             data-placeholder="New Task"
+            data-task-title={task.id}
             onPointerDown={(e) => {
               if (editing) { e.stopPropagation(); return; }
               if (isScheduled || !onRename) return;
@@ -420,20 +454,68 @@ function SortableTaskItem({
               const next = (e.currentTarget.textContent || '').trim();
               if (onRename && next && next !== task.title) onRename(next);
               setEditing(false);
+              // Fresh + still empty after blur → start the 3-second fade-then-delete sequence.
+              if (fresh && !next && onDelete) {
+                setFading(true);
+                fadeTimerRef.current = setTimeout(() => { onDelete(); fadeTimerRef.current = null; }, 3000);
+              }
             }}
             onKeyDown={(e) => {
               // Stop ALL keystrokes from bubbling to the row's drag listeners while editing —
               // dnd-kit's KeyboardSensor would otherwise see Space/Arrow keys as "start drag" commands.
               e.stopPropagation();
+              // Any non-control keystroke means the user is engaging — kill the "fresh" flag so
+              // a subsequent blur with empty title doesn't trigger the fade-then-delete timer.
+              if (e.key.length === 1) setFresh(false);
               if (e.key === 'Enter' && !e.shiftKey) {
                 e.preventDefault();
                 (e.currentTarget as HTMLSpanElement).blur();
-                // Enter on a task title spawns a sibling task right after this one.
                 if (onAddSibling) onAddSibling();
+                return;
               }
-              if (e.key === 'Escape') { e.preventDefault(); (e.currentTarget as HTMLSpanElement).textContent = task.title; setEditing(false); }
+              if (e.key === 'Escape') {
+                e.preventDefault();
+                (e.currentTarget as HTMLSpanElement).textContent = task.title;
+                setEditing(false);
+                return;
+              }
+              // ArrowUp / ArrowDown / Tab navigate to the next or previous task title.
+              // - Arrows preserve the X-position of the caret (so it lands inline with where it was).
+              // - Tab places the caret at the START of the next title.
+              if (e.key === 'ArrowUp' || e.key === 'ArrowDown' || e.key === 'Tab') {
+                const titles = Array.from(document.querySelectorAll('[data-task-title]')) as HTMLElement[];
+                const current = e.currentTarget as HTMLElement;
+                const idx = titles.indexOf(current);
+                if (idx < 0) return;
+                const dir = e.key === 'ArrowUp' ? -1 : 1;
+                const target = titles[idx + dir];
+                if (!target) return;
+                e.preventDefault();
+                // Capture current caret X so the next title can land its caret in the same column.
+                let caretX: number | undefined;
+                if (e.key !== 'Tab') {
+                  const sel = window.getSelection();
+                  const range = sel?.rangeCount ? sel.getRangeAt(0) : null;
+                  const r = range?.getBoundingClientRect();
+                  caretX = r && (r.left || r.right) ? r.left : current.getBoundingClientRect().left;
+                } else {
+                  caretX = target.getBoundingClientRect().left + 1; // start of target text
+                }
+                const targetRect = target.getBoundingClientRect();
+                const targetY = targetRect.top + targetRect.height / 2;
+                // Save the title we're leaving (in case the user typed but didn't blur).
+                const next = (current.textContent || '').trim();
+                if (onRename && next && next !== task.title) onRename(next);
+                // Dispatch a real pointerdown on the target — its existing handler flips
+                // contentEditable, focuses, and places the caret at the (x, y) coordinates.
+                target.dispatchEvent(new PointerEvent('pointerdown', {
+                  bubbles: true, cancelable: true, button: 0,
+                  clientX: caretX as number, clientY: targetY,
+                  pointerType: 'mouse', isPrimary: true,
+                }));
+              }
             }}
-            className={`font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap outline-none ${titleColor} ${!isScheduled && onRename ? 'cursor-text' : ''}`}
+            className={`font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] outline-none whitespace-nowrap ${titleColor} ${!isScheduled && onRename ? 'cursor-text' : ''}`}
             // Empty / very-short titles still need a comfortable click target — give the editable
             // span a ~5-char-wide min-width (40px at 14px font) so it's easy to hit without
             // bleeding into the empty row space (which the user reserves for drag-grabbing).
@@ -442,13 +524,34 @@ function SortableTaskItem({
               );
             }
             return null;
-          })}
+            });
+          })()}
         </div>
-        {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} />)}
+        {/* Assignees hide at density >= 5. */}
+        {density < 5 && task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} />)}
         {task.deadline && (
           <>
-            {!isScheduled && <DeadlineArrow dim={task.completed} />}
-            <p className={`font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : isNext ? 'text-[#a8a8a8]' : 'text-white'}`}>{formatDeadline(task.deadline)}</p>
+            {!isScheduled && <DeadlineArrow dim={task.completed} small={density >= 3} />}
+            {/* Late deadlines render in #FF7171. Both Late AND Today dates are clickable:
+                - double-click → reschedule to tomorrow
+                - alt-click   → reschedule to next week
+                Future / undated dates have no click affordance. */}
+            {(() => {
+              const late = isLateDeadline(task.deadline);
+              const isToday = task.deadline === todayISO();
+              const clickable = (late || isToday) && !!onReschedule;
+              const cls = `font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : late ? 'text-[#FF7171]' : isNext ? 'text-[#a8a8a8]' : 'text-white'} ${clickable ? 'cursor-pointer' : ''}`;
+              return (
+                <p
+                  className={cls}
+                  onClick={clickable ? (e) => { if (e.altKey) { e.stopPropagation(); onReschedule!('nextWeek'); } } : undefined}
+                  onDoubleClick={clickable ? (e) => { e.stopPropagation(); onReschedule!('tomorrow'); } : undefined}
+                  title={clickable ? 'Double-click → tomorrow • Alt+click → next week' : undefined}
+                >
+                  {density >= 2 ? formatDeadlineShort(task.deadline) : formatDeadline(task.deadline)}
+                </p>
+              );
+            })()}
           </>
         )}
         {/* + sits inline right after the task info (assignees / deadline) so it always hugs the content.
@@ -1031,7 +1134,7 @@ function ProjectViewMode({
   onAddClient, onRenameClient, onRenameClientShort, onDeleteClient,
   onAddProject, onRenameProject, onDeleteProject,
   onToggleTask, onRenameTask, onDeleteTask, onEditTask, onQuickEditTask, onAddTaskToProject, onAddTaskInList, onAddProjectInList,
-  people, onAddPerson, onDeletePerson, currentUserShort, taskOrder = 'ptc',
+  people, onAddPerson, onDeletePerson, currentUserShort, taskOrder = 'ptc', density = 0,
 }: {
   projects: Project[]; clients: Client[]; tasks: Task[]; people: Person[]; newId: string | null; isAnyDragging: boolean;
   currentUserShort: string;
@@ -1059,6 +1162,7 @@ function ProjectViewMode({
   onAddPerson: () => void;
   onDeletePerson: (id: string) => void;
   taskOrder?: TaskOrder;
+  density?: number;
 }) {
   // Personal pins to the top; all other clients sort alphabetically.
   const sortedClients = [...clients].sort((a, b) => {
@@ -1152,7 +1256,7 @@ function ProjectViewMode({
   const ProjectListColumn = ({ listId, title, unassigned, noClientProjects, milestones }: { listId: ListId; title: string; unassigned: Task[]; noClientProjects: Project[]; milestones: Task[] }) => {
     const { setNodeRef } = useDroppable({ id: `projlist:${listId}`, data: { type: 'projList', listId } });
     return (
-    <div ref={setNodeRef} className={`flex-1 min-w-[340px] max-w-[440px]`}>
+    <div ref={setNodeRef} className={`flex-1 min-w-[280px]`}>
       <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[74px]">
         <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">{title}</p>
         <HeaderAddMenu
@@ -1175,7 +1279,7 @@ function ProjectViewMode({
             {unassigned.map((t, i) => {
               const { displacementOffset, insertionGap } = projAnimProps(unassigned, t, i);
               return (
-                <ProjectTaskRow key={t.id} task={t} listId={listId} onToggle={() => onToggleTask(t.id)} onRename={(title) => onRenameTask(t.id, title)} onDelete={() => onDeleteTask(t.id)} onEdit={() => onEditTask(t)} onQuickEdit={onQuickEditTask ? () => onQuickEditTask(t) : undefined} onAddSibling={() => addSiblingTask(t)} isAnyDragging={isAnyDragging} taskOrder={taskOrder} autoFocus={t.id === newId} collapsed={sourceCollapsed && activeProjTaskId === t.id} displacementOffset={displacementOffset} insertionGap={insertionGap} />
+                <ProjectTaskRow key={t.id} task={t} listId={listId} onToggle={() => onToggleTask(t.id)} onRename={(title) => onRenameTask(t.id, title)} onDelete={() => onDeleteTask(t.id)} onEdit={() => onEditTask(t)} onQuickEdit={onQuickEditTask ? () => onQuickEditTask(t) : undefined} onAddSibling={() => addSiblingTask(t)} isAnyDragging={isAnyDragging} taskOrder={taskOrder} density={density} autoFocus={t.id === newId} collapsed={sourceCollapsed && activeProjTaskId === t.id} displacementOffset={displacementOffset} insertionGap={insertionGap} />
               );
             })}
           </SortableContext>
@@ -1193,7 +1297,7 @@ function ProjectViewMode({
                     {projTasks.map((t, i) => {
                       const { displacementOffset, insertionGap } = projAnimProps(projTasks, t, i);
                       return (
-                        <ProjectTaskRow key={t.id} task={t} listId={listId} onToggle={() => onToggleTask(t.id)} onRename={(title) => onRenameTask(t.id, title)} onDelete={() => onDeleteTask(t.id)} onEdit={() => onEditTask(t)} onQuickEdit={onQuickEditTask ? () => onQuickEditTask(t) : undefined} onAddSibling={() => addSiblingTask(t)} isAnyDragging={isAnyDragging} taskOrder={taskOrder} autoFocus={t.id === newId} collapsed={sourceCollapsed && activeProjTaskId === t.id} displacementOffset={displacementOffset} insertionGap={insertionGap} />
+                        <ProjectTaskRow key={t.id} task={t} listId={listId} onToggle={() => onToggleTask(t.id)} onRename={(title) => onRenameTask(t.id, title)} onDelete={() => onDeleteTask(t.id)} onEdit={() => onEditTask(t)} onQuickEdit={onQuickEditTask ? () => onQuickEditTask(t) : undefined} onAddSibling={() => addSiblingTask(t)} isAnyDragging={isAnyDragging} taskOrder={taskOrder} density={density} autoFocus={t.id === newId} collapsed={sourceCollapsed && activeProjTaskId === t.id} displacementOffset={displacementOffset} insertionGap={insertionGap} />
                       );
                     })}
                   </SortableContext>
@@ -1225,7 +1329,7 @@ function ProjectViewMode({
                       {projTasks.map((t, i) => {
                         const { displacementOffset, insertionGap } = projAnimProps(projTasks, t, i);
                         return (
-                          <ProjectTaskRow key={t.id} task={t} listId={listId} onToggle={() => onToggleTask(t.id)} onRename={(title) => onRenameTask(t.id, title)} onDelete={() => onDeleteTask(t.id)} onEdit={() => onEditTask(t)} onQuickEdit={onQuickEditTask ? () => onQuickEditTask(t) : undefined} onAddSibling={() => addSiblingTask(t)} isAnyDragging={isAnyDragging} taskOrder={taskOrder} autoFocus={t.id === newId} collapsed={sourceCollapsed && activeProjTaskId === t.id} displacementOffset={displacementOffset} insertionGap={insertionGap} />
+                          <ProjectTaskRow key={t.id} task={t} listId={listId} onToggle={() => onToggleTask(t.id)} onRename={(title) => onRenameTask(t.id, title)} onDelete={() => onDeleteTask(t.id)} onEdit={() => onEditTask(t)} onQuickEdit={onQuickEditTask ? () => onQuickEditTask(t) : undefined} onAddSibling={() => addSiblingTask(t)} isAnyDragging={isAnyDragging} taskOrder={taskOrder} density={density} autoFocus={t.id === newId} collapsed={sourceCollapsed && activeProjTaskId === t.id} displacementOffset={displacementOffset} insertionGap={insertionGap} />
                         );
                       })}
                     </SortableContext>
@@ -1241,8 +1345,8 @@ function ProjectViewMode({
   };
 
   return (
-    <div className="pt-[106px] pb-[140px] flex gap-0 min-w-[1760px]">
-      <div className="flex-1 min-w-[340px] max-w-[440px]">
+    <div className="pt-[106px] pb-[140px] flex gap-0">
+      <div className="flex-1 min-w-[280px]">
         <Header title="Resources" onAdd={onAddPerson} />
         {people.map((p) => (
           <ResourceRow key={p.id} person={p} bodyFont={bodyFont} onDelete={() => onDeletePerson(p.id)} />
@@ -1295,15 +1399,19 @@ const CAL_LISTS: { id: ListId; label: string }[] = [
 
 // Presentational body of a calendar card ï¿½ no drag wiring, no callbacks. Shared between the
 // live CalendarCard and the DragOverlay so the floating ghost matches the source pixel-for-pixel.
-function CalendarCardBody({ task, projects, clients }: { task: Task; projects: Project[]; clients: Client[] }) {
+function CalendarCardBody({ task, projects, clients, taskOrder = 'ptc' }: { task: Task; projects: Project[]; clients: Client[]; taskOrder?: TaskOrder }) {
   const project = task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
   const resolvedClientId = task.clientId ?? project?.clientId;
   const client = resolvedClientId ? clients.find((c) => c.id === resolvedClientId) : undefined;
   const isScheduled = task.type === 'scheduled';
-  const isNext = task.section === 'next';
+  const isNext = task.section === 'next' || task.section === 'tomorrow';
   const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID;
   const titleColor = task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : isNext ? 'text-[#a8a8a8]' : 'text-white';
   const metaColor = isScheduled ? 'text-[#8465ff]' : 'text-[#656464]';
+  // Whether the client lives ON the first row (combined with project per the slot helper) —
+  // applies to 'cpt' and 'tcp' modes where client + project sit adjacent. In 'ptc' the client
+  // stays on the second row alongside assignees + date (legacy two-row calendar layout).
+  const clientOnFirstRow = taskOrder !== 'ptc';
   return (
     <div className="pl-[10px] pr-[10px] py-[6px] flex flex-row items-start gap-[10px]">
       {!isScheduled && (
@@ -1313,20 +1421,27 @@ function CalendarCardBody({ task, projects, clients }: { task: Task; projects: P
       )}
       <div className="flex-1 min-w-0 flex flex-col gap-[2px]">
         <div className="flex flex-row items-center gap-[4px]">
-          {project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis text-[#656464]`}>{project.name}</p>}
-          <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleColor}`}>{task.title}</span>
+          {taskOrderSlots(taskOrder, !!project, clientOnFirstRow ? !!client : false).map((slot, i) => {
+            const metaCls = `font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis text-[#656464]`;
+            if (slot === 'project' && project) return <p key={`p-${i}`} className={metaCls}>{project.name}</p>;
+            if (slot === 'client' && client) return <p key={`c-${i}`} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap ${metaColor}`}>{client.short}</p>;
+            if (slot === 'cp' && client && project) return <p key={`cp-${i}`} className={metaCls}>{`${client.short}-${project.name}`}</p>;
+            if (slot === 'title') return <span key={`t-${i}`} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleColor}`}>{task.title}</span>;
+            return null;
+          })}
         </div>
         <div className="flex flex-row items-center gap-[6px]">
-          {client && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${metaColor}`}>{client.short}</p>}
+          {/* Client only renders in this row for 'ptc' (default). cpt/tcp put it on the first row. */}
+          {!clientOnFirstRow && client && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${metaColor}`}>{client.short}</p>}
           {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} />)}
-          {task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${isScheduled ? 'text-[#8465ff]' : 'text-[#656464]'}`}>{formatDeadline(task.deadline)}</p>}
+          {task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${isScheduled ? 'text-[#8465ff]' : isLateDeadline(task.deadline) ? 'text-[#FF7171]' : 'text-[#656464]'}`}>{formatDeadline(task.deadline)}</p>}
         </div>
       </div>
     </div>
   );
 }
 
-function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onDelete, onEdit, onQuickEdit, onAddSibling, isAnyDragging, dimmed, displacementOffset = 0, insertionGap = 0 }: {
+function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onDelete, onEdit, onQuickEdit, onAddSibling, isAnyDragging, dimmed, displacementOffset = 0, insertionGap = 0, taskOrder = 'ptc' }: {
   task: Task; cellId: string; projects: Project[]; clients: Client[];
   onToggle: () => void; onRename: (title: string) => void; onDelete: () => void; onEdit: () => void;
   onQuickEdit?: () => void;
@@ -1334,6 +1449,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
   isAnyDragging: boolean; dimmed?: boolean;
   // Same displacement system the list view uses: cards under the dragged item shift to make room.
   displacementOffset?: number; insertionGap?: number;
+  taskOrder?: TaskOrder;
 }) {
   const project = task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
   const resolvedClientId = task.clientId ?? project?.clientId;
@@ -1341,7 +1457,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id, data: { type: 'task', task, calendarCellId: cellId } });
   const style = { transform: CSS.Transform.toString(transform), transition: isAnyDragging ? `transform ${MOTION.base}ms ${MOTION.easeOut}` : 'none' };
   const isScheduled = task.type === 'scheduled';
-  const isNext = task.section === 'next';
+  const isNext = task.section === 'next' || task.section === 'tomorrow';
   const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID;
   const titleColor = task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : isNext ? 'text-[#a8a8a8]' : 'text-white';
   const metaColor = isScheduled ? 'text-[#8465ff]' : 'text-[#656464]';
@@ -1376,15 +1492,24 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
           </div>
         )}
         <div className="flex-1 min-w-0 flex flex-col gap-[2px]">
-          <div className="flex flex-row items-center gap-[4px]">
-            {project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis text-[#656464]`}>{project.name}</p>}
-            <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleColor}`}>{task.title}</span>
-          </div>
-          <div className="flex flex-row items-center gap-[6px]">
-            {client && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${metaColor}`}>{client.short}</p>}
-            {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} />)}
-            {task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${isScheduled ? 'text-[#8465ff]' : 'text-[#656464]'}`}>{formatDeadline(task.deadline)}</p>}
-            {/* + button hugs the inline task info on the second row. Trash stays pinned at top-right via absolute. */}
+          {(() => {
+            const clientOnFirstRow = taskOrder !== 'ptc';
+            return <>
+              <div className="flex flex-row items-center gap-[4px]">
+                {taskOrderSlots(taskOrder, !!project, clientOnFirstRow ? !!client : false).map((slot, i) => {
+                  const metaCls = `font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis text-[#656464]`;
+                  if (slot === 'project' && project) return <p key={`p-${i}`} className={metaCls}>{project.name}</p>;
+                  if (slot === 'client' && client) return <p key={`c-${i}`} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap ${metaColor}`}>{client.short}</p>;
+                  if (slot === 'cp' && client && project) return <p key={`cp-${i}`} className={metaCls}>{`${client.short}-${project.name}`}</p>;
+                  if (slot === 'title') return <span key={`t-${i}`} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleColor}`}>{task.title}</span>;
+                  return null;
+                })}
+              </div>
+              <div className="flex flex-row items-center gap-[6px]">
+                {!clientOnFirstRow && client && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${metaColor}`}>{client.short}</p>}
+                {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} />)}
+                {task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${isScheduled ? 'text-[#8465ff]' : isLateDeadline(task.deadline) ? 'text-[#FF7171]' : 'text-[#656464]'}`}>{formatDeadline(task.deadline)}</p>}
+                {/* + button hugs the inline task info on the second row. Trash stays pinned at top-right via absolute. */}
             {onAddSibling && (
               <button
                 type="button"
@@ -1396,7 +1521,9 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
                 <Plus size={12} />
               </button>
             )}
-          </div>
+              </div>
+            </>;
+          })()}
         </div>
       </div>
       <button
@@ -1416,7 +1543,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
 
 function WeekCalendarMode({
   tasks, projects, clients, onToggleTask, onRenameTask, onDeleteTask, onEditTask, onQuickEditTask, onAddSiblingTask, isAnyDragging,
-  activeTask, overTask, activeCellId, activeSlotHeight,
+  activeTask, overTask, activeCellId, activeSlotHeight, taskOrder = 'ptc',
 }: {
   tasks: Task[]; projects: Project[]; clients: Client[];
   onToggleTask: (id: string) => void;
@@ -1428,6 +1555,7 @@ function WeekCalendarMode({
   isAnyDragging: boolean;
   // Drag context piped from App so the calendar can run the same displacement math the list view runs.
   activeTask: Task | null; overTask: Task | null; activeCellId: string | null; activeSlotHeight: number;
+  taskOrder?: TaskOrder;
 }) {
   const [weekOffset, setWeekOffset] = useState(0);
   // Column 1 = yesterday, column 2 = today, columns 3ï¿½7 = next 5 days. weekOffset shifts the whole window by 7-day increments.
@@ -1510,15 +1638,23 @@ function WeekCalendarMode({
     const resolvedClientId = task.clientId ?? project?.clientId;
     const client = resolvedClientId ? clients.find((c) => c.id === resolvedClientId) : undefined;
     const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID;
+    // Milestone meta follows the user's task-order setting too. cpt/tcp combine client+project
+    // on the first row; ptc keeps client on the second row alongside assignees + date.
+    const clientOnFirstRow = taskOrder !== 'ptc';
     return (
       <div onDoubleClick={(e) => { e.stopPropagation(); onEditTask(task); }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onQuickEditTask?.(task); }} className="relative mx-[6px] mb-[4px] rounded-md bg-[#333333] border border-[#444444] cursor-pointer">
         <div className="px-[10px] py-[6px] flex flex-col gap-[2px]">
           <div className="flex flex-row items-center gap-[4px]">
-            {project && <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis text-[#656464]">{project.name}</p>}
-            <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis text-[#8465ff]">{task.title}</span>
+            {taskOrderSlots(taskOrder, !!project, clientOnFirstRow ? !!client : false).map((slot, i) => {
+              if (slot === 'project' && project) return <p key={`p-${i}`} className="font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis text-[#656464]">{project.name}</p>;
+              if (slot === 'client' && client) return <p key={`c-${i}`} className="font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap text-[#8465ff]">{client.short}</p>;
+              if (slot === 'cp' && client && project) return <p key={`cp-${i}`} className="font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis text-[#656464]">{`${client.short}-${project.name}`}</p>;
+              if (slot === 'title') return <span key={`t-${i}`} className="font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis text-[#8465ff]">{task.title}</span>;
+              return null;
+            })}
           </div>
           <div className="flex flex-row items-center gap-[6px]">
-            {client && <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap text-[#8465ff]">{client.short}</p>}
+            {!clientOnFirstRow && client && <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap text-[#8465ff]">{client.short}</p>}
             {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone="scheduled" hollow={isPersonal} dim={task.completed} />)}
             {showDate && task.deadline && <p className="font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap text-[#8465ff]">{formatDeadline(task.deadline)}</p>}
           </div>
@@ -1619,6 +1755,7 @@ function WeekCalendarMode({
                               clients={clients}
                               displacementOffset={displacementOffset}
                               insertionGap={insertionGap}
+                              taskOrder={taskOrder}
                             />
                           );
                         })}
@@ -1634,7 +1771,7 @@ function WeekCalendarMode({
   );
 }
 
-function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePersonShort, onDeletePerson, currentUserShort, onSetCurrentUser, taskOrder, onSetTaskOrder }: {
+function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePersonShort, onDeletePerson, currentUserShort, onSetCurrentUser, taskOrder, onSetTaskOrder, tomorrowEnabled, onSetTomorrowEnabled }: {
   people: Person[]; newId: string | null;
   onAddPerson: () => void;
   onRenamePerson: (id: string, name: string) => void;
@@ -1644,11 +1781,13 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
   onSetCurrentUser: (short: string) => void;
   taskOrder: TaskOrder;
   onSetTaskOrder: (v: TaskOrder) => void;
+  tomorrowEnabled: boolean;
+  onSetTomorrowEnabled: (v: boolean) => void;
 }) {
   const bodyFont = "font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap";
   return (
-    <div className="pt-[106px] pb-[140px] flex gap-0 min-w-[1760px]">
-      <div className="flex-1 min-w-[340px] max-w-[440px]">
+    <div className="pt-[106px] pb-[140px] flex gap-0">
+      <div className="flex-1 min-w-[280px]">
         <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[20px]">
           <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">I am</p>
         </div>
@@ -1689,6 +1828,16 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
               </button>
             );
           })}
+        </div>
+        {/* Tomorrow section toggle. Off → tomorrow tasks visually fall back into Next (data
+            preserved). The midnight refill keeps Tomorrow at 5 tasks even while hidden — flip
+            back on and you see the buffer ready to go. */}
+        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[20px]">
+          <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Tomorrow section</p>
+        </div>
+        <div className="px-[31px] mb-[50px] flex flex-row gap-4">
+          <button type="button" onClick={() => onSetTomorrowEnabled(true)} className={`text-[13px] transition-colors ${tomorrowEnabled ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>On</button>
+          <button type="button" onClick={() => onSetTomorrowEnabled(false)} className={`text-[13px] transition-colors ${!tomorrowEnabled ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>Off</button>
         </div>
         <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[74px]">
           <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">People</p>
@@ -1771,12 +1920,12 @@ function LIndent() {
   );
 }
 
-function ProjectTaskRow({ task, listId, onToggle, onRename, onDelete, onEdit, onQuickEdit, onAddSibling, isAnyDragging, autoFocus, collapsed, nonDraggable = false, projects = [], clients = [], showContext = false, displacementOffset = 0, insertionGap = 0, taskOrder = 'ptc' }: { task: Task; listId: ListId; onToggle: () => void; onRename: (t: string) => void; onDelete?: () => void; onEdit?: () => void; onQuickEdit?: () => void; onAddSibling?: () => void; isAnyDragging?: boolean; autoFocus?: boolean; collapsed?: boolean; nonDraggable?: boolean; projects?: Project[]; clients?: Client[]; showContext?: boolean; displacementOffset?: number; insertionGap?: number; taskOrder?: TaskOrder }) {
+function ProjectTaskRow({ task, listId, onToggle, onRename, onDelete, onEdit, onQuickEdit, onAddSibling, isAnyDragging, autoFocus, collapsed, nonDraggable = false, projects = [], clients = [], showContext = false, displacementOffset = 0, insertionGap = 0, taskOrder = 'ptc', density = 0 }: { task: Task; listId: ListId; onToggle: () => void; onRename: (t: string) => void; onDelete?: () => void; onEdit?: () => void; onQuickEdit?: () => void; onAddSibling?: () => void; isAnyDragging?: boolean; autoFocus?: boolean; collapsed?: boolean; nonDraggable?: boolean; projects?: Project[]; clients?: Client[]; showContext?: boolean; displacementOffset?: number; insertionGap?: number; taskOrder?: TaskOrder; density?: number }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: `projtask-${listId}-${task.id}`, data: { type: 'projTask', task, listId } });
   const style = { transform: CSS.Transform.toString(transform), transition: isAnyDragging ? `transform ${MOTION.base}ms ${MOTION.easeOut}` : 'none' };
   const bodyFont = "font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap";
   const isScheduled = task.type === 'scheduled';
-  const isNext = task.section === 'next';
+  const isNext = task.section === 'next' || task.section === 'tomorrow';
   const titleColor = isScheduled ? 'text-[#8465ff]' : task.completed ? 'text-[#383838]' : isNext ? 'text-[#a8a8a8]' : 'text-white';
   const metaColor = task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : 'text-[#656464]';
   const project = showContext && task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
@@ -1816,19 +1965,31 @@ function ProjectTaskRow({ task, listId, onToggle, onRename, onDelete, onEdit, on
         )}
         <LIndent />
         {!isScheduled && <TaskCheckbox completed={task.completed} onToggle={onToggle} />}
-        <div className="flex flex-row items-center gap-[4px]">
-          {taskOrderSlots(taskOrder, !!project, !!client).map((slot, i) => {
-            const metaCls = `${bodyFont} ${task.completed ? 'text-[#383838]' : 'text-[#656464]'}`;
-            if (slot === 'project' && project) return <p key={`p-${i}`} className={metaCls}>{project.name}</p>;
-            if (slot === 'client' && client) return <p key={`c-${i}`} className={`${bodyFont} ${metaColor}`}>{client.short}</p>;
-            if (slot === 'cp' && client && project) return <p key={`cp-${i}`} className={metaCls}>{`${client.short}-${project.name}`}</p>;
-            if (slot === 'title') return <EditableText key={`t-${i}`} value={task.title} onChange={onRename} autoFocus={autoFocus} placeholder="New Task" onEnter={onAddSibling} className={`${bodyFont} ${titleColor}`} />;
-            return null;
-          })}
+        {/* Same density cascade as SortableTaskItem: project truncates, date short, arrow short,
+            then hide client → assignees → project. Title and date always visible. */}
+        <div className="flex flex-row items-center gap-[4px] min-w-0 overflow-hidden shrink-0">
+          {(() => {
+            const showClient = !!client && density < 4;
+            const showProject = !!project && density < 6;
+            const projectTruncate = density >= 1 ? 'truncate min-w-0 max-w-[120px]' : '';
+            return taskOrderSlots(taskOrder, showProject, showClient).map((slot, i) => {
+              const metaCls = `${bodyFont} ${task.completed ? 'text-[#383838]' : 'text-[#656464]'}`;
+              if (slot === 'project' && project) return <p key={`p-${i}`} className={`${metaCls} ${projectTruncate}`}>{project.name}</p>;
+              if (slot === 'client' && client) return <p key={`c-${i}`} className={`${bodyFont} ${metaColor}`}>{client.short}</p>;
+              if (slot === 'cp' && client && project) return <p key={`cp-${i}`} className={`${metaCls} ${projectTruncate}`}>{`${client.short}-${project.name}`}</p>;
+              if (slot === 'title') return <EditableText key={`t-${i}`} value={task.title} onChange={onRename} autoFocus={autoFocus} placeholder="New Task" onEnter={onAddSibling} className={`${bodyFont} ${titleColor}`} />;
+              return null;
+            });
+          })()}
         </div>
-        {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} />)}
+        {density < 5 && task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} />)}
         {task.deadline && (
-          <p className={`font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : isNext ? 'text-[#a8a8a8]' : 'text-white'}`}>{formatDeadline(task.deadline)}</p>
+          <>
+            {!isScheduled && <DeadlineArrow dim={task.completed} small={density >= 3} />}
+            <p className={`font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : isLateDeadline(task.deadline) ? 'text-[#FF7171]' : isNext ? 'text-[#a8a8a8]' : 'text-white'}`}>
+              {density >= 2 ? formatDeadlineShort(task.deadline) : formatDeadline(task.deadline)}
+            </p>
+          </>
         )}
         {/* + sits inline immediately after the task info; trash uses ml-auto below to pin to the right edge. */}
         {onAddSibling && (
@@ -2205,14 +2366,45 @@ export default function App() {
     setTaskOrderState(v);
     try { window.localStorage.setItem('todo-app-task-order', v); } catch {}
   }, []);
+  // Responsive density of a single dashboard column. The cascade fights to preserve the task
+  // title — title text is NEVER truncated, and date + arrow always stay visible.
+  //   0  full       — everything visible at full size
+  //   1  tight      — project name truncates (max-w on the project span)
+  //   2  tighter    — date switches from "Fri-Apr 24" → "04-25"
+  //   3  snug       — deadline arrow horizontal line ~50% shorter (head + stroke unchanged)
+  //   4  compact    — client short hidden
+  //   5  minimal    — assignee badges hidden
+  //   6  bare       — project name hidden entirely
+  // The + and trash buttons, the date, the arrow, and the title are ALWAYS visible.
+  // Spacing/margins never compress.
+  const [columnPx, setColumnPx] = useState<number>(typeof window === 'undefined' ? 440 : window.innerWidth / 4);
+  useEffect(() => {
+    const update = () => setColumnPx(window.innerWidth / 4);
+    update();
+    window.addEventListener('resize', update);
+    return () => window.removeEventListener('resize', update);
+  }, []);
+  const density: number = columnPx >= 460 ? 0 : columnPx >= 420 ? 1 : columnPx >= 380 ? 2 : columnPx >= 340 ? 3 : columnPx >= 300 ? 4 : columnPx >= 260 ? 5 : 6;
+
+  // Tomorrow section toggle. When ON: a "Tomorrow" section sits between Today and Next.
+  // When OFF: tasks tagged section='tomorrow' visually fall back into Next (data is preserved
+  // — re-enabling the toggle restores them to Tomorrow without losing context).
+  const [tomorrowEnabled, setTomorrowEnabledState] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return window.localStorage.getItem('todo-app-tomorrow-enabled') === '1';
+  });
+  const setTomorrowEnabled = useCallback((v: boolean) => {
+    setTomorrowEnabledState(v);
+    try { window.localStorage.setItem('todo-app-tomorrow-enabled', v ? '1' : '0'); } catch {}
+  }, []);
   // Anchor rect: panel opens over this column. Captured at click time from the row's nearest
   // column ancestor. null → centered (used by the bottom + button).
   const [editAnchor, setEditAnchor] = useState<{ x: number; width: number } | null>(null);
   const captureAnchorFromEvent = (e?: { currentTarget?: EventTarget | null }): { x: number; width: number } | null => {
     if (!e?.currentTarget) return null;
     const el = e.currentTarget as HTMLElement;
-    // Walk up to the column wrapper (uses `flex-1 min-w-[340px]`).
-    const col = el.closest('.flex-1.min-w-\\[340px\\]') as HTMLElement | null;
+    // Walk up to the column wrapper (uses `flex-1 min-w-[280px]`).
+    const col = el.closest('.flex-1.min-w-\\[280px\\]') as HTMLElement | null;
     if (!col) return null;
     const r = col.getBoundingClientRect();
     return { x: r.left, width: r.width };
@@ -2230,7 +2422,7 @@ export default function App() {
     setNewId(id);
     setEditMode('edit');
     // Anchor over the Work column at click time. Find it via DOM.
-    const cols = document.querySelectorAll('.flex-1.min-w-\\[340px\\]');
+    const cols = document.querySelectorAll('.flex-1.min-w-\\[280px\\]');
     // Column order in dashboard mode: dashboard, work, projects, admin → work is index 1.
     const workCol = cols[1] as HTMLElement | undefined;
     setEditAnchor(workCol ? { x: workCol.getBoundingClientRect().left, width: workCol.getBoundingClientRect().width } : null);
@@ -2317,6 +2509,17 @@ export default function App() {
 
   const updateTask = useCallback((id: string, patch: Partial<Omit<Task, 'id' | 'order'>>) => {
     setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
+  }, []);
+  // Quick reschedule shortcut used by late-date click handlers in the row renderers.
+  //   'tomorrow' → deadline = tomorrow's ISO + section = 'tomorrow'
+  //   'nextWeek' → deadline = today + 7 days + section = 'next'
+  const rescheduleTaskTo = useCallback((id: string, kind: 'tomorrow' | 'nextWeek') => {
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const target = new Date(today);
+    target.setDate(today.getDate() + (kind === 'tomorrow' ? 1 : 7));
+    const iso = `${target.getFullYear()}-${String(target.getMonth() + 1).padStart(2, '0')}-${String(target.getDate()).padStart(2, '0')}`;
+    const section: SectionId = kind === 'tomorrow' ? 'tomorrow' : 'next';
+    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, deadline: iso, section } : t)));
   }, []);
 
   const addProject = useCallback((p: Omit<Project, 'id'>) => setProjects((prev) => [...prev, { ...p, id: `p-${Date.now()}` }]), []);
@@ -2729,30 +2932,113 @@ export default function App() {
     if (!currentUserShort && people.length > 0) setCurrentUserShort(people[0].short);
   }, [currentUserShort, people, setCurrentUserShort]);
 
-  // Global Enter shortcut. Three behaviours:
-  //   • Cursor hovering a task row → spawn a sibling of that task (same as clicking the row's +).
-  //   • Nothing hovered → spawn a fresh task at the bottom of Today/Work.
-  //   • Editing a title → handled by the title's own onKeyDown (which also spawns a sibling).
+  // 4 AM section refill. Each list (work/projects/admin) keeps Today and Tomorrow at a target
+  // of 3 tasks. At 4 AM we cascade:
+  //    Tomorrow → Today (if Today < 3)
+  //    Next     → Today (if Today still < 3 after tomorrow drained)
+  //    Next     → Tomorrow (if Tomorrow < 3)
+  // Day boundary is 4 AM (not midnight) so late-night work counts as the previous day — see
+  // todayISO() in data.ts for the consumer-side shift. Runs on mount when last refill < today,
+  // then schedules itself for the next 4 AM. Persisted via localStorage so each browser only
+  // refills once per day. Multi-client safety relies on Liveblocks merging idempotently.
   useEffect(() => {
+    const TARGET = 3;
+    const refillNow = () => {
+      setTasks((prev) => {
+        const next = [...prev];
+        const lists: ListId[] = ['work', 'projects', 'admin'];
+        for (const listId of lists) {
+          const cmp = (a: Task, b: Task) => a.order - b.order;
+          const todayList = next.filter((t) => t.list === listId && t.section === 'today' && t.type !== 'scheduled' && !t.completed).sort(cmp);
+          const tomorrowList = next.filter((t) => t.list === listId && t.section === 'tomorrow' && t.type !== 'scheduled' && !t.completed).sort(cmp);
+          const nextList = next.filter((t) => t.list === listId && t.section === 'next' && t.type !== 'scheduled' && !t.completed).sort(cmp);
+          // 1) Tomorrow → Today
+          while (todayList.length < TARGET && tomorrowList.length > 0) {
+            const moved = tomorrowList.shift()!;
+            const idx = next.findIndex((t) => t.id === moved.id);
+            if (idx >= 0) { next[idx] = { ...next[idx], section: 'today' }; todayList.push(next[idx]); }
+          }
+          // 2) Next → Today (if still under target)
+          while (todayList.length < TARGET && nextList.length > 0) {
+            const moved = nextList.shift()!;
+            const idx = next.findIndex((t) => t.id === moved.id);
+            if (idx >= 0) { next[idx] = { ...next[idx], section: 'today' }; todayList.push(next[idx]); }
+          }
+          // 3) Next → Tomorrow (if Tomorrow under target)
+          while (tomorrowList.length < TARGET && nextList.length > 0) {
+            const moved = nextList.shift()!;
+            const idx = next.findIndex((t) => t.id === moved.id);
+            if (idx >= 0) { next[idx] = { ...next[idx], section: 'tomorrow' }; tomorrowList.push(next[idx]); }
+          }
+          // Re-number order within each section so newly moved tasks land at the end.
+          [todayList, tomorrowList, nextList].forEach((bucketList, bucketIdx) => {
+            const sec = (['today', 'tomorrow', 'next'] as SectionId[])[bucketIdx];
+            bucketList.forEach((t, i) => {
+              const idx = next.findIndex((x) => x.id === t.id);
+              if (idx >= 0) next[idx] = { ...next[idx], section: sec, order: i };
+            });
+          });
+        }
+        return next;
+      });
+      try { window.localStorage.setItem('todo-app-last-refill', todayISO()); } catch {}
+    };
+
+    // First-load refill if we missed it today.
+    try {
+      const last = window.localStorage.getItem('todo-app-last-refill');
+      if (!last || last < todayISO()) refillNow();
+    } catch {}
+
+    // Schedule the next 4 AM rollover (+1s buffer). Day boundary is 4 AM, not midnight, so
+    // late-night work (12:00–3:59 AM) still counts as the previous day. If we're already past
+    // 4 AM today, schedule for tomorrow's 4 AM; otherwise for today's 4 AM (a few hours away).
+    const now = new Date();
+    const next4am = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 4, 0, 1);
+    if (next4am <= now) next4am.setDate(next4am.getDate() + 1);
+    const ms = Math.max(1000, next4am.getTime() - now.getTime());
+    const timer = window.setTimeout(refillNow, ms);
+    return () => window.clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Global keyboard shortcuts:
+  //   Enter   → spawn a task (sibling of hovered row, or fresh in Today/Work if none hovered)
+  //   1       → list view (dashboard)
+  //   2       → project view
+  //   3       → calendar view
+  //   N       → open the new-task quick-edit panel (anchored to the Work column)
+  // All skip when the user is typing in an input / contentEditable / button focus.
+  useEffect(() => {
+    const isTypingTarget = (t: HTMLElement | null) => {
+      if (!t) return false;
+      if (t.isContentEditable) return true;
+      if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT') return true;
+      return false;
+    };
     const handler = (e: KeyboardEvent) => {
-      if (e.key !== 'Enter' || e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
+      if (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return;
       const t = e.target as HTMLElement | null;
-      if (!t) return;
-      // Skip if focus is on anything that already accepts Enter (text inputs, contentEditable).
-      if (t.isContentEditable) return;
-      if (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT') return;
-      if (t.tagName === 'BUTTON') return; // let buttons handle their own Enter
-      // Is the cursor hovering a task row? Each row carries data-task-row={id}.
-      const hoveredRow = document.querySelector('[data-task-row]:hover') as HTMLElement | null;
-      const hoveredId = hoveredRow?.getAttribute('data-task-row');
-      const hoveredTask = hoveredId ? tasks.find((x) => x.id === hoveredId) : undefined;
-      e.preventDefault();
-      if (hoveredTask) addSiblingTask(hoveredTask);
-      else addBlankTaskInSection('work', 'today');
+      if (isTypingTarget(t)) return;
+      if (e.key === 'Enter') {
+        if (t?.tagName === 'BUTTON') return;
+        const hoveredRow = document.querySelector('[data-task-row]:hover') as HTMLElement | null;
+        const hoveredId = hoveredRow?.getAttribute('data-task-row');
+        const hoveredTask = hoveredId ? tasks.find((x) => x.id === hoveredId) : undefined;
+        e.preventDefault();
+        if (hoveredTask) addSiblingTask(hoveredTask);
+        else addBlankTaskInSection('work', 'today');
+        return;
+      }
+      // View-mode shortcuts (1/2/3) and N (new-task panel).
+      if (e.key === '1') { e.preventDefault(); setMode('dashboard'); return; }
+      if (e.key === '2') { e.preventDefault(); setMode('projectView'); return; }
+      if (e.key === '3') { e.preventDefault(); setMode('calendar'); return; }
+      if (e.key === 'n' || e.key === 'N') { e.preventDefault(); addAndEditTask(); return; }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [addBlankTaskInSection, addSiblingTask, tasks]);
+  }, [addBlankTaskInSection, addSiblingTask, tasks, setMode, addAndEditTask]);
 
   // One-time migration: Russell â†’ Benno
   const migratedRef = useRef(false);
@@ -2826,7 +3112,16 @@ export default function App() {
           return a.title.localeCompare(b.title);
         });
       } else {
-        m[k].sort((a, b) => a.order - b.order);
+        // Sort by deadline ascending when dates are present; undated tasks fall to the bottom
+        // and keep their existing manual order. Ties between two dated tasks fall back to order.
+        m[k].sort((a, b) => {
+          const ad = a.deadline;
+          const bd = b.deadline;
+          if (ad && bd) return ad === bd ? a.order - b.order : ad < bd ? -1 : 1;
+          if (ad) return -1;
+          if (bd) return 1;
+          return a.order - b.order;
+        });
       }
     }
     // Dashboard = aggregated view of work+projects+admin filtered to current user
@@ -2918,7 +3213,7 @@ export default function App() {
         {list.map((task, index) => {
           const { displacementOffset, insertionGap } = getAnimationProps(task, index, list, idPrefix);
           return (
-            <SortableTaskItem key={`${idPrefix}${task.id}`} task={task} idPrefix={idPrefix} onToggle={() => toggleTask(task.id)} onRename={(title) => renameTask(task.id, title)} onDelete={() => deleteTask(task.id)} onEdit={(e) => openEdit(task, e)} onQuickEdit={(e) => openQuick(task, e)} onAddSibling={() => addSiblingTask(task)} autoFocus={task.id === newId} displacementOffset={displacementOffset} insertionGap={insertionGap} isAnyDragging={!!activeTask} collapsed={sourceCollapsed && `${idPrefix}${task.id}` === activeId} projects={projects} clients={clients} taskOrder={taskOrder} />
+            <SortableTaskItem key={`${idPrefix}${task.id}`} task={task} idPrefix={idPrefix} onToggle={() => toggleTask(task.id)} onRename={(title) => renameTask(task.id, title)} onDelete={() => deleteTask(task.id)} onEdit={(e) => openEdit(task, e)} onQuickEdit={(e) => openQuick(task, e)} onAddSibling={() => addSiblingTask(task)} onReschedule={(kind) => rescheduleTaskTo(task.id, kind)} autoFocus={task.id === newId} displacementOffset={displacementOffset} insertionGap={insertionGap} isAnyDragging={!!activeTask} collapsed={sourceCollapsed && `${idPrefix}${task.id}` === activeId} projects={projects} clients={clients} taskOrder={taskOrder} density={density} />
           );
         })}
       </AnimatePresence>
@@ -2953,7 +3248,7 @@ export default function App() {
         const resolvedClientId = task.clientId ?? project?.clientId;
         const client = resolvedClientId ? clients.find((c) => c.id === resolvedClientId) : undefined;
         const isScheduled = task.type === 'scheduled';
-        const isNext = task.section === 'next';
+        const isNext = task.section === 'next' || task.section === 'tomorrow';
         const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID;
         const titleColor = isScheduled ? 'text-[#8465ff]' : task.completed ? 'text-[#383838]' : isNext ? 'text-[#a8a8a8]' : 'text-white';
         const metaColor = task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : 'text-[#656464]';
@@ -2969,7 +3264,7 @@ export default function App() {
             {task.deadline && (
               <>
                 {!isScheduled && <DeadlineArrow dim={task.completed} />}
-                <p className={`font-['NB_International:Regular',sans-serif] text-[14.333px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : isNext ? 'text-[#a8a8a8]' : 'text-white'}`}>{formatDeadline(task.deadline)}</p>
+                <p className={`font-['NB_International:Regular',sans-serif] text-[14.333px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : isLateDeadline(task.deadline) ? 'text-[#FF7171]' : isNext ? 'text-[#a8a8a8]' : 'text-white'}`}>{formatDeadline(task.deadline)}</p>
               </>
             )}
             <button
@@ -2997,7 +3292,7 @@ export default function App() {
     // Milestones only surface in per-list columns; the dashboard omits them so they aren't duplicated.
     const milestones = listId === 'dashboard' ? [] : (tasksByKey[`${listId}:milestones`] || []);
     return (
-      <div key={listId} className="flex-1 min-w-[340px] max-w-[440px]">
+      <div key={listId} className="flex-1 min-w-[280px]">
         <p className={`font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] px-[35px] mb-[74px] ${listId === 'dashboard' ? 'text-[#8465ff]' : 'text-white'}`}>
           {LIST_TITLES[listId]}
           {listId === 'dashboard' && (
@@ -3035,10 +3330,21 @@ export default function App() {
                 {bucket(tasksByKey[`${listId}:today`] || [])}
               </>
             ))}
+            {tomorrowEnabled && wrap('tomorrow', (
+              <>
+                <SectionHeader title="Tomorrow" onAdd={() => addBlankTaskInSection(listId, 'tomorrow')} />
+                {bucket(tasksByKey[`${listId}:tomorrow`] || [])}
+              </>
+            ))}
             {wrap('next', (
               <>
                 <SectionHeader title="Next" onAdd={() => addBlankTaskInSection(listId, 'next')} />
-                {bucket(tasksByKey[`${listId}:next`] || [])}
+                {/* When the Tomorrow toggle is OFF, tomorrow-tagged tasks visually appear here
+                    inside Next. Their data still says section='tomorrow' so flipping the toggle
+                    on restores them to the Tomorrow section without losing context. */}
+                {bucket(tomorrowEnabled
+                  ? (tasksByKey[`${listId}:next`] || [])
+                  : [...(tasksByKey[`${listId}:tomorrow`] || []), ...(tasksByKey[`${listId}:next`] || [])])}
               </>
             ))}
           </>
@@ -3119,7 +3425,7 @@ export default function App() {
     >
       <div className="relative min-h-screen bg-[#282828] overflow-x-auto">
         {mode === 'dashboard' && (
-          <div className="pt-[106px] pb-[140px] flex gap-0 min-w-[1760px]">
+          <div className="pt-[106px] pb-[140px] flex gap-0">
             {LISTS.map(renderColumn)}
           </div>
         )}
@@ -3142,6 +3448,7 @@ export default function App() {
             onEditTask={openEdit}
             onQuickEditTask={openQuick}
             taskOrder={taskOrder}
+            density={density}
             onAddTaskToProject={addTaskToProject}
             onAddTaskInList={addBlankTaskInList}
             onAddProjectInList={(l, clientId) => addBlankProject(clientId, l)}
@@ -3173,6 +3480,7 @@ export default function App() {
             overTask={overTask}
             activeCellId={activeCalendarCellId}
             activeSlotHeight={(activeRectHeight ?? 50) + 4}
+            taskOrder={taskOrder}
           />
         )}
         {mode === 'settings' && (
@@ -3187,6 +3495,8 @@ export default function App() {
             onSetCurrentUser={setCurrentUserShort}
             taskOrder={taskOrder}
             onSetTaskOrder={setTaskOrder}
+            tomorrowEnabled={tomorrowEnabled}
+            onSetTomorrowEnabled={setTomorrowEnabled}
           />
         )}
 
@@ -3260,7 +3570,7 @@ export default function App() {
                 className="rounded-md bg-[#333333] overflow-hidden"
                 style={{ width: activeRectWidth, height: activeRectHeight, willChange: 'transform' }}
               >
-                <CalendarCardBody task={activeTask} projects={projects} clients={clients} />
+                <CalendarCardBody task={activeTask} projects={projects} clients={clients} taskOrder={taskOrder} />
               </motion.div>
             ) : (
               <motion.div

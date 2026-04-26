@@ -1,5 +1,5 @@
 export type Assignee = string;
-export type SectionId = 'inbox' | 'today' | 'next';
+export type SectionId = 'inbox' | 'today' | 'tomorrow' | 'next';
 export type ListId = 'dashboard' | 'work' | 'projects' | 'admin';
 export type AppMode = 'dashboard' | 'projectView' | 'calendar' | 'settings';
 
@@ -96,9 +96,21 @@ export const initialTasks: Task[] = [
   { id: 'a-n2', title: 'Archive 2025 Invoices', type: 'todo', assignees: [], completed: false, list: 'admin', section: 'next', order: 1 },
 ];
 
+// Helper: shift an ISO date by N days (negative = earlier).
+function shiftIso(iso: string, days: number): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  const date = new Date(y, m - 1, d);
+  date.setDate(date.getDate() + days);
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
 export function formatDeadline(iso?: string): string {
   if (!iso) return '';
   if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
+  const today = todayISO();
+  if (iso === today) return 'Today';
+  if (iso === shiftIso(today, 1)) return 'Tomorrow';
+  if (iso === shiftIso(today, -1)) return 'Yesterday';
   const [y, m, d] = iso.split('-').map(Number);
   const date = new Date(y, m - 1, d);
   if (isNaN(date.getTime())) return iso;
@@ -107,7 +119,33 @@ export function formatDeadline(iso?: string): string {
   return `${day}-${mon} ${String(d).padStart(2, '0')}`;
 }
 
+// Compact MM-DD form used when columns are squeezed (responsive truncation cascade).
+// Today / Tomorrow / Yesterday still substitute (those tokens are not really shorter than
+// the date but more useful at any size).
+export function formatDeadlineShort(iso?: string): string {
+  if (!iso) return '';
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return iso;
+  const today = todayISO();
+  if (iso === today) return 'Today';
+  if (iso === shiftIso(today, 1)) return 'Tomorrow';
+  if (iso === shiftIso(today, -1)) return 'Yesterday';
+  const [, m, d] = iso.split('-');
+  return `${m}-${d}`;
+}
+
+// True when the deadline ISO is strictly before today (used to color late dates).
+export function isLateDeadline(iso?: string): boolean {
+  if (!iso) return false;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(iso)) return false;
+  return iso < todayISO();
+}
+
+// "Today" rolls over at 4 AM, not midnight. Anything done between 12:00 AM and 3:59 AM is
+// still considered the previous day's work. Shifting `new Date()` back 4 hours before
+// extracting the calendar date achieves this for every consumer (formatDeadline, isLateDeadline,
+// midnight-refill comparisons, etc.).
 export function todayISO(): string {
   const d = new Date();
+  d.setHours(d.getHours() - 4);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
