@@ -3482,22 +3482,38 @@ export default function App() {
         {clientBlocks.map(({ client: c, projects: clientProjects }, ci) => (
           <div key={c.id}>
             {ci > 0 && <Spacer />}
-            {/* Client subheader — gray label + AddPlus to spawn a new project under this client
-                in this column. */}
+            {/* Client subheader — editable client name + AddPlus to spawn a new project under
+                this client in this column. */}
             <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px]">
-              <p className={`${proj2BodyFont} text-[#656464]`}>{c.name}</p>
+              <EditableText
+                value={c.name}
+                onChange={(v) => renameClient(c.id, v)}
+                autoFocus={c.id === newId}
+                placeholder="New Client"
+                onDiscardIfEmpty={() => deleteClient(c.id)}
+                className={`${proj2BodyFont} text-[#656464]`}
+              />
               <AddPlus onClick={() => addBlankProject(c.id, listId)} />
             </div>
             {clientProjects.map((p) => {
               const projTasks = tasksByProject.get(p.id) || [];
               return (
                 <div key={p.id}>
-                  {/* Project header — folder icon + project name + AddPlus to spawn a new task
-                      under this project. No bottom margin so projects under the same client
-                      stack flush; the Spacer between clients still keeps clients distinct. */}
+                  {/* Project header — folder icon + EDITABLE project name + AddPlus to spawn
+                      a new task under this project. The name uses EditableText so the user can
+                      click-to-rename, with placeholder + autoFocus on freshly-created projects.
+                      onDiscardIfEmpty deletes the project if the user blurs without typing
+                      anything (matches the fresh-task fade behavior). */}
                   <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]">
                     <Folder size={12} className="text-[#656464]" />
-                    <span className={`${proj2BodyFont} text-white`}>{p.name}</span>
+                    <EditableText
+                      value={p.name}
+                      onChange={(v) => renameProject(p.id, v)}
+                      autoFocus={p.id === newId}
+                      placeholder="New Project"
+                      onDiscardIfEmpty={() => deleteProject(p.id)}
+                      className={`${proj2BodyFont} text-white`}
+                    />
                     <AddPlus onClick={() => addTaskToProject(p.id, listId)} />
                   </div>
                   {projTasks.length > 0 && renderProjectBucket(projTasks, `proj2:${listId}:${p.id}:`, true)}
