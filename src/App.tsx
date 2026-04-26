@@ -173,22 +173,19 @@ function DeadlineArrow({ dim = false, small = false }: { dim?: boolean; small?: 
 // the motion has room to breathe but short enough to feel responsive. Nothing
 // abrupt, nothing bouncy.
 const MOTION = {
-  // easeOutQuart - slightly creamier than standard easeOut. Gentle landing.
-  // The motion settles like it's gliding to a stop on velvet.
-  easeOut: 'cubic-bezier(0.16, 1, 0.3, 1)',
+  // Buttery cubic — pronounced ease-out tail with a gentle attack. Lands like the card is
+  // settling into liquid. (Was easeOutQuart 0.16,1,0.3,1 — a touch crisper.)
+  easeOut: 'cubic-bezier(0.22, 0.85, 0.25, 1)',
   // For opacity fades where the bezier feels overly dramatic.
   easeStandard: 'cubic-bezier(0.4, 0, 0.2, 1)',
   // Durations - luxurious without feeling sluggish.
   fast: 200,   // micro: opacity, hover tints
   base: 320,   // layout shifts (e.g. underlying sortable transforms after a drop)
   slow: 420,   // overlays appearing, source collapse
-  // Displacement-only timing. Deliberately MUCH longer than `base`: when you
-  // scrub a dragged card over many neighbours quickly, each one's displacement
-  // target keeps changing. A short transition means every target update kicks
-  // off a fresh fast animation that "races to catch up", which reads as jerky.
-  // A long transition lets the card glide smoothly between successive targets
-  // without ever appearing to snap.
-  displace: 600,
+  // Displacement timing. Buttery glide — long enough that the motion has visible follow-through
+  // but tight enough to stay connected to the cursor. Combined with the easeOut cubic, cards
+  // accelerate quickly then decelerate gently into their new position.
+  displace: 360,
 };
 const DISPLACE_TRANSITION = `transform ${MOTION.displace}ms ${MOTION.easeOut}, margin-top ${MOTION.displace}ms ${MOTION.easeOut}`;
 
@@ -236,6 +233,7 @@ const Displaced = memo(function Displaced({
 
 function SortableTaskItem({
   task, onToggle, onRename, onDelete, onEdit, onQuickEdit, onAddSibling, onReschedule, autoFocus = false, isDragOverlay = false, displacementOffset = 0, insertionGap = 0, isAnyDragging = false, collapsed = false, projects = [], clients = [], nonDraggable = false, idPrefix = '', taskOrder = 'ptc', density = 0,
+  showIndent = false, hideContext = false, dragId, dragData,
 }: {
   task: Task; onToggle: () => void; onRename?: (title: string) => void; onDelete?: () => void; onEdit?: (e?: React.MouseEvent) => void; onQuickEdit?: (e?: React.MouseEvent) => void; onAddSibling?: () => void; onReschedule?: (kind: 'tomorrow' | 'nextWeek') => void; autoFocus?: boolean; isDragOverlay?: boolean; displacementOffset?: number; insertionGap?: number; isAnyDragging?: boolean; collapsed?: boolean; projects?: Project[]; clients?: Client[]; nonDraggable?: boolean;
   taskOrder?: TaskOrder;
@@ -245,6 +243,17 @@ function SortableTaskItem({
   // dashboard sub-list AND work column) without sharing a sortable id â€” otherwise picking up one
   // instance would mark BOTH as the active drag and fade them simultaneously.
   idPrefix?: string;
+  // PROJECT VIEW PORT: project-view rows are rendered by the same SortableTaskItem component
+  // (instead of a separate ProjectTaskRow with its own buggy drag wiring) so they inherit the
+  // working list-view drag mechanics 1:1. These three props let project view tweak the visuals
+  // and dnd-kit identity without forking the component:
+  //   - showIndent: prepend the LIndent ⌐ glyph before the checkbox (project-view sub-task look)
+  //   - hideContext: suppress the project/client meta slots (redundant under a project header)
+  //   - dragId / dragData: override the default useSortable id+data so handlers can route by type
+  showIndent?: boolean;
+  hideContext?: boolean;
+  dragId?: string;
+  dragData?: Record<string, unknown>;
 }) {
   const project = task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
   // Prefer the task's explicit clientId, fall back to the project's owning client.
@@ -317,7 +326,7 @@ function SortableTaskItem({
     }, 0);
     return () => clearTimeout(handle);
   }, [editing]);
-  const sortable = useSortable({ id: `${idPrefix}${task.id}`, data: { type: 'task', task } });
+  const sortable = useSortable({ id: dragId ?? `${idPrefix}${task.id}`, data: dragData ?? { type: 'task', task } });
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = sortable;
   // Inside <DragOverlay>, the cloned row still calls useSortable (it lives inside DndContext) and
   // gets back transform/isDragging values describing the SOURCE row's reordering. Applying those to
@@ -365,7 +374,10 @@ function SortableTaskItem({
       }}
       whileHover={!isDragging && !isDragOverlay ? { backgroundColor: "rgba(255, 255, 255, 0.03)", transition: { duration: 0.15 } } : {}}
     >
-      <div onDoubleClick={(e) => { if (onEdit && !editing) { e.stopPropagation(); onEdit(e); } }} onContextMenu={(e) => { if (onQuickEdit) { e.preventDefault(); e.stopPropagation(); onQuickEdit(e); } }} className="relative box-border flex flex-row gap-2 h-[37px] items-center px-[31px] w-full">
+      <div onDoubleClick={(e) => { if (onEdit && !editing) { e.stopPropagation(); onEdit(e); } }} onContextMenu={(e) => { if (onQuickEdit) { e.preventDefault(); e.stopPropagation(); onQuickEdit(e); } }} className={`relative box-border flex flex-row gap-2 h-[37px] items-center pr-[31px] w-full ${showIndent ? 'pl-[43px]' : 'pl-[31px]'}`}>
+        {/* Project-view rows render the LIndent ⌐ glyph just before the checkbox. List-view rows
+            skip it. This is the only structural diff between project-view and list-view rows. */}
+        {showIndent && <LIndent />}
         {/* Visual grab affordance only â€” absolutely positioned so it doesn't take flex layout space.
             Otherwise the gap-2 after the arrow indents the checkbox 8px past the section labels.
             White when this row IS the drag overlay so it pops while in motion; gray on hover otherwise. */}
@@ -387,8 +399,10 @@ function SortableTaskItem({
             // Compute which meta slots are "active" given the current density. The slot helper
             // already arranges them by user-chosen order — we just suppress the ones the cascade
             // has hidden by passing hasProject/hasClient = false at the right thresholds.
-            const showClient = !!client && density < 4;
-            const showProject = !!project && density < 6;
+            // hideContext (project view): suppress project + client names entirely — they're
+            // redundant under a project header.
+            const showClient = !hideContext && !!client && density < 4;
+            const showProject = !hideContext && !!project && density < 6;
             return taskOrderSlots(taskOrder, showProject, showClient).map((slot, i) => {
               const metaCls = `font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : 'text-[#656464]'}`;
               // Progressive truncation: project name truncates first (density >= 1).
@@ -1269,7 +1283,7 @@ function ProjectViewMode({
       {milestones.length > 0 && (
         <div className="mb-[37px]">
           {milestones.map((t) => (
-            <ProjectTaskRow key={t.id} task={t} listId={listId} onToggle={() => onToggleTask(t.id)} onRename={(title) => onRenameTask(t.id, title)} onDelete={() => onDeleteTask(t.id)} onEdit={() => onEditTask(t)} isAnyDragging={isAnyDragging} autoFocus={t.id === newId} nonDraggable projects={projects} clients={clients} showContext />
+            <SortableTaskItem key={t.id} task={t} onToggle={() => onToggleTask(t.id)} onRename={(title) => onRenameTask(t.id, title)} onDelete={() => onDeleteTask(t.id)} onEdit={() => onEditTask(t)} isAnyDragging={isAnyDragging} autoFocus={t.id === newId} nonDraggable projects={projects} clients={clients} taskOrder={taskOrder} density={density} showIndent />
           ))}
         </div>
       )}
@@ -1279,7 +1293,7 @@ function ProjectViewMode({
             {unassigned.map((t, i) => {
               const { displacementOffset, insertionGap } = projAnimProps(unassigned, t, i);
               return (
-                <ProjectTaskRow key={t.id} task={t} listId={listId} onToggle={() => onToggleTask(t.id)} onRename={(title) => onRenameTask(t.id, title)} onDelete={() => onDeleteTask(t.id)} onEdit={() => onEditTask(t)} onQuickEdit={onQuickEditTask ? () => onQuickEditTask(t) : undefined} onAddSibling={() => addSiblingTask(t)} isAnyDragging={isAnyDragging} taskOrder={taskOrder} density={density} autoFocus={t.id === newId} collapsed={sourceCollapsed && activeProjTaskId === t.id} displacementOffset={displacementOffset} insertionGap={insertionGap} />
+                <SortableTaskItem key={t.id} task={t} onToggle={() => onToggleTask(t.id)} onRename={(title) => onRenameTask(t.id, title)} onDelete={() => onDeleteTask(t.id)} onEdit={() => onEditTask(t)} onQuickEdit={onQuickEditTask ? () => onQuickEditTask(t) : undefined} onAddSibling={() => addSiblingTask(t)} isAnyDragging={isAnyDragging} taskOrder={taskOrder} density={density} autoFocus={t.id === newId} collapsed={sourceCollapsed && activeProjTaskId === t.id} displacementOffset={displacementOffset} insertionGap={insertionGap} projects={projects} clients={clients} showIndent hideContext dragId={`projtask-${listId}-${t.id}`} dragData={{ type: 'projTask', task: t, listId }} />
               );
             })}
           </SortableContext>
@@ -1297,7 +1311,7 @@ function ProjectViewMode({
                     {projTasks.map((t, i) => {
                       const { displacementOffset, insertionGap } = projAnimProps(projTasks, t, i);
                       return (
-                        <ProjectTaskRow key={t.id} task={t} listId={listId} onToggle={() => onToggleTask(t.id)} onRename={(title) => onRenameTask(t.id, title)} onDelete={() => onDeleteTask(t.id)} onEdit={() => onEditTask(t)} onQuickEdit={onQuickEditTask ? () => onQuickEditTask(t) : undefined} onAddSibling={() => addSiblingTask(t)} isAnyDragging={isAnyDragging} taskOrder={taskOrder} density={density} autoFocus={t.id === newId} collapsed={sourceCollapsed && activeProjTaskId === t.id} displacementOffset={displacementOffset} insertionGap={insertionGap} />
+                        <SortableTaskItem key={t.id} task={t} onToggle={() => onToggleTask(t.id)} onRename={(title) => onRenameTask(t.id, title)} onDelete={() => onDeleteTask(t.id)} onEdit={() => onEditTask(t)} onQuickEdit={onQuickEditTask ? () => onQuickEditTask(t) : undefined} onAddSibling={() => addSiblingTask(t)} isAnyDragging={isAnyDragging} taskOrder={taskOrder} density={density} autoFocus={t.id === newId} collapsed={sourceCollapsed && activeProjTaskId === t.id} displacementOffset={displacementOffset} insertionGap={insertionGap} projects={projects} clients={clients} showIndent hideContext dragId={`projtask-${listId}-${t.id}`} dragData={{ type: 'projTask', task: t, listId }} />
                       );
                     })}
                   </SortableContext>
@@ -1329,7 +1343,7 @@ function ProjectViewMode({
                       {projTasks.map((t, i) => {
                         const { displacementOffset, insertionGap } = projAnimProps(projTasks, t, i);
                         return (
-                          <ProjectTaskRow key={t.id} task={t} listId={listId} onToggle={() => onToggleTask(t.id)} onRename={(title) => onRenameTask(t.id, title)} onDelete={() => onDeleteTask(t.id)} onEdit={() => onEditTask(t)} onQuickEdit={onQuickEditTask ? () => onQuickEditTask(t) : undefined} onAddSibling={() => addSiblingTask(t)} isAnyDragging={isAnyDragging} taskOrder={taskOrder} density={density} autoFocus={t.id === newId} collapsed={sourceCollapsed && activeProjTaskId === t.id} displacementOffset={displacementOffset} insertionGap={insertionGap} />
+                          <SortableTaskItem key={t.id} task={t} onToggle={() => onToggleTask(t.id)} onRename={(title) => onRenameTask(t.id, title)} onDelete={() => onDeleteTask(t.id)} onEdit={() => onEditTask(t)} onQuickEdit={onQuickEditTask ? () => onQuickEditTask(t) : undefined} onAddSibling={() => addSiblingTask(t)} isAnyDragging={isAnyDragging} taskOrder={taskOrder} density={density} autoFocus={t.id === newId} collapsed={sourceCollapsed && activeProjTaskId === t.id} displacementOffset={displacementOffset} insertionGap={insertionGap} projects={projects} clients={clients} showIndent hideContext dragId={`projtask-${listId}-${t.id}`} dragData={{ type: 'projTask', task: t, listId }} />
                         );
                       })}
                     </SortableContext>
@@ -1864,7 +1878,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
 
 function SortableProjectRow({ project, listId, onRename, onDelete, onAddTask, autoFocus, isAnyDragging }: { project: Project; listId: ListId; onRename: (id: string, name: string) => void; onDelete: (id: string) => void; onAddTask: (projectId: string, listId: ListId) => void; autoFocus?: boolean; isAnyDragging?: boolean }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: `projrow-${listId}-${project.id}`, data: { type: 'project', project, listId } });
-  const style = { transform: CSS.Transform.toString(transform), transition: isAnyDragging ? 'transform 360ms cubic-bezier(0.22, 1, 0.36, 1)' : 'none', opacity: isDragging ? 0 : 1 };
+  const style = { transform: CSS.Transform.toString(transform), transition: isAnyDragging ? `transform ${MOTION.displace}ms ${MOTION.easeOut}` : 'none', opacity: isDragging ? 0 : 1 };
   const bodyFont = "font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap";
   return (
     <motion.div
@@ -1920,9 +1934,20 @@ function LIndent() {
   );
 }
 
-function ProjectTaskRow({ task, listId, onToggle, onRename, onDelete, onEdit, onQuickEdit, onAddSibling, isAnyDragging, autoFocus, collapsed, nonDraggable = false, projects = [], clients = [], showContext = false, displacementOffset = 0, insertionGap = 0, taskOrder = 'ptc', density = 0 }: { task: Task; listId: ListId; onToggle: () => void; onRename: (t: string) => void; onDelete?: () => void; onEdit?: () => void; onQuickEdit?: () => void; onAddSibling?: () => void; isAnyDragging?: boolean; autoFocus?: boolean; collapsed?: boolean; nonDraggable?: boolean; projects?: Project[]; clients?: Client[]; showContext?: boolean; displacementOffset?: number; insertionGap?: number; taskOrder?: TaskOrder; density?: number }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: `projtask-${listId}-${task.id}`, data: { type: 'projTask', task, listId } });
-  const style = { transform: CSS.Transform.toString(transform), transition: isAnyDragging ? `transform ${MOTION.base}ms ${MOTION.easeOut}` : 'none' };
+function ProjectTaskRow({ task, listId, onToggle, onRename, onDelete, onEdit, onQuickEdit, onAddSibling, isAnyDragging, autoFocus, collapsed, nonDraggable = false, projects = [], clients = [], showContext = false, displacementOffset = 0, insertionGap = 0, taskOrder = 'ptc', density = 0, isDragOverlay = false }: { task: Task; listId: ListId; onToggle: () => void; onRename: (t: string) => void; onDelete?: () => void; onEdit?: () => void; onQuickEdit?: () => void; onAddSibling?: () => void; isAnyDragging?: boolean; autoFocus?: boolean; collapsed?: boolean; nonDraggable?: boolean; projects?: Project[]; clients?: Client[]; showContext?: boolean; displacementOffset?: number; insertionGap?: number; taskOrder?: TaskOrder; density?: number; isDragOverlay?: boolean }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging: isDraggingRaw } = useSortable({ id: `projtask-${listId}-${task.id}`, data: { type: 'projTask', task, listId } });
+  // Overlay clone shares the SOURCE id, so its useSortable also reports isDragging=true. Force
+  // it to false on the clone so the ghost stays fully visible (the source alone fades).
+  const isDragging = isDragOverlay ? false : isDraggingRaw;
+  // In the overlay, neutralize useSortable's transform on the clone (it would otherwise re-apply
+  // the source row's reorder transform to the overlay and produce a vertical jump). Outside, apply
+  // the transform so dnd-kit's native make-room animates within the SortableContext.
+  const style: React.CSSProperties = isDragOverlay
+    ? { transform: undefined, transition: 'none' }
+    : {
+        transform: CSS.Transform.toString(transform),
+        transition: !isAnyDragging ? 'none' : `transform ${MOTION.base}ms ${MOTION.easeOut}`,
+      };
   const bodyFont = "font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap";
   const isScheduled = task.type === 'scheduled';
   const isNext = task.section === 'next' || task.section === 'tomorrow';
@@ -1935,22 +1960,30 @@ function ProjectTaskRow({ task, listId, onToggle, onRename, onDelete, onEdit, on
   // Personal-client tasks render the hollow assignee badge regardless of whether project context is shown.
   const ownerProject = task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
   const isPersonal = (task.clientId ?? ownerProject?.clientId) === PERSONAL_CLIENT_ID;
+  // Project view uses ONLY dnd-kit's native useSortable transform for displacement (no Displaced
+  // wrapper). The nested SortableContexts (one per project) make stacking our own transform on
+  // top of dnd-kit's auto-displacement go haywire ("buck wild"). dnd-kit alone displaces same-
+  // bucket rows cleanly; cross-bucket drops still work via collision detection even without a
+  // visual cue, which keeps the drag feeling solid and predictable.
   return (
-    <Displaced offset={displacementOffset} gap={insertionGap} active={!!isAnyDragging}>
-    {/* Whole-card drag â€” see SortableTaskItem for the rationale. */}
-    {/* Source slot keeps its 37px layout space â€” see SortableTaskItem for rationale. */}
     <motion.div
       ref={setNodeRef}
       style={style}
-      data-task-row={task.id}
-      {...(nonDraggable ? {} : attributes)}
-      {...(nonDraggable ? {} : listeners)}
-      className={`relative shrink-0 w-full group overflow-hidden ${nonDraggable ? '' : 'cursor-grab active:cursor-grabbing'}`}
-      animate={{ opacity: isDragging ? 0 : 1 }}
-      transition={{ opacity: { duration: 0.12, ease: 'easeOut' } }}
-      whileHover={!isDragging ? { backgroundColor: "rgba(255, 255, 255, 0.03)", transition: { duration: 0.15 } } : {}}
-      onDoubleClick={(e) => { if (onEdit) { e.stopPropagation(); onEdit(); } }}
-      onContextMenu={(e) => { if (onQuickEdit) { e.preventDefault(); e.stopPropagation(); onQuickEdit(); } }}
+      data-task-row={isDragOverlay ? undefined : task.id}
+      {...(nonDraggable || isDragOverlay ? {} : attributes)}
+      {...(nonDraggable || isDragOverlay ? {} : listeners)}
+      className={`relative shrink-0 w-full group overflow-hidden ${nonDraggable || isDragOverlay ? '' : 'cursor-grab active:cursor-grabbing'} ${isDragOverlay ? 'z-50 bg-[#333333]' : ''}`}
+      animate={{
+        scale: isDragOverlay ? 1.01 : 1,
+        opacity: isDragging ? 0 : 1,
+      }}
+      transition={{
+        scale: { duration: 0.18 },
+        opacity: isDragging ? { duration: 0.12, ease: 'easeOut' } : { duration: 0 },
+      }}
+      whileHover={!isDragging && !isDragOverlay ? { backgroundColor: "rgba(255, 255, 255, 0.03)", transition: { duration: 0.15 } } : {}}
+      onDoubleClick={(e) => { if (onEdit && !isDragOverlay) { e.stopPropagation(); onEdit(); } }}
+      onContextMenu={(e) => { if (onQuickEdit && !isDragOverlay) { e.preventDefault(); e.stopPropagation(); onQuickEdit(); } }}
     >
       <div className="box-border flex flex-row gap-2 h-[37px] items-center pl-[43px] pr-[31px] w-full">
         {/* Visual grab affordance only â€” the whole row is the drag handle, this is the icon hint. */}
@@ -2016,7 +2049,6 @@ function ProjectTaskRow({ task, listId, onToggle, onRename, onDelete, onEdit, on
         )}
       </div>
     </motion.div>
-    </Displaced>
   );
 }
 
@@ -2679,6 +2711,12 @@ export default function App() {
     if (activeCalendarCellId) return;
     // Dashboard drags are strictly horizontally locked â€” never snap to an adjacent column.
     if (activeId.startsWith('dash:')) return;
+    // Project view drags: there are no neighboring columns to snap to (project view is a single
+    // wide canvas grouped vertically). Letting the snap fire makes the overlay leap a full row's
+    // width sideways when the cursor crosses the half-width dead-zone — that was the "card not
+    // tracking, over about a row to the right" behavior. Project rows AND project tasks both lock
+    // 1:1 to the cursor.
+    if (activeId.startsWith('projtask-') || activeId.startsWith('projrow-')) return;
     const onMove = (ev: PointerEvent) => {
       if (startXRef.current === null) startXRef.current = ev.clientX;
       const colWidth = activeRectWidth || 440;
@@ -3293,7 +3331,7 @@ export default function App() {
     const milestones = listId === 'dashboard' ? [] : (tasksByKey[`${listId}:milestones`] || []);
     return (
       <div key={listId} className="flex-1 min-w-[280px]">
-        <p className={`font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] px-[35px] mb-[74px] ${listId === 'dashboard' ? 'text-[#8465ff]' : 'text-white'}`}>
+        <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] px-[35px] mb-[74px] text-white">
           {LIST_TITLES[listId]}
           {listId === 'dashboard' && (
             <span> ({people.find((p) => p.short === currentUserShort)?.name || currentUserShort})</span>
@@ -3576,15 +3614,17 @@ export default function App() {
               <motion.div
                 initial={{ scale: 1, x: 0 }}
                 animate={{
-                  scale: 1.02,
+                  scale: 1.01,
                   x: columnOffset * (activeRectWidth || 440),
-                  boxShadow: "0 1.875px 7.5px -0.625px rgba(0, 0, 0, 0.35), 0 1.25px 3.125px -0.3125px rgba(0, 0, 0, 0.25)",
+                  boxShadow: "0 3px 10.5px -1.5px rgba(0, 0, 0, 0.225), 0 1.5px 4.5px -0.75px rgba(0, 0, 0, 0.175)",
                 }}
                 transition={{
-                  scale: { type: "spring", stiffness: 600, damping: 30, mass: 0.4 },
+                  scale: { type: "spring", stiffness: 360, damping: 36, mass: 0.65 },
                   x: { type: "spring", stiffness: 320, damping: 34, mass: 0.7 },
                 }}
-                className="bg-[#333333]"
+                // Things-inspired pill shape: heavy rounding so the lifted card reads
+                // distinctly from the resting list rows. Solid background + stronger shadow.
+                className="bg-[#3a3a3a]"
                 style={{ width: activeRectWidth, willChange: 'transform' }}
               >
                 <SortableTaskItem task={activeTask} onToggle={() => {}} isDragOverlay projects={projects} clients={clients} />
@@ -3595,11 +3635,11 @@ export default function App() {
             <motion.div
               initial={{ scale: 1 }}
               animate={{
-                scale: 1.02,
-                boxShadow: "0 1.875px 7.5px -0.625px rgba(0, 0, 0, 0.35), 0 1.25px 3.125px -0.3125px rgba(0, 0, 0, 0.25)",
+                scale: 1.01,
+                boxShadow: "0 3px 10.5px -1.5px rgba(0, 0, 0, 0.225), 0 1.5px 4.5px -0.75px rgba(0, 0, 0, 0.175)",
               }}
-              transition={{ scale: { type: "spring", stiffness: 600, damping: 30, mass: 0.4 } }}
-              className="bg-[#333333] h-[37px] box-border flex flex-row gap-2 items-center px-[31px]"
+              transition={{ scale: { type: "spring", stiffness: 360, damping: 36, mass: 0.65 } }}
+              className="bg-[#3a3a3a] h-[37px] box-border flex flex-row gap-2 items-center px-[31px]"
               style={{ width: activeRectWidth, willChange: 'transform' }}
             >
               <Folder size={12} className="text-[#656464]" />
@@ -3607,23 +3647,34 @@ export default function App() {
             </motion.div>
           ) : null}
           {activeProjTask ? (
+            // EXACTLY mirrors the list-view overlay (line ~3614) — same wrapper motion props,
+            // same SortableTaskItem clone inside. The only difference is showIndent/hideContext
+            // for the project-row look and dragId/dragData to satisfy useSortable's identity.
             <motion.div
-              initial={{ scale: 1, x: 0 }}
+              initial={{ scale: 1 }}
               animate={{
-                scale: 1.02,
-                x: columnOffset * (activeRectWidth || 440),
-                boxShadow: "0 1.875px 7.5px -0.625px rgba(0, 0, 0, 0.35), 0 1.25px 3.125px -0.3125px rgba(0, 0, 0, 0.25)",
+                scale: 1.01,
+                boxShadow: "0 3px 10.5px -1.5px rgba(0, 0, 0, 0.225), 0 1.5px 4.5px -0.75px rgba(0, 0, 0, 0.175)",
               }}
               transition={{
-                scale: { type: "spring", stiffness: 600, damping: 30, mass: 0.4 },
-                x: { type: "spring", stiffness: 320, damping: 34, mass: 0.7 },
+                scale: { type: "spring", stiffness: 360, damping: 36, mass: 0.65 },
               }}
-              className="bg-[#333333] h-[37px] box-border flex flex-row gap-2 items-center pl-[43px] pr-[31px]"
+              className="bg-[#3a3a3a]"
               style={{ width: activeRectWidth, willChange: 'transform' }}
             >
-              <LIndent />
-              <TaskCheckbox completed={activeProjTask.completed} onToggle={() => {}} />
-              <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap ${activeProjTask.completed ? 'text-[#383838]' : 'text-white'}`}>{activeProjTask.title}</span>
+              <SortableTaskItem
+                task={activeProjTask}
+                onToggle={() => {}}
+                isDragOverlay
+                projects={projects}
+                clients={clients}
+                taskOrder={taskOrder}
+                density={density}
+                showIndent
+                hideContext
+                dragId={`projtask-${(activeProjTask.list as ListId) || 'projects'}-${activeProjTask.id}`}
+                dragData={{ type: 'projTask', task: activeProjTask, listId: (activeProjTask.list as ListId) || 'projects' }}
+              />
             </motion.div>
           ) : null}
         </DragOverlay>
