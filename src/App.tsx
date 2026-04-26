@@ -1674,7 +1674,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
     <div
       ref={setNodeRef}
       style={{ ...style, opacity: isDragging ? 0 : 1, transition: isAnyDragging ? `${style.transition || 'none'}, opacity 120ms ease-out` : 'opacity 120ms ease-out' }}
-      className={`relative mx-[6px] rounded-md bg-[#333333] border border-[#444444] group ${dimmed ? 'opacity-60' : ''}`}
+      className={`relative mx-[6px] bg-white/[0.03] group ${dimmed ? 'opacity-60' : ''}`}
     >
       <div onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} onContextMenu={(e) => { if (onQuickEdit) { e.preventDefault(); e.stopPropagation(); onQuickEdit(); } }} {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing pl-[10px] pr-[10px] py-[6px] flex flex-row items-start gap-[10px] overflow-hidden">
         {!isScheduled && (
@@ -4340,7 +4340,7 @@ export default function App() {
                   boxShadow: "0 1.875px 7.5px -0.625px rgba(0, 0, 0, 0.35), 0 1.25px 3.125px -0.3125px rgba(0, 0, 0, 0.25)",
                 }}
                 transition={{ scale: { type: "spring", stiffness: 600, damping: 30, mass: 0.4 } }}
-                className="rounded-md bg-[#333333] overflow-hidden"
+                className="bg-white/[0.03] overflow-hidden"
                 style={{ width: activeRectWidth, height: activeRectHeight, willChange: 'transform' }}
               >
                 <CalendarCardBody task={activeTask} projects={projects} clients={clients} taskOrder={taskOrder} />
