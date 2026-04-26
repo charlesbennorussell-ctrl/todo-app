@@ -3379,8 +3379,10 @@ export default function App() {
   }), [clients]);
   const renderProjectGroupedColumn = (listId: ListId) => {
     // Render a sortable bucket of tasks with the project-view-2 visual flags. Same wiring as
-    // list view's renderBucket but with showIndent/hideContext baked in.
-    const renderProjectBucket = (list: Task[], idPrefix: string) => (
+    // list view's renderBucket. The third arg toggles the LIndent ⌐ prefix — true for tasks
+    // under a project header, false for the orphan tasks at the column top (no parent to indent
+    // under, so the indent reads as visual noise).
+    const renderProjectBucket = (list: Task[], idPrefix: string, indent: boolean) => (
       <SortableContext items={list.map((t) => `${idPrefix}${t.id}`)} strategy={verticalListSortingStrategy}>
         <AnimatePresence>
           {list.map((task, index) => {
@@ -3406,7 +3408,7 @@ export default function App() {
                 clients={clients}
                 taskOrder={taskOrder}
                 density={density}
-                showIndent
+                showIndent={indent}
                 hideContext
               />
             );
@@ -3453,7 +3455,7 @@ export default function App() {
         </p>
         {orphans.length > 0 && (
           <div className="mb-[37px]">
-            {renderProjectBucket(orphans, `proj2:${listId}:none:`)}
+            {renderProjectBucket(orphans, `proj2:${listId}:none:`, false)}
           </div>
         )}
         {clientBlocks.map(({ client: c, projects: clientProjects }, ci) => (
@@ -3474,7 +3476,7 @@ export default function App() {
                     <Folder size={12} className="text-[#656464]" />
                     <span className={`${proj2BodyFont} text-white`}>{p.name}</span>
                   </div>
-                  {projTasks.length > 0 && renderProjectBucket(projTasks, `proj2:${listId}:${p.id}:`)}
+                  {projTasks.length > 0 && renderProjectBucket(projTasks, `proj2:${listId}:${p.id}:`, true)}
                 </div>
               );
             })}
