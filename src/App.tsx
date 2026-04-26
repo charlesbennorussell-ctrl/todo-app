@@ -1821,8 +1821,8 @@ function WeekCalendarMode({
     // Milestone calendar cards match regular calendar cards: square + hover-tint bg + no
     // stroke; Title always on line 1; meta on line 2. Milestone purple is preserved on the
     // title and the second-row meta to mark them visually.
+    // Milestones never get the box — the purple title alone reads as the accent.
     return (
-      {/* Milestones never get the box — the purple title alone reads as the accent. */}
       <div onDoubleClick={(e) => { e.stopPropagation(); onEditTask(task); }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onQuickEditTask?.(task); }} className="relative mx-[6px] mb-[4px] cursor-pointer">
         <div className="px-[10px] py-[6px] flex flex-col gap-[2px]">
           {/* Completed milestones lose the box AND drop the milestone purple — every glyph
