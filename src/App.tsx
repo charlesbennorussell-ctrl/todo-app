@@ -630,12 +630,6 @@ function BottomBar({ mode, onSetMode, onAdd }: { mode: AppMode; onSetMode: (m: A
       <div className="flex flex-row gap-10 items-center justify-self-start">
         <button onClick={() => onSetMode('dashboard')} className={iconClass(mode === 'dashboard')}><List size={22} /></button>
         <button onClick={() => onSetMode('projectView')} className={iconClass(mode === 'projectView')}><FolderTree size={22} /></button>
-        {/* Project View 2 — fresh build off list view's drag tech, side-by-side with the legacy
-            project view so the user can A/B them. Tiny "2" badge in the bottom-right corner. */}
-        <button onClick={() => onSetMode('projectView2')} className={`${iconClass(mode === 'projectView2')} relative`}>
-          <FolderTree size={22} />
-          <span className="absolute -bottom-[2px] -right-[2px] text-[8px] leading-none font-bold bg-[#7363FF] text-white rounded-full px-[3px] py-[1px]">2</span>
-        </button>
         <button onClick={() => onSetMode('calendar')} className={iconClass(mode === 'calendar')}><CalendarIcon size={22} /></button>
       </div>
       {/* Center column: + add-task button, dead-centered in the bottom bar. */}
@@ -3686,12 +3680,12 @@ export default function App() {
             {LISTS.map(renderColumn)}
           </div>
         )}
-        {mode === 'projectView2' && (
-          // FRESH PROJECT VIEW — built from list view's renderColumn, grouping tasks by project.
+        {mode === 'projectView' && (
+          // PROJECT VIEW — built from list view's renderColumn, grouping tasks by project.
           // Inherits ALL of list view's working drag mechanics 1:1 (renderBucket, SortableTaskItem,
           // getAnimationProps, the existing DragOverlay path). The only diff is the column body
           // uses renderProjectGroupedColumn (with client > project hierarchy) instead of
-          // renderColumn. Dashboard column is dropped — first column is now Resources + Clients.
+          // renderColumn. The Dashboard column is replaced with a Resources + Clients sidebar.
           <div className="pt-[106px] pb-[140px] flex gap-0">
             {/* Sidebar: Resources (people) + Clients */}
             <div className="flex-1 min-w-[280px]">
@@ -3723,41 +3717,8 @@ export default function App() {
             {(['work', 'projects', 'admin'] as ListId[]).map((l) => renderProjectGroupedColumn(l))}
           </div>
         )}
-        {mode === 'projectView' && (
-          <ProjectViewMode
-            projects={projects}
-            clients={clients}
-            tasks={visibleTasks}
-            people={people}
-            newId={newId}
-            isAnyDragging={!!activeId}
-            isDraggingProjTask={activeType === 'projTask'}
-            activeProjTaskId={activeProjTask?.id ?? null}
-            activeProjTask={activeProjTask}
-            overProjTask={overProjTask}
-            sourceCollapsed={sourceCollapsed}
-            onToggleTask={toggleTask}
-            onRenameTask={renameTask}
-            onDeleteTask={deleteTask}
-            onEditTask={openEdit}
-            onQuickEditTask={openQuick}
-            taskOrder={taskOrder}
-            density={density}
-            onAddTaskToProject={addTaskToProject}
-            onAddTaskInList={addBlankTaskInList}
-            onAddProjectInList={(l, clientId) => addBlankProject(clientId, l)}
-            onAddClient={addBlankClient}
-            onRenameClient={renameClient}
-            onRenameClientShort={renameClientShort}
-            onDeleteClient={deleteClient}
-            onAddProject={addBlankProject}
-            onRenameProject={renameProject}
-            onDeleteProject={deleteProject}
-            onAddPerson={addPerson}
-            onDeletePerson={deletePerson}
-            currentUserShort={currentUserShort}
-          />
-        )}
+        {/* Legacy ProjectViewMode removed — `mode === 'projectView'` now renders the new
+            project view above (built off list view's drag tech). */}
         {mode === 'calendar' && (
           <WeekCalendarMode
             tasks={visibleTasks}
