@@ -236,7 +236,7 @@ const Displaced = memo(function Displaced({
 
 function SortableTaskItem({
   task, onToggle, onRename, onDelete, onEdit, onQuickEdit, onAddSibling, onReschedule, autoFocus = false, isDragOverlay = false, displacementOffset = 0, insertionGap = 0, isAnyDragging = false, collapsed = false, projects = [], clients = [], nonDraggable = false, idPrefix = '', taskOrder = 'ptc', density = 0,
-  showIndent = false, hideContext = false,
+  showIndent = false, hideContext = false, showLIndentGlyph,
 }: {
   task: Task; onToggle: () => void; onRename?: (title: string) => void; onDelete?: () => void; onEdit?: (e?: React.MouseEvent) => void; onQuickEdit?: (e?: React.MouseEvent) => void; onAddSibling?: () => void; onReschedule?: (kind: 'tomorrow' | 'nextWeek') => void; autoFocus?: boolean; isDragOverlay?: boolean; displacementOffset?: number; insertionGap?: number; isAnyDragging?: boolean; collapsed?: boolean; projects?: Project[]; clients?: Client[]; nonDraggable?: boolean;
   taskOrder?: TaskOrder;
@@ -246,11 +246,19 @@ function SortableTaskItem({
   // dashboard sub-list AND work column) without sharing a sortable id â€” otherwise picking up one
   // instance would mark BOTH as the active drag and fade them simultaneously.
   idPrefix?: string;
-  // PROJECT VIEW 2: lets the same component render the project-view look (LIndent + no
-  // project/client meta) without forking. Pure visual flags — no effect on drag mechanics.
+  // PROJECT VIEW 2 visual flags (no effect on drag mechanics):
+  //   showIndent       — pad the row to pl-[43px] so it aligns under a project header.
+  //                       Applied to EVERY task in a project bucket so they line up.
+  //   showLIndentGlyph — render the ⌐ tree-connector glyph itself. Tree-view convention is to
+  //                       show this only on the FIRST child of a parent (the connector reads as
+  //                       "parent → first child"); subsequent children just align via padding.
+  //                       Defaults to whatever `showIndent` is for backwards compat.
+  //   hideContext      — suppress the project/client meta slots (redundant under a project header)
   showIndent?: boolean;
   hideContext?: boolean;
+  showLIndentGlyph?: boolean;
 }) {
+  const renderLIndentGlyph = showLIndentGlyph ?? showIndent;
   const project = task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
   // Prefer the task's explicit clientId, fall back to the project's owning client.
   const resolvedClientId = task.clientId ?? project?.clientId;
@@ -371,8 +379,11 @@ function SortableTaskItem({
       whileHover={!isDragging && !isDragOverlay ? { backgroundColor: "rgba(255, 255, 255, 0.03)", transition: { duration: 0.15 } } : {}}
     >
       <div onDoubleClick={(e) => { if (onEdit && !editing) { e.stopPropagation(); onEdit(e); } }} onContextMenu={(e) => { if (onQuickEdit) { e.preventDefault(); e.stopPropagation(); onQuickEdit(e); } }} className={`relative box-border flex flex-row gap-2 h-[37px] items-center pr-[31px] w-full ${showIndent ? 'pl-[43px]' : 'pl-[31px]'}`}>
-        {/* Project-view-2 rows render the LIndent ⌐ glyph just before the checkbox. */}
-        {showIndent && <LIndent />}
+        {/* The LIndent ⌐ glyph slot. ALWAYS reserve the 12px width when showIndent is on so
+            rows align across the bucket — only the first row in the group actually renders the
+            glyph (tree-connector convention). Subsequent rows get a sized spacer so their
+            checkbox lands at the same X as the first row's. */}
+        {showIndent && (renderLIndentGlyph ? <LIndent /> : <div className="shrink-0 w-[12px] h-[12px]" />)}
         {/* Visual grab affordance only â€” absolutely positioned so it doesn't take flex layout space.
             Otherwise the gap-2 after the arrow indents the checkbox 8px past the section labels.
             White when this row IS the drag overlay so it pops while in motion; gray on hover otherwise. */}
@@ -3409,6 +3420,7 @@ export default function App() {
                 taskOrder={taskOrder}
                 density={density}
                 showIndent={indent}
+                showLIndentGlyph={indent && index === 0}
                 hideContext
               />
             );
