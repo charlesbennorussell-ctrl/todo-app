@@ -529,10 +529,12 @@ function SortableTaskItem({
                 }));
               }
             }}
-            className={`font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] outline-none whitespace-nowrap ${titleColor} ${!isScheduled && onRename ? 'cursor-text' : ''}`}
-            // Empty / very-short titles still need a comfortable click target — give the editable
-            // span a ~5-char-wide min-width (40px at 14px font) so it's easy to hit without
-            // bleeding into the empty row space (which the user reserves for drag-grabbing).
+            className={`font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] outline-none whitespace-nowrap ${titleColor} ${!isScheduled && onRename ? 'cursor-text px-[7px] -mx-[7px]' : ''}`}
+            // 1-char (~7px @ 14px) padding on each side, cancelled out by negative margin so the
+            // text doesn't shift visually. Net effect: the click hotspot extends ~7px past the
+            // first and last characters, so clicking just before/after the title still places
+            // the caret instead of falling through to the row's drag handle. Empty / very-short
+            // titles still need a comfortable min-width (40px = ~5 chars) for the same reason.
             style={(task.title || '').length <= 1 ? { minWidth: '40px' } : undefined}
           >{task.title}</span>
               );
