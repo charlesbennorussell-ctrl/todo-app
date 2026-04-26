@@ -423,7 +423,7 @@ function SortableTaskItem({
             data-task-title={task.id}
             onPointerDown={(e) => {
               if (editing) { e.stopPropagation(); return; }
-              if (isScheduled || !onRename) return;
+              if (!onRename) return;
               // Imperatively flip contentEditable + focus + place caret in the SAME pointerdown
               // tick, BEFORE React re-renders. This is what enables drag-to-select on the very
               // first click (browser needs contentEditable=true at pointerdown time to engage
@@ -531,7 +531,7 @@ function SortableTaskItem({
                 }));
               }
             }}
-            className={`relative z-10 font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] outline-none whitespace-nowrap ${titleColor} ${!isScheduled && onRename ? 'cursor-text pl-[7px] -ml-[7px]' : ''}`}
+            className={`relative z-10 font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] outline-none whitespace-nowrap ${titleColor} ${onRename ? 'cursor-text pl-[7px] -ml-[7px]' : ''}`}
             // Hotspot tolerance:
             //   left  — 7px padding offset by negative margin so text doesn't shift
             //   right — handled by an absolutely-positioned spacer rendered AFTER the span (see
@@ -552,7 +552,7 @@ function SortableTaskItem({
               handler fires and lands the caret at the end. Lives outside the title span (so it
               isn't part of the contentEditable's text) but inside the same flex row, claiming
               real layout space — that's why DOM-order hit testing actually picks it up. */}
-          {!isScheduled && onRename && (
+          {onRename && (
             <span
               aria-hidden
               className="cursor-text shrink-0 self-stretch w-[7px]"
