@@ -3368,12 +3368,18 @@ export default function App() {
   };
 
   // PROJECT VIEW 2: built fresh from the list view (renderColumn). Same column shape, same
-  // drag mechanics — but tasks grouped by their owning project instead of by section. Each
-  // project becomes a header followed by a renderBucket() of its tasks. renderBucket uses
-  // SortableTaskItem with showIndent + hideContext so the visuals match the legacy project view.
+  // drag mechanics — but tasks grouped under client > project headers instead of by section.
+  // renderBucket inside uses SortableTaskItem with showIndent + hideContext so visuals match
+  // the legacy project view (LIndent, no redundant project/client meta on rows).
+  const proj2BodyFont = "font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap";
+  const proj2SortedClients = useMemo(() => [...clients].sort((a, b) => {
+    if (a.id === PERSONAL_CLIENT_ID) return -1;
+    if (b.id === PERSONAL_CLIENT_ID) return 1;
+    return a.name.localeCompare(b.name);
+  }), [clients]);
   const renderProjectGroupedColumn = (listId: ListId) => {
-    // Wrap in renderBucket but with project-view-2 visual flags. renderBucket itself doesn't take
-    // those flags — we inline a copy here that does.
+    // Render a sortable bucket of tasks with the project-view-2 visual flags. Same wiring as
+    // list view's renderBucket but with showIndent/hideContext baked in.
     const renderProjectBucket = (list: Task[], idPrefix: string) => (
       <SortableContext items={list.map((t) => `${idPrefix}${t.id}`)} strategy={verticalListSortingStrategy}>
         <AnimatePresence>
@@ -3408,50 +3414,70 @@ export default function App() {
         </AnimatePresence>
       </SortableContext>
     );
-    // Gather tasks for this list, group by project. Tasks without a project go under "(No project)".
+    // Gather all tasks visible in this list (across all sections — Project View 2 doesn't carve
+    // by today/tomorrow/next, it carves by client > project).
     const allTasks = (tasksByKey[`${listId}:today`] || [])
       .concat(tasksByKey[`${listId}:tomorrow`] || [])
       .concat(tasksByKey[`${listId}:next`] || [])
       .concat(tasksByKey[`${listId}:inbox`] || []);
-    const projectsHere = new Map<string, Task[]>();
+    // Map projectId → tasks (non-projected tasks go to orphans)
+    const tasksByProject = new Map<string, Task[]>();
     const orphans: Task[] = [];
     for (const t of allTasks) {
       if (t.projectId && projects.find((p) => p.id === t.projectId)) {
-        const arr = projectsHere.get(t.projectId) || [];
+        const arr = tasksByProject.get(t.projectId) || [];
         arr.push(t);
-        projectsHere.set(t.projectId, arr);
+        tasksByProject.set(t.projectId, arr);
       } else {
         orphans.push(t);
       }
     }
-    const projectOrder = projects.filter((p) => projectsHere.has(p.id));
+    // Build the client > projects hierarchy. A client appears in this column if any of its
+    // projects has tasks here OR is pinned to this list.
+    const clientBlocks = proj2SortedClients
+      .map((c) => {
+        const clientProjects = projects
+          .filter((p) => p.clientId === c.id)
+          .filter((p) => {
+            if (p.list) return p.list === listId;
+            // Unpinned project: show in 'projects' list as default home, plus anywhere it has tasks here
+            return listId === 'projects' || tasksByProject.has(p.id);
+          });
+        return { client: c, projects: clientProjects };
+      })
+      .filter((b) => b.projects.length > 0);
     return (
       <div key={listId} className="flex-1 min-w-[280px]">
         <p className={`font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] px-[35px] mb-[74px] text-white`}>
           {LIST_TITLES[listId]}
         </p>
-        {projectOrder.map((p) => {
-          const projTasks = projectsHere.get(p.id)!;
-          const client = clients.find((c) => c.id === p.clientId);
-          const headerLabel = client && client.short !== 'Personal' ? `${client.short} ${p.name}` : p.name;
-          return (
-            <div key={p.id} className="mb-[37px]">
-              <div className="h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]">
-                <Folder size={12} className="text-[#656464]" />
-                <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] text-white whitespace-nowrap">{headerLabel}</span>
-              </div>
-              {renderProjectBucket(projTasks, `proj2:${listId}:${p.id}:`)}
-            </div>
-          );
-        })}
         {orphans.length > 0 && (
           <div className="mb-[37px]">
-            <div className="h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]">
-              <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] text-[#656464] whitespace-nowrap">(no project)</span>
-            </div>
             {renderProjectBucket(orphans, `proj2:${listId}:none:`)}
           </div>
         )}
+        {clientBlocks.map(({ client: c, projects: clientProjects }, ci) => (
+          <div key={c.id}>
+            {ci > 0 && <Spacer />}
+            {/* Client subheader — gray label, indented to align with project headers */}
+            <div className="h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px]">
+              <p className={`${proj2BodyFont} text-[#656464]`}>{c.name}</p>
+            </div>
+            {clientProjects.map((p) => {
+              const projTasks = tasksByProject.get(p.id) || [];
+              return (
+                <div key={p.id} className="mb-[37px]">
+                  {/* Project header — folder icon + project name */}
+                  <div className="h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]">
+                    <Folder size={12} className="text-[#656464]" />
+                    <span className={`${proj2BodyFont} text-white`}>{p.name}</span>
+                  </div>
+                  {projTasks.length > 0 && renderProjectBucket(projTasks, `proj2:${listId}:${p.id}:`)}
+                </div>
+              );
+            })}
+          </div>
+        ))}
       </div>
     );
   };
@@ -3536,9 +3562,37 @@ export default function App() {
           // FRESH PROJECT VIEW — built from list view's renderColumn, grouping tasks by project.
           // Inherits ALL of list view's working drag mechanics 1:1 (renderBucket, SortableTaskItem,
           // getAnimationProps, the existing DragOverlay path). The only diff is the column body
-          // uses renderProjectGroupedColumn instead of renderColumn.
+          // uses renderProjectGroupedColumn (with client > project hierarchy) instead of
+          // renderColumn. Dashboard column is dropped — first column is now Resources + Clients.
           <div className="pt-[106px] pb-[140px] flex gap-0">
-            {LISTS.map((l) => renderProjectGroupedColumn(l))}
+            {/* Sidebar: Resources (people) + Clients */}
+            <div className="flex-1 min-w-[280px]">
+              <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[74px]">
+                <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Resources</p>
+                <AddPlus onClick={addPerson} />
+              </div>
+              {people.map((p) => (
+                <ResourceRow key={p.id} person={p} bodyFont={proj2BodyFont} onDelete={() => deletePerson(p.id)} />
+              ))}
+              <Spacer />
+              <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[74px]">
+                <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Clients</p>
+                <AddPlus onClick={addBlankClient} />
+              </div>
+              {proj2SortedClients.map((c) => (
+                <ClientRow
+                  key={c.id}
+                  client={c}
+                  autoFocus={c.id === newId}
+                  bodyFont={proj2BodyFont}
+                  onRenameName={(v) => renameClient(c.id, v)}
+                  onRenameShort={(v) => renameClientShort(c.id, v)}
+                  onDelete={() => deleteClient(c.id)}
+                  currentUserShort={currentUserShort}
+                />
+              ))}
+            </div>
+            {(['work', 'projects', 'admin'] as ListId[]).map((l) => renderProjectGroupedColumn(l))}
           </div>
         )}
         {mode === 'projectView' && (
