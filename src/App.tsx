@@ -2816,14 +2816,14 @@ export default function App() {
     setTasks((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
-  // Sentence-case auto-converter. ~3 seconds after the last edit on a given task title (or
-  // project/client name), rewrite "Title Case" → "Sentence case" while preserving brand-name
-  // and acronym capitalization. Vocabulary = client.short / client.name / project.name /
-  // person.short / person.name. Anything in ALL CAPS stays that way too.
-  const sentenceCaseTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
-  const SENTENCE_CASE_DELAY_MS = 2500;
-  // Vocabulary stays a ref so the debounced timer always sees the latest entries without
-  // restarting the timer when clients/projects/people mutate.
+  // Sentence-case auto-converter. Queues pending conversions; flushes ONLY when the user
+  // takes their next concrete action elsewhere (edits a different item, drags something).
+  // Earlier behavior fired on a timer which felt aggressive — titles morphed under the user's
+  // cursor without any explicit hand-off. Now the conversion waits for an explicit "I'm
+  // done with that one, on to the next" signal.
+  // Pending key format: "task:<id>" | "proj:<id>" | "cli:<id>".
+  const pendingSentenceCase = useRef<Set<string>>(new Set());
+  // Vocabulary stays a ref so the converter always sees the latest entries without re-binding.
   const vocabRef = useRef<string[]>([]);
   useEffect(() => {
     const vocab: string[] = [];
@@ -2862,52 +2862,66 @@ export default function App() {
       return lead + (isFirst ? titleCase : lower) + trail;
     }).join('');
   }, []);
-  const scheduleSentenceCase = useCallback((taskId: string) => {
+  // Convert all pending items EXCEPT the one currently being edited (so we don't sentence-case
+  // a title the user is actively typing in). Called on every concrete user action elsewhere.
+  const flushPendingSentenceCase = useCallback((excludeKey?: string) => {
     if (!sentenceCaseEnabled) return;
-    const existing = sentenceCaseTimers.current.get(taskId);
-    if (existing) clearTimeout(existing);
-    const timer = setTimeout(() => {
-      sentenceCaseTimers.current.delete(taskId);
+    const pending = pendingSentenceCase.current;
+    if (pending.size === 0) return;
+    const taskIds = new Set<string>();
+    const projIds = new Set<string>();
+    const cliIds = new Set<string>();
+    pending.forEach((key) => {
+      if (key === excludeKey) return;
+      if (key.startsWith('task:')) taskIds.add(key.slice(5));
+      else if (key.startsWith('proj:')) projIds.add(key.slice(5));
+      else if (key.startsWith('cli:')) cliIds.add(key.slice(4));
+    });
+    if (taskIds.size > 0) {
       setTasks((prev) => prev.map((t) => {
-        if (t.id !== taskId) return t;
+        if (!taskIds.has(t.id)) return t;
         const converted = sentenceCaseConvert(t.title);
         return converted === t.title ? t : { ...t, title: converted };
       }));
-    }, SENTENCE_CASE_DELAY_MS);
-    sentenceCaseTimers.current.set(taskId, timer);
-  }, [sentenceCaseEnabled, sentenceCaseConvert]);
-  // Same for projects + clients (use separate timer key namespaces so a project+task with the
-  // same id can't collide).
-  const scheduleSentenceCaseProject = useCallback((id: string) => {
-    if (!sentenceCaseEnabled) return;
-    const key = `proj:${id}`;
-    const existing = sentenceCaseTimers.current.get(key);
-    if (existing) clearTimeout(existing);
-    const timer = setTimeout(() => {
-      sentenceCaseTimers.current.delete(key);
+    }
+    if (projIds.size > 0) {
       setProjects((prev) => prev.map((p) => {
-        if (p.id !== id) return p;
+        if (!projIds.has(p.id)) return p;
         const converted = sentenceCaseConvert(p.name);
         return converted === p.name ? p : { ...p, name: converted };
       }));
-    }, SENTENCE_CASE_DELAY_MS);
-    sentenceCaseTimers.current.set(key, timer);
-  }, [sentenceCaseEnabled, sentenceCaseConvert]);
-  const scheduleSentenceCaseClient = useCallback((id: string) => {
-    if (!sentenceCaseEnabled) return;
-    const key = `cli:${id}`;
-    const existing = sentenceCaseTimers.current.get(key);
-    if (existing) clearTimeout(existing);
-    const timer = setTimeout(() => {
-      sentenceCaseTimers.current.delete(key);
+    }
+    if (cliIds.size > 0) {
       setClients((prev) => prev.map((c) => {
-        if (c.id !== id) return c;
+        if (!cliIds.has(c.id)) return c;
         const converted = sentenceCaseConvert(c.name);
         return converted === c.name ? c : { ...c, name: converted };
       }));
-    }, SENTENCE_CASE_DELAY_MS);
-    sentenceCaseTimers.current.set(key, timer);
+    }
+    // Remove flushed keys from pending. Anything excluded stays in pending.
+    pending.forEach((key) => { if (key !== excludeKey) pending.delete(key); });
   }, [sentenceCaseEnabled, sentenceCaseConvert]);
+  // Mark an item as edited and pending sentence-case conversion. Calling this for a NEW item
+  // (different id from the one(s) currently pending) flushes the others FIRST — that's how
+  // "I started editing something else" triggers the conversion of the previous edit.
+  const scheduleSentenceCase = useCallback((taskId: string) => {
+    if (!sentenceCaseEnabled) return;
+    const key = `task:${taskId}`;
+    flushPendingSentenceCase(key);
+    pendingSentenceCase.current.add(key);
+  }, [sentenceCaseEnabled, flushPendingSentenceCase]);
+  const scheduleSentenceCaseProject = useCallback((id: string) => {
+    if (!sentenceCaseEnabled) return;
+    const key = `proj:${id}`;
+    flushPendingSentenceCase(key);
+    pendingSentenceCase.current.add(key);
+  }, [sentenceCaseEnabled, flushPendingSentenceCase]);
+  const scheduleSentenceCaseClient = useCallback((id: string) => {
+    if (!sentenceCaseEnabled) return;
+    const key = `cli:${id}`;
+    flushPendingSentenceCase(key);
+    pendingSentenceCase.current.add(key);
+  }, [sentenceCaseEnabled, flushPendingSentenceCase]);
 
   const renameTask = useCallback((id: string, title: string) => {
     setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, title } : t)));
@@ -3076,6 +3090,8 @@ export default function App() {
   }, [setTasks]);
 
   const handleDragStart = useCallback((e: DragStartEvent) => {
+    // Any drag is a "concrete user action elsewhere" — flush pending sentence-case conversions.
+    flushPendingSentenceCase();
     const type = e.active.data.current?.type;
     if (type === 'project') {
       setActiveId(e.active.id as string);
@@ -3103,7 +3119,7 @@ export default function App() {
     const cellId = (e.active.data.current?.calendarCellId as string | undefined) || null;
     setActiveCalendarCellId(cellId);
     setColumnOffset(0);
-  }, []);
+  }, [flushPendingSentenceCase]);
 
   // Source-collapse: ALWAYS trigger after a short delay, regardless of cursor direction. Previously
   // this was tied to horizontal column-offset, which meant vertical-only drags (e.g. moving a task
