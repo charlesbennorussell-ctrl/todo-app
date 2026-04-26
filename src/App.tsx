@@ -529,12 +529,13 @@ function SortableTaskItem({
                 }));
               }
             }}
-            className={`relative z-10 font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] outline-none whitespace-nowrap ${titleColor} ${!isScheduled && onRename ? 'cursor-text px-[7px] -mx-[7px]' : ''}`}
-            // Hotspot tolerance: 7px padding on each side, cancelled by negative margin so the
-            // text doesn't visibly shift. Net effect is a ~1-char hit-zone past each edge of the
-            // title. `z-10` + `relative` make the title WIN overlap hit-tests against later
-            // siblings (assignee badge, deadline arrow) — without it those win on the right
-            // because they're later in DOM order.
+            className={`relative z-10 font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] outline-none whitespace-nowrap ${titleColor} ${!isScheduled && onRename ? 'cursor-text pl-[7px] -ml-[7px]' : ''}`}
+            // Hotspot tolerance:
+            //   left  — 7px padding offset by negative margin so text doesn't shift
+            //   right — handled by an absolutely-positioned spacer rendered AFTER the span (see
+            //           below). The right side can't use padding+negative-margin alone because
+            //           the parent's overflow-hidden + DOM-order hit testing make later siblings
+            //           (assignee badge, deadline arrow) win the overlap.
             // Empty / very-short titles still need a comfortable min-width (40px = ~5 chars).
             style={(task.title || '').length <= 1 ? { minWidth: '40px' } : undefined}
           >{task.title}</span>
@@ -543,6 +544,33 @@ function SortableTaskItem({
             return null;
             });
           })()}
+          {/* Trailing hit-zone — a 14px transparent strip immediately AFTER the title slot.
+              Captures clicks just past the title's last character and forwards them to the
+              title span, dispatching a synthetic pointerdown so the existing caret-placement
+              handler fires and lands the caret at the end. Lives outside the title span (so it
+              isn't part of the contentEditable's text) but inside the same flex row, claiming
+              real layout space — that's why DOM-order hit testing actually picks it up. */}
+          {!isScheduled && onRename && (
+            <span
+              aria-hidden
+              className="cursor-text shrink-0 self-stretch w-[14px]"
+              onPointerDown={(e) => {
+                if (editing) return;
+                e.stopPropagation();
+                e.preventDefault();
+                const el = titleRef.current;
+                if (!el) return;
+                const rect = el.getBoundingClientRect();
+                // Re-fire the click as if it landed on the END of the title text — the title's
+                // own onPointerDown handles caret placement at that point.
+                el.dispatchEvent(new PointerEvent('pointerdown', {
+                  bubbles: true, cancelable: true, button: 0,
+                  clientX: rect.right - 1, clientY: rect.top + rect.height / 2,
+                  pointerType: 'mouse', isPrimary: true,
+                }));
+              }}
+            />
+          )}
         </div>
         {/* Assignees hide at density >= 5. */}
         {density < 5 && task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} />)}
