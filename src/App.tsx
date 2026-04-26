@@ -144,6 +144,20 @@ function taskOrderSlots(order: TaskOrder, hasProject: boolean, hasClient: boolea
   return out;
 }
 
+// Just the arrowhead from DeadlineArrow (no line) — used as the inline ">" separator in
+// breadcrumb-style meta paths (e.g. "RSL ▶ Launch ▶ PR Launch") so the chevron at the
+// row's date and the chevron between meta slots share one visual vocabulary.
+function Arrowhead({ dim = false }: { dim?: boolean }) {
+  const fill = dim ? '#383838' : '#656464';
+  return (
+    <span className="inline-flex items-center align-middle mx-[3px] shrink-0">
+      <svg width="4" height="8" viewBox="0 0 4 8" fill="none">
+        <polygon points="0,0 4,4 0,8" fill={fill} />
+      </svg>
+    </span>
+  );
+}
+
 function DeadlineArrow({ dim = false, small = false }: { dim?: boolean; small?: boolean }) {
   // Custom inline SVG so we can shorten the LINE while keeping the arrowhead size and the
   // line's stroke thickness constant. `small` (responsive density 3+) cuts the line length
@@ -407,7 +421,7 @@ function SortableTaskItem({
             const sepIfMilestone = (key: string) => {
               if (!isScheduled) return null;
               if (!prevHadContent) return null;
-              return <span key={key} className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] text-[#656464] mx-[1px]">›</span>;
+              return <span key={key}><Arrowhead dim={task.completed} /></span>;
             };
             return taskOrderSlots(taskOrder, showProject, showClient).flatMap((slot, i) => {
               const metaCls = `font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : 'text-[#656464]'}`;
@@ -428,7 +442,7 @@ function SortableTaskItem({
                 prevHadContent = true;
                 return [sep, (
                   <p key={`cp-${i}`} className={`${metaCls} ${projectTruncate}`}>
-                    {`${client.short} > ${project.name}`}
+                    {client.short}<Arrowhead dim={task.completed} />{project.name}
                   </p>
                 )].filter(Boolean) as React.ReactNode[];
               }
@@ -1566,7 +1580,7 @@ function CalendarCardBody({ task, projects, clients, taskOrder = 'ptc' }: { task
             const metaCls = `font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis text-[#656464]`;
             if (slot === 'project' && project) return <p key={`p-${i}`} className={metaCls}>{project.name}</p>;
             if (slot === 'client' && client) return <p key={`c-${i}`} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap ${metaColor}`}>{client.short}</p>;
-            if (slot === 'cp' && client && project) return <p key={`cp-${i}`} className={metaCls}>{`${client.short} > ${project.name}`}</p>;
+            if (slot === 'cp' && client && project) return <p key={`cp-${i}`} className={metaCls}>{client.short}<Arrowhead dim={task.completed} />{project.name}</p>;
             if (slot === 'title') return <span key={`t-${i}`} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleColor}`}>{task.title}</span>;
             return null;
           })}
@@ -1641,7 +1655,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
                   const metaCls = `font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis text-[#656464]`;
                   if (slot === 'project' && project) return <p key={`p-${i}`} className={metaCls}>{project.name}</p>;
                   if (slot === 'client' && client) return <p key={`c-${i}`} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap ${metaColor}`}>{client.short}</p>;
-                  if (slot === 'cp' && client && project) return <p key={`cp-${i}`} className={metaCls}>{`${client.short} > ${project.name}`}</p>;
+                  if (slot === 'cp' && client && project) return <p key={`cp-${i}`} className={metaCls}>{client.short}<Arrowhead dim={task.completed} />{project.name}</p>;
                   if (slot === 'title') return <span key={`t-${i}`} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleColor}`}>{task.title}</span>;
                   return null;
                 })}
@@ -1789,7 +1803,7 @@ function WeekCalendarMode({
             {taskOrderSlots(taskOrder, !!project, clientOnFirstRow ? !!client : false).map((slot, i) => {
               if (slot === 'project' && project) return <p key={`p-${i}`} className="font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis text-[#656464]">{project.name}</p>;
               if (slot === 'client' && client) return <p key={`c-${i}`} className="font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap text-[#8465ff]">{client.short}</p>;
-              if (slot === 'cp' && client && project) return <p key={`cp-${i}`} className="font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis text-[#656464]">{`${client.short} > ${project.name}`}</p>;
+              if (slot === 'cp' && client && project) return <p key={`cp-${i}`} className="font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis text-[#656464]">{client.short}<Arrowhead />{project.name}</p>;
               if (slot === 'title') return <span key={`t-${i}`} className="font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis text-[#8465ff]">{task.title}</span>;
               return null;
             })}
@@ -2117,7 +2131,7 @@ function ProjectTaskRow({ task, listId, onToggle, onRename, onDelete, onEdit, on
               const metaCls = `${bodyFont} ${task.completed ? 'text-[#383838]' : 'text-[#656464]'}`;
               if (slot === 'project' && project) return <p key={`p-${i}`} className={`${metaCls} ${projectTruncate}`}>{project.name}</p>;
               if (slot === 'client' && client) return <p key={`c-${i}`} className={`${bodyFont} ${metaColor}`}>{client.short}</p>;
-              if (slot === 'cp' && client && project) return <p key={`cp-${i}`} className={`${metaCls} ${projectTruncate}`}>{`${client.short} > ${project.name}`}</p>;
+              if (slot === 'cp' && client && project) return <p key={`cp-${i}`} className={`${metaCls} ${projectTruncate}`}>{client.short}<Arrowhead dim={task.completed} />{project.name}</p>;
               if (slot === 'title') return <EditableText key={`t-${i}`} value={task.title} onChange={onRename} autoFocus={autoFocus} placeholder="New Task" onEnter={onAddSibling} className={`${bodyFont} ${titleColor}`} />;
               return null;
             });
@@ -3426,7 +3440,7 @@ export default function App() {
                 return taskOrderSlots(taskOrder, showProject, showClient).map((slot, i) => {
                   if (slot === 'project' && project) return <p key={`p-${i}`} className={metaCls}>{project.name}</p>;
                   if (slot === 'client' && client) return <p key={`c-${i}`} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap ${metaColor}`}>{client.short}</p>;
-                  if (slot === 'cp' && client && project) return <p key={`cp-${i}`} className={metaCls}>{`${client.short} > ${project.name}`}</p>;
+                  if (slot === 'cp' && client && project) return <p key={`cp-${i}`} className={metaCls}>{client.short}<Arrowhead dim={task.completed} />{project.name}</p>;
                   if (slot === 'title') return <span key={`t-${i}`} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap ${titleColor}`}>{task.title}</span>;
                   return null;
                 });
