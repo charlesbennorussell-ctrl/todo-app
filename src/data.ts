@@ -19,6 +19,19 @@ export interface Task {
   // but a task can be linked directly to a client when it has no project (e.g. a milestone tied
   // to a client without a concrete project).
   clientId?: string;
+  // Day (todayISO format) the task was last marked completed. Drives the "completed tasks clear
+  // from list/project view at end of day" behavior — the list/project filters hide tasks whose
+  // completedDay is < today's day boundary. Calendar view ignores this and shows all completions.
+  // Cleared (set to undefined) when the user un-checks the task.
+  completedDay?: string;
+  // Day (todayISO format) the task was last revived from completion or trash. Within 10 minutes
+  // of a revive, the task always shows in the list/project view even if it would otherwise be
+  // filtered out (gives the user a window to undo a misclick).
+  revivedAt?: number; // epoch ms
+  // Soft-delete flag. trashTaskAction sets this true; the task is hidden from all main views but
+  // still listed in Settings → Trash so the user can revive it.
+  trashed?: boolean;
+  trashedAt?: number; // epoch ms (used to sort the Trash column newest-first)
 }
 
 export interface Project { id: string; name: string; clientId?: string; list?: ListId; }

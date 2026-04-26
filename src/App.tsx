@@ -1,6 +1,6 @@
 ﻿import { Fragment, memo, useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Plus, X, List, FolderTree, SlidersHorizontal as SettingsIcon, Folder, Trash2, Calendar as CalendarIcon, ChevronLeft, ChevronRight } from 'lucide-react';
+import { Plus, X, List, FolderTree, SlidersHorizontal as SettingsIcon, Folder, Trash2, Calendar as CalendarIcon, ChevronLeft, ChevronRight, ArrowUp } from 'lucide-react';
 import {
   DndContext,
   KeyboardSensor,
@@ -1944,7 +1944,7 @@ function WeekCalendarMode({
   );
 }
 
-function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePersonShort, onDeletePerson, currentUserShort, onSetCurrentUser, taskOrder, onSetTaskOrder, tomorrowEnabled, onSetTomorrowEnabled }: {
+function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePersonShort, onDeletePerson, currentUserShort, onSetCurrentUser, taskOrder, onSetTaskOrder, tomorrowEnabled, onSetTomorrowEnabled, trashedTasks, completedTasks, projects, clients, onUntrashTask, onPurgeTask, onToggleTask }: {
   people: Person[]; newId: string | null;
   onAddPerson: () => void;
   onRenamePerson: (id: string, name: string) => void;
@@ -1956,6 +1956,13 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
   onSetTaskOrder: (v: TaskOrder) => void;
   tomorrowEnabled: boolean;
   onSetTomorrowEnabled: (v: boolean) => void;
+  trashedTasks: Task[];
+  completedTasks: Task[];
+  projects: Project[];
+  clients: Client[];
+  onUntrashTask: (id: string) => void;
+  onPurgeTask: (id: string) => void;
+  onToggleTask: (id: string) => void;
 }) {
   const bodyFont = "font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap";
   return (
@@ -2030,6 +2037,76 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
             <TrashBtn onClick={() => onDeletePerson(p.id)} />
           </SettingsRow>
         ))}
+      </div>
+      {/* Spacer column to keep the existing People column at left and push Trash/Completed right. */}
+      <div className="flex-1 min-w-[280px]" />
+      {/* TRASH column — every soft-deleted task lives here until the user revives it (up arrow)
+          or purges it (X). Newest-first by trashedAt. */}
+      <div className="flex-1 min-w-[280px]">
+        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[74px]">
+          <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Trash</p>
+          <p className="text-[#666] text-[12px] ml-2">{trashedTasks.length}</p>
+        </div>
+        {trashedTasks.length === 0 && (
+          <p className="px-[35px] text-[#666] text-[13px]">Empty.</p>
+        )}
+        {trashedTasks.map((t) => {
+          const proj = t.projectId ? projects.find((p) => p.id === t.projectId) : undefined;
+          const cli = (t.clientId ?? proj?.clientId) ? clients.find((c) => c.id === (t.clientId ?? proj?.clientId)) : undefined;
+          const ctx = [cli?.short, proj?.name].filter(Boolean).join(' › ');
+          return (
+            <div key={t.id} className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px] hover:bg-white/[0.03]">
+              {ctx && <p className={`${bodyFont} text-[#656464]`}>{ctx}</p>}
+              {ctx && <Arrowhead />}
+              <span className={`${bodyFont} text-white`}>{t.title || '(untitled)'}</span>
+              <button
+                type="button"
+                onClick={() => onUntrashTask(t.id)}
+                className="ml-auto p-1 opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity"
+                aria-label="Revive task"
+                title="Revive (un-trash)"
+              >
+                <ArrowUp size={14} />
+              </button>
+              <button
+                type="button"
+                onClick={() => onPurgeTask(t.id)}
+                className="-mr-[10px] p-1 opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-[#FF7171] transition-opacity"
+                aria-label="Permanently delete"
+                title="Permanently delete"
+              >
+                <X size={14} />
+              </button>
+            </div>
+          );
+        })}
+      </div>
+      {/* COMPLETED column — tasks that have been ticked off and are now hidden from the main
+          views (4 AM cleared completions live here permanently; same-day completions appear too).
+          Clicking the checkbox un-completes the task — the row stays visible for 10 minutes via
+          the revivedAt grace window so a misclick can be undone. */}
+      <div className="flex-1 min-w-[280px]">
+        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[74px]">
+          <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Completed</p>
+          <p className="text-[#666] text-[12px] ml-2">{completedTasks.length}</p>
+        </div>
+        {completedTasks.length === 0 && (
+          <p className="px-[35px] text-[#666] text-[13px]">Nothing checked off yet.</p>
+        )}
+        {completedTasks.map((t) => {
+          const proj = t.projectId ? projects.find((p) => p.id === t.projectId) : undefined;
+          const cli = (t.clientId ?? proj?.clientId) ? clients.find((c) => c.id === (t.clientId ?? proj?.clientId)) : undefined;
+          const ctx = [cli?.short, proj?.name].filter(Boolean).join(' › ');
+          return (
+            <div key={t.id} className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px] hover:bg-white/[0.03]">
+              <TaskCheckbox completed={t.completed} onToggle={() => onToggleTask(t.id)} />
+              {ctx && <p className={`${bodyFont} text-[#656464]`}>{ctx}</p>}
+              {ctx && <Arrowhead />}
+              <span className={`${bodyFont} ${t.completed ? 'text-[#656464] line-through' : 'text-white'}`}>{t.title || '(untitled)'}</span>
+              {t.completedDay && <p className="ml-auto text-[#666] text-[12px]">{t.completedDay}</p>}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -2683,10 +2760,33 @@ export default function App() {
   const measuringConfig = { droppable: { strategy: MeasuringStrategy.BeforeDragging } };
 
   const toggleTask = useCallback((id: string) => {
-    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, completed: !t.completed } : t)));
+    setTasks((prev) => prev.map((t) => {
+      if (t.id !== id) return t;
+      const nextCompleted = !t.completed;
+      // Stamp completedDay (today's boundary) when checking; clear it + stamp revivedAt when
+      // un-checking. completedDay drives the "completed clears at 4 AM" filter; revivedAt keeps
+      // recently-uncompleted tasks visible in the Settings → Completed column for 10 min so a
+      // misclick can be undone there.
+      if (nextCompleted) return { ...t, completed: true, completedDay: todayISO(), revivedAt: undefined };
+      return { ...t, completed: false, completedDay: undefined, revivedAt: Date.now() };
+    }));
   }, []);
 
   const deleteTask = useCallback((id: string) => {
+    // SOFT delete: flag the task as trashed so it's hidden from main views but still listed in
+    // Settings → Trash for 10 min (and indefinitely until purged). Hard-delete is reserved for
+    // the future "Empty trash" affordance.
+    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, trashed: true, trashedAt: Date.now(), revivedAt: undefined } : t)));
+  }, []);
+
+  // Revive a trashed task (undo a soft delete). Stamps revivedAt so the task stays visible in
+  // Settings → Trash for 10 min in case the user wants to re-trash it.
+  const untrashTask = useCallback((id: string) => {
+    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, trashed: false, trashedAt: undefined, revivedAt: Date.now() } : t)));
+  }, []);
+
+  // Hard-delete: actually remove from storage. Used by Settings → Trash "Empty" / per-row purge.
+  const purgeTask = useCallback((id: string) => {
     setTasks((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
@@ -3300,10 +3400,60 @@ export default function App() {
   // Tasks in the "Personal" client are scoped to their assignees: other users never see them.
   // This filter is applied to every display path (list, project, calendar, dashboard) so Personal
   // work stays off the team's radar.
-  const visibleTasks = useMemo(
-    () => tasks.filter((t) => t.clientId !== PERSONAL_CLIENT_ID || t.assignees.includes(currentUserShort)),
+  // Also strip:
+  //   - trashed tasks (they live in Settings → Trash)
+  //   - tasks completed before today's day boundary (they live in Settings → Completed; calendar
+  //     bypasses this filter and shows historical completions)
+  // Recently revived tasks (revivedAt within 10 min) are always shown regardless of completedDay.
+  const REVIVE_WINDOW_MS = 10 * 60 * 1000;
+  const visibleTasks = useMemo(() => {
+    const today = todayISO();
+    const now = Date.now();
+    return tasks.filter((t) => {
+      if (t.trashed) return false;
+      if (t.clientId === PERSONAL_CLIENT_ID && !t.assignees.includes(currentUserShort)) return false;
+      if (t.completed && t.completedDay && t.completedDay < today) {
+        // Hide unless within the post-revive grace window (handles re-completion after revival).
+        if (!t.revivedAt || now - t.revivedAt > REVIVE_WINDOW_MS) return false;
+      }
+      return true;
+    });
+  }, [tasks, currentUserShort]);
+
+  // Calendar view bypasses the completedDay filter — historical completions stay visible there.
+  const calendarTasks = useMemo(
+    () => tasks.filter((t) => !t.trashed && (t.clientId !== PERSONAL_CLIENT_ID || t.assignees.includes(currentUserShort))),
     [tasks, currentUserShort]
   );
+
+  // Settings → Trash column: every soft-deleted task (newest first by trashedAt). Personal
+  // scoping still applies — other users don't see your trashed Personal items.
+  const trashedTasks = useMemo(
+    () => tasks
+      .filter((t) => t.trashed && (t.clientId !== PERSONAL_CLIENT_ID || t.assignees.includes(currentUserShort)))
+      .sort((a, b) => (b.trashedAt ?? 0) - (a.trashedAt ?? 0)),
+    [tasks, currentUserShort]
+  );
+  // Settings → Completed column: tasks that are currently completed OR were recently revived
+  // (within REVIVE_WINDOW_MS) so the user can still re-check them after a misclick. Newest by
+  // completedDay descending; ties by id for stability.
+  const completedTasksForSettings = useMemo(() => {
+    const now = Date.now();
+    return tasks
+      .filter((t) => {
+        if (t.trashed) return false;
+        if (t.clientId === PERSONAL_CLIENT_ID && !t.assignees.includes(currentUserShort)) return false;
+        if (t.completed) return true;
+        if (t.revivedAt && now - t.revivedAt < REVIVE_WINDOW_MS) return true;
+        return false;
+      })
+      .sort((a, b) => {
+        const ad = a.completedDay || '\u0000';
+        const bd = b.completedDay || '\u0000';
+        if (ad !== bd) return ad < bd ? 1 : -1;
+        return a.id < b.id ? -1 : 1;
+      });
+  }, [tasks, currentUserShort]);
 
   const tasksByKey = useMemo(() => {
     const m: Record<string, Task[]> = {};
@@ -3858,7 +4008,7 @@ export default function App() {
             project view above (built off list view's drag tech). */}
         {mode === 'calendar' && (
           <WeekCalendarMode
-            tasks={visibleTasks}
+            tasks={calendarTasks}
             projects={projects}
             clients={clients}
             onToggleTask={toggleTask}
@@ -3889,6 +4039,13 @@ export default function App() {
             onSetTaskOrder={setTaskOrder}
             tomorrowEnabled={tomorrowEnabled}
             onSetTomorrowEnabled={setTomorrowEnabled}
+            trashedTasks={trashedTasks}
+            completedTasks={completedTasksForSettings}
+            projects={projects}
+            clients={clients}
+            onUntrashTask={untrashTask}
+            onPurgeTask={purgeTask}
+            onToggleTask={toggleTask}
           />
         )}
 
