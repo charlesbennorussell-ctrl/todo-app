@@ -426,7 +426,10 @@ function SortableTaskItem({
             const sepIfMilestone = (key: string) => {
               if (!isScheduled) return null;
               if (!prevHadContent) return null;
-              return <span key={key}><Arrowhead dim={task.completed} tone="milestone" /></span>;
+              // -mx-[4px] cancels the parent flex's gap-[4px] on each side, so the total
+              // visible spacing around the arrowhead matches the inline cp slot use
+              // (where there's no flex gap, just the Arrowhead's own mx-[4px]).
+              return <span key={key} className="-mx-[4px] inline-flex items-center"><Arrowhead dim={task.completed} tone="milestone" /></span>;
             };
             return taskOrderSlots(taskOrder, showProject, showClient).flatMap((slot, i) => {
               const metaCls = `font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : 'text-[#656464]'}`;
