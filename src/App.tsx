@@ -1944,7 +1944,7 @@ function WeekCalendarMode({
   );
 }
 
-function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePersonShort, onDeletePerson, currentUserShort, onSetCurrentUser, taskOrder, onSetTaskOrder, tomorrowEnabled, onSetTomorrowEnabled, trashedTasks, completedTasks, projects, clients, onUntrashTask, onPurgeTask, onToggleTask }: {
+function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePersonShort, onDeletePerson, currentUserShort, onSetCurrentUser, taskOrder, onSetTaskOrder, tomorrowEnabled, onSetTomorrowEnabled, sentenceCaseEnabled, onSetSentenceCaseEnabled, trashedTasks, completedTasks, projects, clients, onUntrashTask, onPurgeTask, onToggleTask }: {
   people: Person[]; newId: string | null;
   onAddPerson: () => void;
   onRenamePerson: (id: string, name: string) => void;
@@ -1956,6 +1956,8 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
   onSetTaskOrder: (v: TaskOrder) => void;
   tomorrowEnabled: boolean;
   onSetTomorrowEnabled: (v: boolean) => void;
+  sentenceCaseEnabled: boolean;
+  onSetSentenceCaseEnabled: (v: boolean) => void;
   trashedTasks: Task[];
   completedTasks: Task[];
   projects: Project[];
@@ -2018,6 +2020,17 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
         <div className="px-[31px] mb-[50px] flex flex-row gap-4">
           <button type="button" onClick={() => onSetTomorrowEnabled(true)} className={`text-[13px] transition-colors ${tomorrowEnabled ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>On</button>
           <button type="button" onClick={() => onSetTomorrowEnabled(false)} className={`text-[13px] transition-colors ${!tomorrowEnabled ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>Off</button>
+        </div>
+        {/* Sentence-case auto-conversion. ~3 seconds after the user finishes editing a task /
+            project / client name, the title is rewritten from "Title Case" to "Sentence case".
+            Brand-name vocabulary (clients/projects/people) and ALL-CAPS acronyms are preserved.
+            Default ON. */}
+        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[20px]">
+          <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Sentence case auto-correct</p>
+        </div>
+        <div className="px-[31px] mb-[50px] flex flex-row gap-4">
+          <button type="button" onClick={() => onSetSentenceCaseEnabled(true)} className={`text-[13px] transition-colors ${sentenceCaseEnabled ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>On</button>
+          <button type="button" onClick={() => onSetSentenceCaseEnabled(false)} className={`text-[13px] transition-colors ${!sentenceCaseEnabled ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>Off</button>
         </div>
         <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[74px]">
           <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">People</p>
@@ -2647,6 +2660,19 @@ export default function App() {
     setTomorrowEnabledState(v);
     try { window.localStorage.setItem('todo-app-tomorrow-enabled', v ? '1' : '0'); } catch {}
   }, []);
+  // Sentence-case auto-conversion. When ON, task/project/client titles are debounced ~3s after
+  // the last edit, then rewritten from "Title Case" to "Sentence case". A vocabulary of brand
+  // names + acronyms (built from clients/projects/people) preserves things like "FOG" or "RSL".
+  // Default ON.
+  const [sentenceCaseEnabled, setSentenceCaseEnabledState] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return true;
+    const v = window.localStorage.getItem('todo-app-sentence-case');
+    return v === null ? true : v === '1';
+  });
+  const setSentenceCaseEnabled = useCallback((v: boolean) => {
+    setSentenceCaseEnabledState(v);
+    try { window.localStorage.setItem('todo-app-sentence-case', v ? '1' : '0'); } catch {}
+  }, []);
   // Anchor rect: panel opens over this column. Captured at click time from the row's nearest
   // column ancestor. null → centered (used by the bottom + button).
   const [editAnchor, setEditAnchor] = useState<{ x: number; width: number } | null>(null);
@@ -2790,9 +2816,103 @@ export default function App() {
     setTasks((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
+  // Sentence-case auto-converter. ~3 seconds after the last edit on a given task title (or
+  // project/client name), rewrite "Title Case" → "Sentence case" while preserving brand-name
+  // and acronym capitalization. Vocabulary = client.short / client.name / project.name /
+  // person.short / person.name. Anything in ALL CAPS stays that way too.
+  const sentenceCaseTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const SENTENCE_CASE_DELAY_MS = 2500;
+  // Vocabulary stays a ref so the debounced timer always sees the latest entries without
+  // restarting the timer when clients/projects/people mutate.
+  const vocabRef = useRef<string[]>([]);
+  useEffect(() => {
+    const vocab: string[] = [];
+    for (const c of clients) { if (c.short) vocab.push(c.short); if (c.name) vocab.push(c.name); }
+    for (const p of projects) { if (p.name) vocab.push(p.name); }
+    for (const pr of people) { if (pr.short) vocab.push(pr.short); if (pr.name) vocab.push(pr.name); }
+    vocabRef.current = vocab;
+  }, [clients, projects, people]);
+  const sentenceCaseConvert = useCallback((s: string): string => {
+    if (!s) return s;
+    const vocabMap = new Map<string, string>();
+    for (const v of vocabRef.current) vocabMap.set(v.toLowerCase(), v);
+    // Tokenize keeping whitespace so we can re-stitch with original spacing.
+    const parts = s.split(/(\s+)/);
+    let firstWordSeen = false;
+    return parts.map((part) => {
+      if (/^\s*$/.test(part)) return part;
+      // Strip leading/trailing punctuation for matching, re-attach after.
+      const lead = part.match(/^[^\p{L}\p{N}]+/u)?.[0] ?? '';
+      const trail = part.match(/[^\p{L}\p{N}]+$/u)?.[0] ?? '';
+      const core = part.slice(lead.length, part.length - trail.length);
+      if (!core) return part;
+      const isFirst = !firstWordSeen;
+      firstWordSeen = true;
+      // Vocabulary match — restore the canonical case from the vocab entry.
+      const v = vocabMap.get(core.toLowerCase());
+      if (v) return lead + v + trail;
+      // Already ALL-CAPS (length ≥ 2, contains a letter) → presumed acronym, leave alone.
+      if (core.length >= 2 && core === core.toUpperCase() && /\p{L}/u.test(core)) return part;
+      // Mixed case (e.g. iPhone, eBay) — preserve user-typed unusual casing.
+      const titleCase = core.charAt(0).toUpperCase() + core.slice(1).toLowerCase();
+      const lower = core.toLowerCase();
+      const upper = core.toUpperCase();
+      if (core !== titleCase && core !== lower && core !== upper) return part;
+      // Default: first word capitalized, rest lowercase.
+      return lead + (isFirst ? titleCase : lower) + trail;
+    }).join('');
+  }, []);
+  const scheduleSentenceCase = useCallback((taskId: string) => {
+    if (!sentenceCaseEnabled) return;
+    const existing = sentenceCaseTimers.current.get(taskId);
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(() => {
+      sentenceCaseTimers.current.delete(taskId);
+      setTasks((prev) => prev.map((t) => {
+        if (t.id !== taskId) return t;
+        const converted = sentenceCaseConvert(t.title);
+        return converted === t.title ? t : { ...t, title: converted };
+      }));
+    }, SENTENCE_CASE_DELAY_MS);
+    sentenceCaseTimers.current.set(taskId, timer);
+  }, [sentenceCaseEnabled, sentenceCaseConvert]);
+  // Same for projects + clients (use separate timer key namespaces so a project+task with the
+  // same id can't collide).
+  const scheduleSentenceCaseProject = useCallback((id: string) => {
+    if (!sentenceCaseEnabled) return;
+    const key = `proj:${id}`;
+    const existing = sentenceCaseTimers.current.get(key);
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(() => {
+      sentenceCaseTimers.current.delete(key);
+      setProjects((prev) => prev.map((p) => {
+        if (p.id !== id) return p;
+        const converted = sentenceCaseConvert(p.name);
+        return converted === p.name ? p : { ...p, name: converted };
+      }));
+    }, SENTENCE_CASE_DELAY_MS);
+    sentenceCaseTimers.current.set(key, timer);
+  }, [sentenceCaseEnabled, sentenceCaseConvert]);
+  const scheduleSentenceCaseClient = useCallback((id: string) => {
+    if (!sentenceCaseEnabled) return;
+    const key = `cli:${id}`;
+    const existing = sentenceCaseTimers.current.get(key);
+    if (existing) clearTimeout(existing);
+    const timer = setTimeout(() => {
+      sentenceCaseTimers.current.delete(key);
+      setClients((prev) => prev.map((c) => {
+        if (c.id !== id) return c;
+        const converted = sentenceCaseConvert(c.name);
+        return converted === c.name ? c : { ...c, name: converted };
+      }));
+    }, SENTENCE_CASE_DELAY_MS);
+    sentenceCaseTimers.current.set(key, timer);
+  }, [sentenceCaseEnabled, sentenceCaseConvert]);
+
   const renameTask = useCallback((id: string, title: string) => {
     setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, title } : t)));
-  }, []);
+    scheduleSentenceCase(id);
+  }, [scheduleSentenceCase]);
 
   const addTask = useCallback((t: Omit<Task, 'id' | 'order'>) => {
     setTasks((prev) => {
@@ -2899,7 +3019,10 @@ export default function App() {
   }, []);
   const deleteProject = useCallback((id: string) => setProjects((prev) => prev.filter((p) => p.id !== id)), []);
   const deleteClient = useCallback((id: string) => setClients((prev) => prev.filter((c) => c.id !== id)), []);
-  const renameProject = useCallback((id: string, name: string) => setProjects((prev) => prev.map((p) => (p.id === id ? { ...p, name } : p))), []);
+  const renameProject = useCallback((id: string, name: string) => {
+    setProjects((prev) => prev.map((p) => (p.id === id ? { ...p, name } : p)));
+    scheduleSentenceCaseProject(id);
+  }, [scheduleSentenceCaseProject]);
   const contractName = useCallback((name: string): string => {
     const trimmed = name.trim();
     if (trimmed.length <= 6) return trimmed;
@@ -2914,11 +3037,14 @@ export default function App() {
     const condensed = first + rest;
     return condensed.slice(0, 6);
   }, []);
-  const renameClient = useCallback((id: string, name: string) => setClients((prev) => prev.map((c) => {
-    if (c.id !== id) return c;
-    const shouldAutoShort = id === newId || !c.short;
-    return { ...c, name, short: shouldAutoShort ? contractName(name) : c.short };
-  })), [newId, contractName]);
+  const renameClient = useCallback((id: string, name: string) => {
+    setClients((prev) => prev.map((c) => {
+      if (c.id !== id) return c;
+      const shouldAutoShort = id === newId || !c.short;
+      return { ...c, name, short: shouldAutoShort ? contractName(name) : c.short };
+    }));
+    scheduleSentenceCaseClient(id);
+  }, [newId, contractName, scheduleSentenceCaseClient]);
   const renameClientShort = useCallback((id: string, short: string) => {
     setClients((prev) => prev.map((c) => (c.id === id ? { ...c, short } : c)));
   }, []);
@@ -4039,6 +4165,8 @@ export default function App() {
             onSetTaskOrder={setTaskOrder}
             tomorrowEnabled={tomorrowEnabled}
             onSetTomorrowEnabled={setTomorrowEnabled}
+            sentenceCaseEnabled={sentenceCaseEnabled}
+            onSetSentenceCaseEnabled={setSentenceCaseEnabled}
             trashedTasks={trashedTasks}
             completedTasks={completedTasksForSettings}
             projects={projects}
