@@ -2553,12 +2553,9 @@ export default function App() {
     }
   }, [tasks, setTasks]);
 
-  // Auto-promote inbox tasks to 'today' when their deadline arrives. Inbox is the catch-all
-  // landing zone for tasks the user hasn't sorted yet — promoting from there is non-destructive.
-  // 'next' and 'tomorrow' are SKIPPED: those are explicit user placements (e.g. dragging a
-  // due-today task into Next to defer it past tomorrow). Auto-promoting from those would fight
-  // the user's drag and snap the task right back. Also skip 'today' (already there) and
-  // milestones (type='scheduled' have their own handling).
+  // Auto-promote INBOX tasks to 'today' when their deadline arrives — at any time, since the
+  // user hasn't placed them anywhere yet. 'next' and 'tomorrow' are NOT touched here; those are
+  // treated as a "for the rest of the day" override that the 4 AM cycle (below) re-evaluates.
   useEffect(() => {
     const today = todayISO();
     const needsPromote = tasks.some((t) =>
@@ -3051,14 +3048,25 @@ export default function App() {
   useEffect(() => {
     const TARGET = 3;
     const refillNow = () => {
+      const today = todayISO();
       setTasks((prev) => {
-        const next = [...prev];
+        let next = [...prev];
+        // STEP A — expire "rest of day" overrides. Any task with deadline ≤ today that the user
+        // had snoozed into Tomorrow / Next / Inbox yesterday is now back in scope. Promote it
+        // to Today so the user sees it. Today/Inbox/Next/Tomorrow placement was the user's call
+        // for THAT day; a new day = re-evaluation.
+        next = next.map((t) =>
+          t.deadline && t.deadline <= today && t.type !== 'scheduled' && !t.completed && t.section !== 'today'
+            ? { ...t, section: 'today' as SectionId }
+            : t
+        );
+        // STEP B — top up Tomorrow to TARGET=3 from Next. Today is left untouched (sacred —
+        // only the deadline-driven promotion above adds to it).
         const lists: ListId[] = ['work', 'projects', 'admin'];
         for (const listId of lists) {
           const cmp = (a: Task, b: Task) => a.order - b.order;
           const tomorrowList = next.filter((t) => t.list === listId && t.section === 'tomorrow' && t.type !== 'scheduled' && !t.completed).sort(cmp);
           const nextList = next.filter((t) => t.list === listId && t.section === 'next' && t.type !== 'scheduled' && !t.completed).sort(cmp);
-          // Top up Tomorrow from Next (Today is left untouched — it's deadline-driven only).
           while (tomorrowList.length < TARGET && nextList.length > 0) {
             const moved = nextList.shift()!;
             const idx = next.findIndex((t) => t.id === moved.id);
