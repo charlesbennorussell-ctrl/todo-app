@@ -408,7 +408,7 @@ function SortableTaskItem({
               if (slot === 'cp' && client && project) {
                 return (
                   <p key={`cp-${i}`} className={`${metaCls} ${projectTruncate}`}>
-                    {`${client.short}-${project.name}`}
+                    {`${client.short}: ${project.name}`}
                   </p>
                 );
               }
@@ -1543,7 +1543,7 @@ function CalendarCardBody({ task, projects, clients, taskOrder = 'ptc' }: { task
             const metaCls = `font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis text-[#656464]`;
             if (slot === 'project' && project) return <p key={`p-${i}`} className={metaCls}>{project.name}</p>;
             if (slot === 'client' && client) return <p key={`c-${i}`} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap ${metaColor}`}>{client.short}</p>;
-            if (slot === 'cp' && client && project) return <p key={`cp-${i}`} className={metaCls}>{`${client.short}-${project.name}`}</p>;
+            if (slot === 'cp' && client && project) return <p key={`cp-${i}`} className={metaCls}>{`${client.short}: ${project.name}`}</p>;
             if (slot === 'title') return <span key={`t-${i}`} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleColor}`}>{task.title}</span>;
             return null;
           })}
@@ -1618,7 +1618,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
                   const metaCls = `font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis text-[#656464]`;
                   if (slot === 'project' && project) return <p key={`p-${i}`} className={metaCls}>{project.name}</p>;
                   if (slot === 'client' && client) return <p key={`c-${i}`} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap ${metaColor}`}>{client.short}</p>;
-                  if (slot === 'cp' && client && project) return <p key={`cp-${i}`} className={metaCls}>{`${client.short}-${project.name}`}</p>;
+                  if (slot === 'cp' && client && project) return <p key={`cp-${i}`} className={metaCls}>{`${client.short}: ${project.name}`}</p>;
                   if (slot === 'title') return <span key={`t-${i}`} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleColor}`}>{task.title}</span>;
                   return null;
                 })}
@@ -1766,7 +1766,7 @@ function WeekCalendarMode({
             {taskOrderSlots(taskOrder, !!project, clientOnFirstRow ? !!client : false).map((slot, i) => {
               if (slot === 'project' && project) return <p key={`p-${i}`} className="font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis text-[#656464]">{project.name}</p>;
               if (slot === 'client' && client) return <p key={`c-${i}`} className="font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap text-[#8465ff]">{client.short}</p>;
-              if (slot === 'cp' && client && project) return <p key={`cp-${i}`} className="font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis text-[#656464]">{`${client.short}-${project.name}`}</p>;
+              if (slot === 'cp' && client && project) return <p key={`cp-${i}`} className="font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis text-[#656464]">{`${client.short}: ${project.name}`}</p>;
               if (slot === 'title') return <span key={`t-${i}`} className="font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis text-[#8465ff]">{task.title}</span>;
               return null;
             })}
@@ -2094,7 +2094,7 @@ function ProjectTaskRow({ task, listId, onToggle, onRename, onDelete, onEdit, on
               const metaCls = `${bodyFont} ${task.completed ? 'text-[#383838]' : 'text-[#656464]'}`;
               if (slot === 'project' && project) return <p key={`p-${i}`} className={`${metaCls} ${projectTruncate}`}>{project.name}</p>;
               if (slot === 'client' && client) return <p key={`c-${i}`} className={`${bodyFont} ${metaColor}`}>{client.short}</p>;
-              if (slot === 'cp' && client && project) return <p key={`cp-${i}`} className={`${metaCls} ${projectTruncate}`}>{`${client.short}-${project.name}`}</p>;
+              if (slot === 'cp' && client && project) return <p key={`cp-${i}`} className={`${metaCls} ${projectTruncate}`}>{`${client.short}: ${project.name}`}</p>;
               if (slot === 'title') return <EditableText key={`t-${i}`} value={task.title} onChange={onRename} autoFocus={autoFocus} placeholder="New Task" onEnter={onAddSibling} className={`${bodyFont} ${titleColor}`} />;
               return null;
             });
@@ -3356,7 +3356,8 @@ export default function App() {
   );
 
   // Milestones are read-only in the column: not draggable, sorted by deadline. Still rendered through
-  // SortableTaskItem (with nonDraggable) so visuals stay identical to other rows.
+  // SortableTaskItem (with nonDraggable) so visuals stay identical to other rows. Inherits the
+  // user's taskOrder + density just like regular tasks so the meta-slot order matches.
   const renderMilestoneBucket = (list: Task[]) => (
     <>
       {list.map((task) => (
@@ -3370,6 +3371,8 @@ export default function App() {
           isAnyDragging={!!activeTask}
           projects={projects}
           clients={clients}
+          taskOrder={taskOrder}
+          density={density}
           nonDraggable
         />
       ))}
@@ -3391,9 +3394,20 @@ export default function App() {
           <div key={`dash-${task.id}`} onDoubleClick={() => openEdit(task)} onContextMenu={(e) => { e.preventDefault(); openQuick(task); }} className="h-[37px] box-border flex flex-row gap-2 items-center px-[31px] w-full group hover:bg-white/[0.03]">
             {!isScheduled && <TaskCheckbox completed={task.completed} onToggle={() => toggleTask(task.id)} />}
             <div className="flex flex-row items-center gap-[4px]">
-              {project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : 'text-[#656464]'}`}>{project.name}</p>}
-              <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap ${titleColor}`}>{task.title}</span>
-              {client && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap ${metaColor}`}>{client.short}</p>}
+              {/* Use the shared taskOrderSlots so dashboard milestones honor the user's chosen
+                  meta order (cpt / tcp / ptc, etc.) — same as regular task rows do. */}
+              {(() => {
+                const showClient = !!client;
+                const showProject = !!project;
+                const metaCls = `font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : 'text-[#656464]'}`;
+                return taskOrderSlots(taskOrder, showProject, showClient).map((slot, i) => {
+                  if (slot === 'project' && project) return <p key={`p-${i}`} className={metaCls}>{project.name}</p>;
+                  if (slot === 'client' && client) return <p key={`c-${i}`} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap ${metaColor}`}>{client.short}</p>;
+                  if (slot === 'cp' && client && project) return <p key={`cp-${i}`} className={metaCls}>{`${client.short}: ${project.name}`}</p>;
+                  if (slot === 'title') return <span key={`t-${i}`} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap ${titleColor}`}>{task.title}</span>;
+                  return null;
+                });
+              })()}
             </div>
             {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} />)}
             {task.deadline && (
