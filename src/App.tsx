@@ -899,6 +899,77 @@ function AddModal({
   );
 }
 
+// Destructive-action confirmation modal — user must type the literal word "TRASH" to enable
+// the Confirm button. Used for deleting projects/clients (which would orphan tasks if done by
+// accident). The kind label ("project" / "client") and name appear in the warning text so the
+// user sees exactly what they're about to delete.
+function TrashConfirmModal({
+  kind,
+  name,
+  onConfirm,
+  onClose,
+}: {
+  kind: 'project' | 'client';
+  name: string;
+  onConfirm: () => void;
+  onClose: () => void;
+}) {
+  const [typed, setTyped] = useState('');
+  const armed = typed.trim().toUpperCase() === 'TRASH';
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60"
+      onClick={onClose}
+    >
+      <motion.div
+        initial={{ scale: 0.95, y: 10 }}
+        animate={{ scale: 1, y: 0 }}
+        exit={{ scale: 0.95, y: 10 }}
+        transition={{ type: 'spring', stiffness: 400, damping: 28 }}
+        onClick={(e) => e.stopPropagation()}
+        className="bg-[#2a2a2a] rounded-2xl border border-[#3a3a3a] w-[440px] p-6 shadow-2xl"
+      >
+        <div className="flex items-center gap-2 mb-3">
+          <Trash2 size={16} className="text-[#FF7171]" />
+          <p className="text-white text-[14px]">Delete {kind} "{name}"?</p>
+        </div>
+        <p className="text-[#888] text-[13px] mb-4">
+          This is permanent. Tasks under this {kind} will be orphaned. Type <span className="text-white font-bold">TRASH</span> below to confirm.
+        </p>
+        <input
+          autoFocus
+          value={typed}
+          onChange={(e) => setTyped(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && armed) { onConfirm(); }
+            if (e.key === 'Escape') onClose();
+          }}
+          placeholder="TRASH"
+          className="w-full bg-[#1f1f1f] rounded-md px-3 py-2 text-white text-[14px] outline-none focus:ring-1 focus:ring-[#FF7171] mb-4 tracking-wider"
+        />
+        <div className="flex gap-2 justify-end">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 rounded-md text-[14px] text-[#888] hover:text-white"
+          >
+            Cancel
+          </button>
+          <button
+            disabled={!armed}
+            onClick={onConfirm}
+            className={`px-4 py-2 rounded-md text-[14px] ${armed ? 'bg-[#FF7171] text-white hover:bg-[#ff5555]' : 'bg-[#3a3a3a] text-[#666] cursor-not-allowed'}`}
+          >
+            Delete
+          </button>
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
 function EditableText({ value, onChange, className, autoFocus = false, placeholder, onEditingChange, onDiscardIfEmpty, onEnter }: { value: string; onChange: (v: string) => void; className?: string; autoFocus?: boolean; placeholder?: string; onEditingChange?: (editing: boolean) => void; onDiscardIfEmpty?: () => void; onEnter?: () => void }) {
   const [editing, setEditingState] = useState(autoFocus);
   const setEditing = (v: boolean) => { setEditingState(v); onEditingChange?.(v); };
@@ -2572,6 +2643,9 @@ export default function App() {
   }, [currentUserShort]);
   const addClient = useCallback((c: Omit<Client, 'id'>) => setClients((prev) => [...prev, { ...c, id: `c-${Date.now()}` }]), []);
   const [newId, setNewId] = useState<string | null>(null);
+  // Pending destructive-confirm: when set, the TrashConfirmModal renders. The user must type
+  // "TRASH" in the modal before the actual delete fires.
+  const [pendingTrash, setPendingTrash] = useState<{ kind: 'project' | 'client'; id: string; name: string } | null>(null);
   const addBlankClient = useCallback(() => {
     const id = `c-${Date.now()}`;
     setClients((prev) => [...prev, { id, name: '', short: '' }]);
@@ -3484,7 +3558,8 @@ export default function App() {
           <div key={c.id}>
             {ci > 0 && <Spacer />}
             {/* Client subheader — editable client name + AddPlus to spawn a new project under
-                this client in this column. */}
+                this client in this column. Trash button opens the TRASH-confirm modal (Personal
+                client cannot be deleted — it's a system client). */}
             <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px]">
               <EditableText
                 value={c.name}
@@ -3495,6 +3570,11 @@ export default function App() {
                 className={`${proj2BodyFont} text-[#656464]`}
               />
               <AddPlus onClick={() => addBlankProject(c.id, listId)} />
+              {c.id !== PERSONAL_CLIENT_ID && (
+                <div className="ml-auto">
+                  <TrashBtn onClick={() => setPendingTrash({ kind: 'client', id: c.id, name: c.name || 'Untitled' })} />
+                </div>
+              )}
             </div>
             {clientProjects.map((p) => {
               const projTasks = tasksByProject.get(p.id) || [];
@@ -3516,6 +3596,9 @@ export default function App() {
                       className={`${proj2BodyFont} text-white`}
                     />
                     <AddPlus onClick={() => addTaskToProject(p.id, listId)} />
+                    <div className="ml-auto">
+                      <TrashBtn onClick={() => setPendingTrash({ kind: 'project', id: p.id, name: p.name || 'Untitled' })} />
+                    </div>
                   </div>
                   {projTasks.length > 0 && renderProjectBucket(projTasks, `proj2:${listId}:${p.id}:`, true)}
                 </div>
@@ -3714,6 +3797,19 @@ export default function App() {
         <BottomBar mode={mode} onSetMode={setMode} onAdd={addAndEditTask} />
 
         <AnimatePresence>
+          {pendingTrash && (
+            <TrashConfirmModal
+              key={`trash-${pendingTrash.kind}-${pendingTrash.id}`}
+              kind={pendingTrash.kind}
+              name={pendingTrash.name}
+              onClose={() => setPendingTrash(null)}
+              onConfirm={() => {
+                if (pendingTrash.kind === 'project') deleteProject(pendingTrash.id);
+                if (pendingTrash.kind === 'client') deleteClient(pendingTrash.id);
+                setPendingTrash(null);
+              }}
+            />
+          )}
           {showAdd && (
             <AddModal
               onClose={() => { setShowAdd(false); setPrefillList(null); }}
