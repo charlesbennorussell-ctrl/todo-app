@@ -236,6 +236,7 @@ const Displaced = memo(function Displaced({
 
 function SortableTaskItem({
   task, onToggle, onRename, onDelete, onEdit, onQuickEdit, onAddSibling, onReschedule, autoFocus = false, isDragOverlay = false, displacementOffset = 0, insertionGap = 0, isAnyDragging = false, collapsed = false, projects = [], clients = [], nonDraggable = false, idPrefix = '', taskOrder = 'ptc', density = 0,
+  showIndent = false, hideContext = false,
 }: {
   task: Task; onToggle: () => void; onRename?: (title: string) => void; onDelete?: () => void; onEdit?: (e?: React.MouseEvent) => void; onQuickEdit?: (e?: React.MouseEvent) => void; onAddSibling?: () => void; onReschedule?: (kind: 'tomorrow' | 'nextWeek') => void; autoFocus?: boolean; isDragOverlay?: boolean; displacementOffset?: number; insertionGap?: number; isAnyDragging?: boolean; collapsed?: boolean; projects?: Project[]; clients?: Client[]; nonDraggable?: boolean;
   taskOrder?: TaskOrder;
@@ -245,6 +246,10 @@ function SortableTaskItem({
   // dashboard sub-list AND work column) without sharing a sortable id â€” otherwise picking up one
   // instance would mark BOTH as the active drag and fade them simultaneously.
   idPrefix?: string;
+  // PROJECT VIEW 2: lets the same component render the project-view look (LIndent + no
+  // project/client meta) without forking. Pure visual flags — no effect on drag mechanics.
+  showIndent?: boolean;
+  hideContext?: boolean;
 }) {
   const project = task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
   // Prefer the task's explicit clientId, fall back to the project's owning client.
@@ -365,7 +370,9 @@ function SortableTaskItem({
       }}
       whileHover={!isDragging && !isDragOverlay ? { backgroundColor: "rgba(255, 255, 255, 0.03)", transition: { duration: 0.15 } } : {}}
     >
-      <div onDoubleClick={(e) => { if (onEdit && !editing) { e.stopPropagation(); onEdit(e); } }} onContextMenu={(e) => { if (onQuickEdit) { e.preventDefault(); e.stopPropagation(); onQuickEdit(e); } }} className="relative box-border flex flex-row gap-2 h-[37px] items-center px-[31px] w-full">
+      <div onDoubleClick={(e) => { if (onEdit && !editing) { e.stopPropagation(); onEdit(e); } }} onContextMenu={(e) => { if (onQuickEdit) { e.preventDefault(); e.stopPropagation(); onQuickEdit(e); } }} className={`relative box-border flex flex-row gap-2 h-[37px] items-center pr-[31px] w-full ${showIndent ? 'pl-[43px]' : 'pl-[31px]'}`}>
+        {/* Project-view-2 rows render the LIndent ⌐ glyph just before the checkbox. */}
+        {showIndent && <LIndent />}
         {/* Visual grab affordance only â€” absolutely positioned so it doesn't take flex layout space.
             Otherwise the gap-2 after the arrow indents the checkbox 8px past the section labels.
             White when this row IS the drag overlay so it pops while in motion; gray on hover otherwise. */}
@@ -387,8 +394,9 @@ function SortableTaskItem({
             // Compute which meta slots are "active" given the current density. The slot helper
             // already arranges them by user-chosen order — we just suppress the ones the cascade
             // has hidden by passing hasProject/hasClient = false at the right thresholds.
-            const showClient = !!client && density < 4;
-            const showProject = !!project && density < 6;
+            // hideContext (project view 2): suppress project + client entirely — redundant.
+            const showClient = !hideContext && !!client && density < 4;
+            const showProject = !hideContext && !!project && density < 6;
             return taskOrderSlots(taskOrder, showProject, showClient).map((slot, i) => {
               const metaCls = `font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : 'text-[#656464]'}`;
               // Progressive truncation: project name truncates first (density >= 1).
@@ -616,6 +624,12 @@ function BottomBar({ mode, onSetMode, onAdd }: { mode: AppMode; onSetMode: (m: A
       <div className="flex flex-row gap-10 items-center justify-self-start">
         <button onClick={() => onSetMode('dashboard')} className={iconClass(mode === 'dashboard')}><List size={22} /></button>
         <button onClick={() => onSetMode('projectView')} className={iconClass(mode === 'projectView')}><FolderTree size={22} /></button>
+        {/* Project View 2 — fresh build off list view's drag tech, side-by-side with the legacy
+            project view so the user can A/B them. Tiny "2" badge in the bottom-right corner. */}
+        <button onClick={() => onSetMode('projectView2')} className={`${iconClass(mode === 'projectView2')} relative`}>
+          <FolderTree size={22} />
+          <span className="absolute -bottom-[2px] -right-[2px] text-[8px] leading-none font-bold bg-[#7363FF] text-white rounded-full px-[3px] py-[1px]">2</span>
+        </button>
         <button onClick={() => onSetMode('calendar')} className={iconClass(mode === 'calendar')}><CalendarIcon size={22} /></button>
       </div>
       {/* Center column: + add-task button, dead-centered in the bottom bar. */}
@@ -3353,6 +3367,95 @@ export default function App() {
     );
   };
 
+  // PROJECT VIEW 2: built fresh from the list view (renderColumn). Same column shape, same
+  // drag mechanics — but tasks grouped by their owning project instead of by section. Each
+  // project becomes a header followed by a renderBucket() of its tasks. renderBucket uses
+  // SortableTaskItem with showIndent + hideContext so the visuals match the legacy project view.
+  const renderProjectGroupedColumn = (listId: ListId) => {
+    // Wrap in renderBucket but with project-view-2 visual flags. renderBucket itself doesn't take
+    // those flags — we inline a copy here that does.
+    const renderProjectBucket = (list: Task[], idPrefix: string) => (
+      <SortableContext items={list.map((t) => `${idPrefix}${t.id}`)} strategy={verticalListSortingStrategy}>
+        <AnimatePresence>
+          {list.map((task, index) => {
+            const { displacementOffset, insertionGap } = getAnimationProps(task, index, list, idPrefix);
+            return (
+              <SortableTaskItem
+                key={`${idPrefix}${task.id}`}
+                task={task}
+                idPrefix={idPrefix}
+                onToggle={() => toggleTask(task.id)}
+                onRename={(title) => renameTask(task.id, title)}
+                onDelete={() => deleteTask(task.id)}
+                onEdit={(e) => openEdit(task, e)}
+                onQuickEdit={(e) => openQuick(task, e)}
+                onAddSibling={() => addSiblingTask(task)}
+                onReschedule={(kind) => rescheduleTaskTo(task.id, kind)}
+                autoFocus={task.id === newId}
+                displacementOffset={displacementOffset}
+                insertionGap={insertionGap}
+                isAnyDragging={!!activeTask}
+                collapsed={sourceCollapsed && `${idPrefix}${task.id}` === activeId}
+                projects={projects}
+                clients={clients}
+                taskOrder={taskOrder}
+                density={density}
+                showIndent
+                hideContext
+              />
+            );
+          })}
+        </AnimatePresence>
+      </SortableContext>
+    );
+    // Gather tasks for this list, group by project. Tasks without a project go under "(No project)".
+    const allTasks = (tasksByKey[`${listId}:today`] || [])
+      .concat(tasksByKey[`${listId}:tomorrow`] || [])
+      .concat(tasksByKey[`${listId}:next`] || [])
+      .concat(tasksByKey[`${listId}:inbox`] || []);
+    const projectsHere = new Map<string, Task[]>();
+    const orphans: Task[] = [];
+    for (const t of allTasks) {
+      if (t.projectId && projects.find((p) => p.id === t.projectId)) {
+        const arr = projectsHere.get(t.projectId) || [];
+        arr.push(t);
+        projectsHere.set(t.projectId, arr);
+      } else {
+        orphans.push(t);
+      }
+    }
+    const projectOrder = projects.filter((p) => projectsHere.has(p.id));
+    return (
+      <div key={listId} className="flex-1 min-w-[280px]">
+        <p className={`font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] px-[35px] mb-[74px] text-white`}>
+          {LIST_TITLES[listId]}
+        </p>
+        {projectOrder.map((p) => {
+          const projTasks = projectsHere.get(p.id)!;
+          const client = clients.find((c) => c.id === p.clientId);
+          const headerLabel = client && client.short !== 'Personal' ? `${client.short} ${p.name}` : p.name;
+          return (
+            <div key={p.id} className="mb-[37px]">
+              <div className="h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]">
+                <Folder size={12} className="text-[#656464]" />
+                <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] text-white whitespace-nowrap">{headerLabel}</span>
+              </div>
+              {renderProjectBucket(projTasks, `proj2:${listId}:${p.id}:`)}
+            </div>
+          );
+        })}
+        {orphans.length > 0 && (
+          <div className="mb-[37px]">
+            <div className="h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]">
+              <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] text-[#656464] whitespace-nowrap">(no project)</span>
+            </div>
+            {renderProjectBucket(orphans, `proj2:${listId}:none:`)}
+          </div>
+        )}
+      </div>
+    );
+  };
+
   const calendarCollision = useCallback((args: Parameters<typeof pointerWithin>[0]) => {
     const collisions = pointerWithin(args);
     if (mode !== 'calendar') return collisions;
@@ -3427,6 +3530,15 @@ export default function App() {
         {mode === 'dashboard' && (
           <div className="pt-[106px] pb-[140px] flex gap-0">
             {LISTS.map(renderColumn)}
+          </div>
+        )}
+        {mode === 'projectView2' && (
+          // FRESH PROJECT VIEW — built from list view's renderColumn, grouping tasks by project.
+          // Inherits ALL of list view's working drag mechanics 1:1 (renderBucket, SortableTaskItem,
+          // getAnimationProps, the existing DragOverlay path). The only diff is the column body
+          // uses renderProjectGroupedColumn instead of renderColumn.
+          <div className="pt-[106px] pb-[140px] flex gap-0">
+            {LISTS.map((l) => renderProjectGroupedColumn(l))}
           </div>
         )}
         {mode === 'projectView' && (

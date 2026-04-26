@@ -1,7 +1,7 @@
 export type Assignee = string;
 export type SectionId = 'inbox' | 'today' | 'tomorrow' | 'next';
 export type ListId = 'dashboard' | 'work' | 'projects' | 'admin';
-export type AppMode = 'dashboard' | 'projectView' | 'calendar' | 'settings';
+export type AppMode = 'dashboard' | 'projectView' | 'projectView2' | 'calendar' | 'settings';
 
 export interface Task {
   id: string;
