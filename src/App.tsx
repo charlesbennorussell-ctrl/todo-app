@@ -529,12 +529,13 @@ function SortableTaskItem({
                 }));
               }
             }}
-            className={`font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] outline-none whitespace-nowrap ${titleColor} ${!isScheduled && onRename ? 'cursor-text px-[7px] -mx-[7px]' : ''}`}
-            // 1-char (~7px @ 14px) padding on each side, cancelled out by negative margin so the
-            // text doesn't shift visually. Net effect: the click hotspot extends ~7px past the
-            // first and last characters, so clicking just before/after the title still places
-            // the caret instead of falling through to the row's drag handle. Empty / very-short
-            // titles still need a comfortable min-width (40px = ~5 chars) for the same reason.
+            className={`relative z-10 font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] outline-none whitespace-nowrap ${titleColor} ${!isScheduled && onRename ? 'cursor-text px-[7px] -mx-[7px]' : ''}`}
+            // Hotspot tolerance: 7px padding on each side, cancelled by negative margin so the
+            // text doesn't visibly shift. Net effect is a ~1-char hit-zone past each edge of the
+            // title. `z-10` + `relative` make the title WIN overlap hit-tests against later
+            // siblings (assignee badge, deadline arrow) — without it those win on the right
+            // because they're later in DOM order.
+            // Empty / very-short titles still need a comfortable min-width (40px = ~5 chars).
             style={(task.title || '').length <= 1 ? { minWidth: '40px' } : undefined}
           >{task.title}</span>
               );
