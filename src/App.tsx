@@ -1952,7 +1952,7 @@ function WeekCalendarMode({
   );
 }
 
-function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePersonShort, onDeletePerson, currentUserShort, onSetCurrentUser, taskOrder, onSetTaskOrder, tomorrowEnabled, onSetTomorrowEnabled, sentenceCaseEnabled, onSetSentenceCaseEnabled, trashedTasks, completedTasks, projects, clients, onUntrashTask, onPurgeTask, onToggleTask }: {
+function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePersonShort, onDeletePerson, currentUserShort, onSetCurrentUser, taskOrder, onSetTaskOrder, tomorrowEnabled, onSetTomorrowEnabled, caseMode, onSetCaseMode, trashedTasks, completedTasks, projects, clients, onUntrashTask, onPurgeTask, onToggleTask }: {
   people: Person[]; newId: string | null;
   onAddPerson: () => void;
   onRenamePerson: (id: string, name: string) => void;
@@ -1964,8 +1964,8 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
   onSetTaskOrder: (v: TaskOrder) => void;
   tomorrowEnabled: boolean;
   onSetTomorrowEnabled: (v: boolean) => void;
-  sentenceCaseEnabled: boolean;
-  onSetSentenceCaseEnabled: (v: boolean) => void;
+  caseMode: 'off' | 'title';
+  onSetCaseMode: (v: 'off' | 'title') => void;
   trashedTasks: Task[];
   completedTasks: Task[];
   projects: Project[];
@@ -2029,16 +2029,15 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
           <button type="button" onClick={() => onSetTomorrowEnabled(true)} className={`text-[13px] transition-colors ${tomorrowEnabled ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>On</button>
           <button type="button" onClick={() => onSetTomorrowEnabled(false)} className={`text-[13px] transition-colors ${!tomorrowEnabled ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>Off</button>
         </div>
-        {/* Sentence-case auto-conversion. ~3 seconds after the user finishes editing a task /
-            project / client name, the title is rewritten from "Title Case" to "Sentence case".
-            Brand-name vocabulary (clients/projects/people) and ALL-CAPS acronyms are preserved.
-            Default ON. */}
+        {/* Title-case auto-correct. 2 seconds after the user blurs a title, rewrite to title
+            case. Brand-name vocabulary + ALL-CAPS acronyms are preserved; small words ("and",
+            "the", "of"…) stay lowercase. Off → leave titles exactly as typed. */}
         <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[20px]">
-          <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Sentence case auto-correct</p>
+          <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Title case auto-correct</p>
         </div>
         <div className="px-[31px] mb-[50px] flex flex-row gap-4">
-          <button type="button" onClick={() => onSetSentenceCaseEnabled(true)} className={`text-[13px] transition-colors ${sentenceCaseEnabled ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>On</button>
-          <button type="button" onClick={() => onSetSentenceCaseEnabled(false)} className={`text-[13px] transition-colors ${!sentenceCaseEnabled ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>Off</button>
+          <button type="button" onClick={() => onSetCaseMode('off')} className={`text-[13px] transition-colors ${caseMode === 'off' ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>Off</button>
+          <button type="button" onClick={() => onSetCaseMode('title')} className={`text-[13px] transition-colors ${caseMode === 'title' ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>On</button>
         </div>
         <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[74px]">
           <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">People</p>
@@ -2668,19 +2667,24 @@ export default function App() {
     setTomorrowEnabledState(v);
     try { window.localStorage.setItem('todo-app-tomorrow-enabled', v ? '1' : '0'); } catch {}
   }, []);
-  // Sentence-case auto-conversion. When ON, task/project/client titles are debounced ~3s after
-  // the last edit, then rewritten from "Title Case" to "Sentence case". A vocabulary of brand
-  // names + acronyms (built from clients/projects/people) preserves things like "FOG" or "RSL".
-  // Default ON.
-  const [sentenceCaseEnabled, setSentenceCaseEnabledState] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return true;
-    const v = window.localStorage.getItem('todo-app-sentence-case');
-    return v === null ? true : v === '1';
+  // Title-case auto-conversion mode. 2s after blur on a title, the text is rewritten in the
+  // chosen mode:
+  //   'off'   — no conversion
+  //   'title' — "Buy Milk and Eggs" (small words like "and / the / of" stay lowercase)
+  // Brand-name vocabulary + ALL-CAPS acronyms are preserved. Default 'off' (don't surprise
+  // the user; they opt in).
+  type CaseMode = 'off' | 'title';
+  const [caseMode, setCaseModeState] = useState<CaseMode>(() => {
+    if (typeof window === 'undefined') return 'off';
+    const v = window.localStorage.getItem('todo-app-case-mode');
+    return v === 'title' ? 'title' : 'off';
   });
-  const setSentenceCaseEnabled = useCallback((v: boolean) => {
-    setSentenceCaseEnabledState(v);
-    try { window.localStorage.setItem('todo-app-sentence-case', v ? '1' : '0'); } catch {}
+  const setCaseMode = useCallback((v: CaseMode) => {
+    setCaseModeState(v);
+    try { window.localStorage.setItem('todo-app-case-mode', v); } catch {}
   }, []);
+  // Convenience boolean for the schedule callbacks below.
+  const sentenceCaseEnabled = caseMode !== 'off';
   // Anchor rect: panel opens over this column. Captured at click time from the row's nearest
   // column ancestor. null → centered (used by the bottom + button).
   const [editAnchor, setEditAnchor] = useState<{ x: number; width: number } | null>(null);
@@ -2840,8 +2844,11 @@ export default function App() {
     for (const pr of people) { if (pr.short) vocab.push(pr.short); if (pr.name) vocab.push(pr.name); }
     vocabRef.current = vocab;
   }, [clients, projects, people]);
-  const sentenceCaseConvert = useCallback((s: string): string => {
-    if (!s) return s;
+  // Words that title-case-style guides keep lowercased even mid-sentence (articles, short
+  // conjunctions, prepositions). Used in 'title' mode only.
+  const TITLE_CASE_LOWER = new Set(['a', 'an', 'and', 'as', 'at', 'but', 'by', 'for', 'in', 'nor', 'of', 'on', 'or', 'so', 'the', 'to', 'up', 'yet', 'via', 'vs', 'vs.']);
+  const sentenceCaseConvert = useCallback((s: string, mode: CaseMode): string => {
+    if (!s || mode === 'off') return s;
     const vocabMap = new Map<string, string>();
     for (const v of vocabRef.current) vocabMap.set(v.toLowerCase(), v);
     // Tokenize keeping whitespace so we can re-stitch with original spacing.
@@ -2866,8 +2873,11 @@ export default function App() {
       const lower = core.toLowerCase();
       const upper = core.toUpperCase();
       if (core !== titleCase && core !== lower && core !== upper) return part;
-      // Default: first word capitalized, rest lowercase.
-      return lead + (isFirst ? titleCase : lower) + trail;
+      // Title case: first word capitalized; otherwise capitalize unless it's a small word
+      // (article / preposition / short conjunction).
+      if (isFirst) return lead + titleCase + trail;
+      if (TITLE_CASE_LOWER.has(lower)) return lead + lower + trail;
+      return lead + titleCase + trail;
     }).join('');
   }, []);
   // Schedule (or re-schedule) the per-item 30-minute timer. Each subsequent edit on the same
@@ -2882,7 +2892,7 @@ export default function App() {
       sentenceCaseTimers.current.delete(key);
       setTasks((prev) => prev.map((t) => {
         if (t.id !== taskId) return t;
-        const converted = sentenceCaseConvert(t.title);
+        const converted = sentenceCaseConvert(t.title, caseMode);
         return converted === t.title ? t : { ...t, title: converted };
       }));
     }, SENTENCE_CASE_DELAY_MS);
@@ -2897,7 +2907,7 @@ export default function App() {
       sentenceCaseTimers.current.delete(key);
       setProjects((prev) => prev.map((p) => {
         if (p.id !== id) return p;
-        const converted = sentenceCaseConvert(p.name);
+        const converted = sentenceCaseConvert(p.name, caseMode);
         return converted === p.name ? p : { ...p, name: converted };
       }));
     }, SENTENCE_CASE_DELAY_MS);
@@ -2912,7 +2922,7 @@ export default function App() {
       sentenceCaseTimers.current.delete(key);
       setClients((prev) => prev.map((c) => {
         if (c.id !== id) return c;
-        const converted = sentenceCaseConvert(c.name);
+        const converted = sentenceCaseConvert(c.name, caseMode);
         return converted === c.name ? c : { ...c, name: converted };
       }));
     }, SENTENCE_CASE_DELAY_MS);
@@ -4183,8 +4193,8 @@ export default function App() {
             onSetTaskOrder={setTaskOrder}
             tomorrowEnabled={tomorrowEnabled}
             onSetTomorrowEnabled={setTomorrowEnabled}
-            sentenceCaseEnabled={sentenceCaseEnabled}
-            onSetSentenceCaseEnabled={setSentenceCaseEnabled}
+            caseMode={caseMode}
+            onSetCaseMode={setCaseMode}
             trashedTasks={trashedTasks}
             completedTasks={completedTasksForSettings}
             projects={projects}
