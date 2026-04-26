@@ -254,10 +254,15 @@ const Displaced = memo(function Displaced({
 });
 
 function SortableTaskItem({
-  task, onToggle, onRename, onDelete, onEdit, onQuickEdit, onAddSibling, onReschedule, autoFocus = false, isDragOverlay = false, displacementOffset = 0, insertionGap = 0, isAnyDragging = false, collapsed = false, projects = [], clients = [], nonDraggable = false, idPrefix = '', taskOrder = 'ptc', density = 0,
+  task, onToggle, onRename, onDelete, onEdit, onQuickEdit, onAddSibling, onReschedule, onCancelPendingRename, autoFocus = false, isDragOverlay = false, displacementOffset = 0, insertionGap = 0, isAnyDragging = false, collapsed = false, projects = [], clients = [], nonDraggable = false, idPrefix = '', taskOrder = 'ptc', density = 0,
   showIndent = false, hideContext = false,
 }: {
-  task: Task; onToggle: () => void; onRename?: (title: string) => void; onDelete?: () => void; onEdit?: (e?: React.MouseEvent) => void; onQuickEdit?: (e?: React.MouseEvent) => void; onAddSibling?: () => void; onReschedule?: (kind: 'today' | 'tomorrow' | 'nextWeek' | 'shiftBack') => void; autoFocus?: boolean; isDragOverlay?: boolean; displacementOffset?: number; insertionGap?: number; isAnyDragging?: boolean; collapsed?: boolean; projects?: Project[]; clients?: Client[]; nonDraggable?: boolean;
+  task: Task; onToggle: () => void; onRename?: (title: string) => void; onDelete?: () => void; onEdit?: (e?: React.MouseEvent) => void; onQuickEdit?: (e?: React.MouseEvent) => void; onAddSibling?: () => void; onReschedule?: (kind: 'today' | 'tomorrow' | 'nextWeek' | 'shiftBack') => void;
+  // Cancel any pending sentence-case-rename timer for this task. Called when the user re-clicks
+  // the title (entering edit mode again) within the 2s post-blur window so the in-flight
+  // conversion doesn't clobber the title mid-type.
+  onCancelPendingRename?: () => void;
+  autoFocus?: boolean; isDragOverlay?: boolean; displacementOffset?: number; insertionGap?: number; isAnyDragging?: boolean; collapsed?: boolean; projects?: Project[]; clients?: Client[]; nonDraggable?: boolean;
   taskOrder?: TaskOrder;
   // Responsive density level (0=full ... 7=tightest). See App's density comment for the cascade.
   density?: number;
@@ -468,6 +473,9 @@ function SortableTaskItem({
             onPointerDown={(e) => {
               if (editing) { e.stopPropagation(); return; }
               if (!onRename) return;
+              // User came back to edit the title — cancel any pending sentence-case conversion
+              // so it can't fire mid-type and clobber what they're about to write.
+              onCancelPendingRename?.();
               // Imperatively flip contentEditable + focus + place caret in the SAME pointerdown
               // tick, BEFORE React re-renders. This is what enables drag-to-select on the very
               // first click (browser needs contentEditable=true at pointerdown time to engage
@@ -2816,13 +2824,13 @@ export default function App() {
     setTasks((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
-  // Sentence-case auto-converter. Per-item 30-minute debounced timer: each edit on a given
-  // task / project / client resets ITS OWN timer; 30 min after the last edit the title is
-  // rewritten in sentence case. Long enough that a session of "create 10 tasks then fill
-  // them out" finishes well before any conversion fires.
+  // Sentence-case auto-converter. The trigger is BLUR (the user clicks/tabs off the title).
+  // 2 seconds after blur, the title is rewritten in sentence case. If the user comes back to
+  // edit the same title within those 2s (focus / pointerdown), the timer is cancelled — so
+  // re-edits aren't clobbered mid-type.
   // Per-key timer map. Key format: "task:<id>" | "proj:<id>" | "cli:<id>".
   const sentenceCaseTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
-  const SENTENCE_CASE_DELAY_MS = 30 * 60 * 1000; // 30 minutes
+  const SENTENCE_CASE_DELAY_MS = 2000; // 2 seconds after blur
   // Vocabulary stays a ref so the converter always sees the latest entries without re-binding.
   const vocabRef = useRef<string[]>([]);
   useEffect(() => {
@@ -2910,6 +2918,13 @@ export default function App() {
     }, SENTENCE_CASE_DELAY_MS);
     sentenceCaseTimers.current.set(key, timer);
   }, [sentenceCaseEnabled, sentenceCaseConvert]);
+  // Cancel a pending sentence-case timer. Called when the user re-focuses the title within
+  // the 2s window so a mid-conversion clobber can't happen.
+  const cancelSentenceCaseTask = useCallback((id: string) => {
+    const key = `task:${id}`;
+    const t = sentenceCaseTimers.current.get(key);
+    if (t) { clearTimeout(t); sentenceCaseTimers.current.delete(key); }
+  }, []);
 
   const renameTask = useCallback((id: string, title: string) => {
     setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, title } : t)));
@@ -3707,7 +3722,7 @@ export default function App() {
         {list.map((task, index) => {
           const { displacementOffset, insertionGap } = getAnimationProps(task, index, list, idPrefix);
           return (
-            <SortableTaskItem key={`${idPrefix}${task.id}`} task={task} idPrefix={idPrefix} onToggle={() => toggleTask(task.id)} onRename={(title) => renameTask(task.id, title)} onDelete={() => deleteTask(task.id)} onEdit={(e) => openEdit(task, e)} onQuickEdit={(e) => openQuick(task, e)} onAddSibling={() => addSiblingTask(task)} onReschedule={(kind) => rescheduleTaskTo(task.id, kind)} autoFocus={task.id === newId} displacementOffset={displacementOffset} insertionGap={insertionGap} isAnyDragging={!!activeTask} collapsed={sourceCollapsed && `${idPrefix}${task.id}` === activeId} projects={projects} clients={clients} taskOrder={taskOrder} density={density} />
+            <SortableTaskItem key={`${idPrefix}${task.id}`} task={task} idPrefix={idPrefix} onToggle={() => toggleTask(task.id)} onRename={(title) => renameTask(task.id, title)} onDelete={() => deleteTask(task.id)} onEdit={(e) => openEdit(task, e)} onQuickEdit={(e) => openQuick(task, e)} onAddSibling={() => addSiblingTask(task)} onReschedule={(kind) => rescheduleTaskTo(task.id, kind)} onCancelPendingRename={() => cancelSentenceCaseTask(task.id)} autoFocus={task.id === newId} displacementOffset={displacementOffset} insertionGap={insertionGap} isAnyDragging={!!activeTask} collapsed={sourceCollapsed && `${idPrefix}${task.id}` === activeId} projects={projects} clients={clients} taskOrder={taskOrder} density={density} />
           );
         })}
       </AnimatePresence>
@@ -3894,6 +3909,7 @@ export default function App() {
                 onQuickEdit={(e) => openQuick(task, e)}
                 onAddSibling={() => addSiblingTask(task)}
                 onReschedule={(kind) => rescheduleTaskTo(task.id, kind)}
+                onCancelPendingRename={() => cancelSentenceCaseTask(task.id)}
                 autoFocus={task.id === newId}
                 displacementOffset={displacementOffset}
                 insertionGap={insertionGap}
