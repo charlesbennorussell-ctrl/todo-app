@@ -388,8 +388,10 @@ function SortableTaskItem({
         {!isScheduled && <TaskCheckbox completed={task.completed} onToggle={onToggle} />}
         {/* Title row — slot order is driven by the user's `taskOrder` setting.
             Density-driven slot filtering: client hidden at >=4, project hidden at >=6.
-            shrink-0 keeps the title-row at content width; the title is NEVER squeezed. */}
-        <div className="flex flex-row items-center gap-[4px] min-w-0 overflow-hidden shrink-0">
+            shrink-0 keeps the title-row at content width; the title is NEVER squeezed.
+            -mr-2 cancels the outer row's gap-2, removing the redundant buffer between the
+            trailing hit-zone and the assignee badge — the hit-zone itself provides the slack. */}
+        <div className="flex flex-row items-center gap-[4px] min-w-0 overflow-hidden shrink-0 -mr-2">
           {(() => {
             // Compute which meta slots are "active" given the current density. The slot helper
             // already arranges them by user-chosen order — we just suppress the ones the cascade
@@ -544,7 +546,7 @@ function SortableTaskItem({
             return null;
             });
           })()}
-          {/* Trailing hit-zone — a 14px transparent strip immediately AFTER the title slot.
+          {/* Trailing hit-zone — a 7px (~1 char) transparent strip immediately AFTER the title.
               Captures clicks just past the title's last character and forwards them to the
               title span, dispatching a synthetic pointerdown so the existing caret-placement
               handler fires and lands the caret at the end. Lives outside the title span (so it
@@ -553,7 +555,7 @@ function SortableTaskItem({
           {!isScheduled && onRename && (
             <span
               aria-hidden
-              className="cursor-text shrink-0 self-stretch w-[14px]"
+              className="cursor-text shrink-0 self-stretch w-[7px]"
               onPointerDown={(e) => {
                 if (editing) return;
                 e.stopPropagation();
