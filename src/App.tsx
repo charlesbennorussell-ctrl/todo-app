@@ -147,10 +147,15 @@ function taskOrderSlots(order: TaskOrder, hasProject: boolean, hasClient: boolea
 // Just the arrowhead from DeadlineArrow (no line) — used as the inline ">" separator in
 // breadcrumb-style meta paths (e.g. "RSL ▶ Launch ▶ PR Launch") so the chevron at the
 // row's date and the chevron between meta slots share one visual vocabulary.
-function Arrowhead({ dim = false }: { dim?: boolean }) {
-  const fill = dim ? '#383838' : '#656464';
+//
+// Sized exactly like the DeadlineArrow's polygon (4×8 in a 12-tall wrapper, with -mt-[2px]
+// to land on the text's baseline band — see DeadlineArrow). Tone:
+//   - 'default'   → #656464 (matches DeadlineArrow's fill)
+//   - 'milestone' → #8465ff (matches milestone purple)
+function Arrowhead({ dim = false, tone = 'default' }: { dim?: boolean; tone?: 'default' | 'milestone' }) {
+  const fill = dim ? '#383838' : tone === 'milestone' ? '#8465ff' : '#656464';
   return (
-    <span className="inline-flex items-center align-middle mx-[3px] shrink-0">
+    <span className="inline-flex items-center shrink-0 mx-[4px] -mt-[2px] align-middle" style={{ height: 12 }}>
       <svg width="4" height="8" viewBox="0 0 4 8" fill="none">
         <polygon points="0,0 4,4 0,8" fill={fill} />
       </svg>
@@ -421,7 +426,7 @@ function SortableTaskItem({
             const sepIfMilestone = (key: string) => {
               if (!isScheduled) return null;
               if (!prevHadContent) return null;
-              return <span key={key}><Arrowhead dim={task.completed} /></span>;
+              return <span key={key}><Arrowhead dim={task.completed} tone="milestone" /></span>;
             };
             return taskOrderSlots(taskOrder, showProject, showClient).flatMap((slot, i) => {
               const metaCls = `font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : 'text-[#656464]'}`;
