@@ -1611,19 +1611,14 @@ function CalendarCardBody({ task, projects, clients, taskOrder = 'ptc' }: { task
         </div>
       )}
       <div className="flex-1 min-w-0 flex flex-col gap-[2px]">
+        {/* Calendar overlay always shows Title on line 1, meta on line 2. */}
         <div className="flex flex-row items-center gap-[4px]">
-          {taskOrderSlots(taskOrder, !!project, clientOnFirstRow ? !!client : false).map((slot, i) => {
-            const metaCls = `font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis text-[#656464]`;
-            if (slot === 'project' && project) return <p key={`p-${i}`} className={metaCls}>{project.name}</p>;
-            if (slot === 'client' && client) return <p key={`c-${i}`} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap ${metaColor}`}>{client.short}</p>;
-            if (slot === 'cp' && client && project) return <p key={`cp-${i}`} className={metaCls}>{client.short}<Arrowhead dim={task.completed} />{project.name}</p>;
-            if (slot === 'title') return <span key={`t-${i}`} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleColor}`}>{task.title}</span>;
-            return null;
-          })}
+          <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleColor}`}>{task.title}</span>
         </div>
         <div className="flex flex-row items-center gap-[6px]">
-          {/* Client only renders in this row for 'ptc' (default). cpt/tcp put it on the first row. */}
-          {!clientOnFirstRow && client && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${metaColor}`}>{client.short}</p>}
+          {client && project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap text-[#656464]`}>{client.short}<Arrowhead dim={task.completed} />{project.name}</p>}
+          {client && !project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${metaColor}`}>{client.short}</p>}
+          {!client && project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap text-[#656464]`}>{project.name}</p>}
           {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} />)}
           {task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${isScheduled ? 'text-[#8465ff]' : isLateDeadline(task.deadline) ? 'text-[#FF7171]' : 'text-[#656464]'}`}>{formatDeadline(task.deadline)}</p>}
         </div>
@@ -1683,24 +1678,19 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
           </div>
         )}
         <div className="flex-1 min-w-0 flex flex-col gap-[2px]">
-          {(() => {
-            const clientOnFirstRow = taskOrder !== 'ptc';
-            return <>
-              <div className="flex flex-row items-center gap-[4px]">
-                {taskOrderSlots(taskOrder, !!project, clientOnFirstRow ? !!client : false).map((slot, i) => {
-                  const metaCls = `font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis text-[#656464]`;
-                  if (slot === 'project' && project) return <p key={`p-${i}`} className={metaCls}>{project.name}</p>;
-                  if (slot === 'client' && client) return <p key={`c-${i}`} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap ${metaColor}`}>{client.short}</p>;
-                  if (slot === 'cp' && client && project) return <p key={`cp-${i}`} className={metaCls}>{client.short}<Arrowhead dim={task.completed} />{project.name}</p>;
-                  if (slot === 'title') return <span key={`t-${i}`} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleColor}`}>{task.title}</span>;
-                  return null;
-                })}
-              </div>
-              <div className="flex flex-row items-center gap-[6px]">
-                {!clientOnFirstRow && client && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${metaColor}`}>{client.short}</p>}
-                {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} />)}
-                {task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${isScheduled ? 'text-[#8465ff]' : isLateDeadline(task.deadline) ? 'text-[#FF7171]' : 'text-[#656464]'}`}>{formatDeadline(task.deadline)}</p>}
-                {/* + button hugs the inline task info on the second row. Trash stays pinned at top-right via absolute. */}
+          {/* Calendar cards always render Title on line 1, all other meta on line 2 — taskOrder
+              setting doesn't apply here. Line 1: title only. Line 2: client › project,
+              assignees, deadline, + button. */}
+          <div className="flex flex-row items-center gap-[4px]">
+            <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleColor}`}>{task.title}</span>
+          </div>
+          <div className="flex flex-row items-center gap-[6px]">
+            {client && project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap text-[#656464]`}>{client.short}<Arrowhead dim={task.completed} />{project.name}</p>}
+            {client && !project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${metaColor}`}>{client.short}</p>}
+            {!client && project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap text-[#656464]`}>{project.name}</p>}
+            {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} />)}
+            {task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${isScheduled ? 'text-[#8465ff]' : isLateDeadline(task.deadline) ? 'text-[#FF7171]' : 'text-[#656464]'}`}>{formatDeadline(task.deadline)}</p>}
+            {/* + button hugs the inline task info on the second row. Trash stays pinned at top-right via absolute. */}
             {onAddSibling && (
               <button
                 type="button"
@@ -1712,9 +1702,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
                 <Plus size={12} />
               </button>
             )}
-              </div>
-            </>;
-          })()}
+          </div>
         </div>
       </div>
       <button
