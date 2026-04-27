@@ -1173,10 +1173,10 @@ function ClientRow({ client, autoFocus, bodyFont, onRenameName, onRenameShort, o
         ) : (
           <EditableText value={client.name} onChange={onRenameName} className={`${bodyFont} text-white`} autoFocus={autoFocus} placeholder="New Client" onEditingChange={setEditingName} />
         )}
-        {!isPersonal && !editingName && client.short && (
+        {!isPersonal && !editingName && (
           <>
             <span className="w-[6px]" />
-            <ShortInBrackets value={client.short} onChange={onRenameShort} />
+            <ShortInBrackets value={client.short || ''} onChange={onRenameShort} />
           </>
         )}
       </span>
@@ -3191,7 +3191,11 @@ export default function App() {
   const renameClient = useCallback((id: string, name: string) => {
     setClients((prev) => prev.map((c) => {
       if (c.id !== id) return c;
-      const shouldAutoShort = id === newId || !c.short;
+      // Auto-update the short on rename UNLESS the user manually customized it.
+      // Heuristic: if the current short matches contractName(currentName), it was auto-generated
+      // — keep it in sync with the new name. If it differs, the user typed something custom in
+      // ShortInBrackets, so leave it alone.
+      const shouldAutoShort = id === newId || !c.short || c.short === contractName(c.name);
       return { ...c, name, short: shouldAutoShort ? contractName(name) : c.short };
     }));
     scheduleSentenceCaseClient(id);
