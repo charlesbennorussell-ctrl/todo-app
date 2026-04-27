@@ -4159,8 +4159,7 @@ export default function App() {
                 idPrefix={idPrefix}
                 onToggle={() => toggleTask(task.id)}
                 onRename={(title) => renameTask(task.id, title)}
-                /* Project View 2 deliberately omits onDelete on rows — keeps the project-focused
-                   view visually clean. Right-click any task → Quick Edit panel still has Delete. */
+                onDelete={() => deleteTask(task.id)}
                 onEdit={(e) => openEdit(task, e)}
                 onQuickEdit={(e) => openQuick(task, e)}
                 onAddSibling={() => addSiblingTask(task)}
