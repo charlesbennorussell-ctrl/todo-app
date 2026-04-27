@@ -1800,14 +1800,19 @@ function WeekCalendarMode({
       // Pass 2 — assign queue fillers per list, respecting:
       //   - the GLOBAL day budget (TASKS_PER_DAY - totalMandatory) — once mandatory hits 8,
       //     ZERO fillers for any list
-      //   - the per-list per-day queue cap (QUEUE_CAP_PER_LIST_PER_DAY = 3) — applies every day
-      //   - the weekend rule for non-Projects lists
+      //   - the per-list per-day SLOT budget: max 3 visible per band (mandatory + queue).
+      //     Mandatory takes priority; queue fills the remainder. So adding 2 mandatory tasks
+      //     to a category instantly pushes 2 queue fillers out of that band — they advance to
+      //     the next day with capacity. If mandatory >= 3, no queue fillers in that band
+      //     (mandatory still shown — it's exempt from the cap, but no more is added).
+      //   - the weekend rule for non-Projects lists.
       let dayBudget = Math.max(0, TASKS_PER_DAY - totalMandatory);
-      void isTodayOrTomorrow; // kept for potential future use
+      void isTodayOrTomorrow;
       for (const listId of CAL_LISTS.map((c) => c.id)) {
         const m = mandatoryByList[listId];
         const skipQueueForWeekend = listId !== 'projects' && (d.getDay() === 0 || d.getDay() === 6);
-        let slotsLeft = Math.min(dayBudget, QUEUE_CAP_PER_LIST_PER_DAY);
+        const listFillerCap = Math.max(0, QUEUE_CAP_PER_LIST_PER_DAY - m.length);
+        let slotsLeft = Math.min(dayBudget, listFillerCap);
         if (skipQueueForWeekend) slotsLeft = 0;
         const queue = queues[listId];
         const fillers = queue.slice(queueIdxs[listId], queueIdxs[listId] + slotsLeft);
