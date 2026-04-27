@@ -1939,12 +1939,9 @@ function WeekCalendarMode({
                   {overflowMilestones.map((t) => <MilestoneCard key={t.id} task={t} showDate />)}
                 </div>
               )}
-              {/* Milestones for this day, pinned above the per-list sections. Date is implied by the column, so it's hidden. */}
-              {(milestonesByIso[iso] || []).length > 0 && (
-                <div className="mb-[12px]">
-                  {milestonesByIso[iso].map((t) => <MilestoneCard key={t.id} task={t} showDate={false} />)}
-                </div>
-              )}
+              {/* Milestones for this day are pinned above their respective category band (Work,
+                  Projects, Admin) inside the list-loop below — no longer rendered as a standalone
+                  block above all bands. */}
               {CAL_LISTS.map(({ id: listId, label }) => {
                 const bucket = tasksForCell(listId, d);
                 const items = bucket.map((t) => t.id);
@@ -1952,7 +1949,16 @@ function WeekCalendarMode({
                 // Weekends are projects-only by default. Work/Admin sections appear only if they have
                 // content for that day, or while a drag is active so the user can drop onto them.
                 const isWeekend = d.getDay() === 0 || d.getDay() === 6;
-                if (isWeekend && listId !== 'projects' && bucket.length === 0 && !isAnyDragging) return null;
+                // Milestones whose effective list matches this band, pinned to the top of it.
+                // Effective list = the project's pinned list if set, otherwise the task's own list.
+                const dayMilestones = (milestonesByIso[iso] || []).filter((t) => {
+                  if (t.projectId) {
+                    const proj = projects.find((p) => p.id === t.projectId);
+                    if (proj?.list) return proj.list === listId;
+                  }
+                  return t.list === listId;
+                });
+                if (isWeekend && listId !== 'projects' && bucket.length === 0 && dayMilestones.length === 0 && !isAnyDragging) return null;
                 // Displacement math (mirrors getAnimationProps in list view):
                 //  - If active and over are BOTH in this bucket: cards strictly between them slide by ï¿½slotH.
                 //  - If active is in a DIFFERENT bucket and over is in this bucket: the over-index card gets
@@ -1962,10 +1968,15 @@ function WeekCalendarMode({
                 const activeInBucket = aIdx >= 0;
                 const overInBucket = oIdx >= 0;
                 return (
-                  <CalendarDayDroppable key={listId} id={`cal:${iso}:${listId}`} isEmpty={bucket.length === 0} className="pb-[37px] last:pb-0">
+                  <CalendarDayDroppable key={listId} id={`cal:${iso}:${listId}`} isEmpty={bucket.length === 0 && dayMilestones.length === 0} className="pb-[37px] last:pb-0">
                     <div className="h-[20px] px-[16px] flex items-center mb-[6px]">
                       <p className={`${bodyFont} text-[#5e5e5e]`}>{label}</p>
                     </div>
+                    {dayMilestones.length > 0 && (
+                      <div className="mb-[4px]">
+                        {dayMilestones.map((t) => <MilestoneCard key={`m-${t.id}`} task={t} showDate={false} />)}
+                      </div>
+                    )}
                     <SortableContext items={items} strategy={verticalListSortingStrategy}>
                         {bucket.map((t, index) => {
                           let displacementOffset = 0;
