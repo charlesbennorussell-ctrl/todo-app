@@ -362,10 +362,15 @@ function SortableTaskItem({
   const isScheduled = task.type === 'scheduled';
   const isNext = task.section === 'next' || task.section === 'tomorrow';
   const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID;
+  // Expired milestone: deadline is strictly before today's day boundary. Renders in a faint
+  // purple so it's visible (lingering) but visually quieted vs. live milestones.
+  const isExpiredMilestone = isScheduled && !!task.deadline && task.deadline < todayISO();
+  // Live milestones: vivid purple. Expired milestones (lingering for 24h): faint purple.
+  const milestonePurpleClass = isExpiredMilestone ? 'text-[#4a3d8a]' : 'text-[#8465ff]';
   // Completed tasks fade to a near-background color across ALL their text â€” no strikethrough,
   // just visually quieted. #383838 is one step off the #282828 page background.
-  const titleColor = isScheduled ? 'text-[#8465ff]' : task.completed ? 'text-[#383838]' : isNext ? 'text-[#a8a8a8]' : 'text-white';
-  const metaColor = task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : 'text-[#656464]';
+  const titleColor = isScheduled ? milestonePurpleClass : task.completed ? 'text-[#383838]' : isNext ? 'text-[#a8a8a8]' : 'text-white';
+  const metaColor = task.completed ? 'text-[#383838]' : isScheduled ? milestonePurpleClass : 'text-[#656464]';
 
   return (
     <Displaced offset={displacementOffset} gap={insertionGap} active={isAnyDragging}>
@@ -652,7 +657,7 @@ function SortableTaskItem({
               // Future tasks now respond to shift+double-click (move date earlier) and double-click
               // (push to tomorrow) so the user can advance any deadline without opening the editor.
               const clickable = !!onReschedule;
-              const cls = `font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : late ? 'text-[#FF7171]' : isNext ? 'text-[#a8a8a8]' : 'text-white'} ${clickable ? 'cursor-pointer' : ''}`;
+              const cls = `font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : isScheduled ? milestonePurpleClass : late ? 'text-[#FF7171]' : isNext ? 'text-[#a8a8a8]' : 'text-white'} ${clickable ? 'cursor-pointer' : ''}`;
               return (
                 <p
                   className={cls}
@@ -1869,22 +1874,23 @@ function WeekCalendarMode({
     const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID;
     // Milestone calendar cards match regular calendar cards: square + hover-tint bg + no
     // stroke; Title always on line 1; meta on line 2. Milestone purple is preserved on the
-    // title and the second-row meta to mark them visually.
-    // Milestones never get the box — the purple title alone reads as the accent.
+    // title and the second-row meta to mark them visually. Expired milestones (deadline before
+    // today) render in faint purple — they linger on the calendar permanently as a record.
+    const isExpired = !!task.deadline && task.deadline < todayISO();
+    const milestonePurpleClass = isExpired ? 'text-[#4a3d8a]' : 'text-[#8465ff]';
+    const titleClass = task.completed ? 'text-[#383838]' : milestonePurpleClass;
     return (
       <div onDoubleClick={(e) => { e.stopPropagation(); onEditTask(task); }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onQuickEditTask?.(task); }} className="relative mx-[6px] mb-[4px] cursor-pointer">
         <div className="px-[10px] py-[6px] flex flex-col gap-[2px]">
-          {/* Completed milestones lose the box AND drop the milestone purple — every glyph
-              + text uniformly fades to #383838 to match a completed regular card. */}
           <div className="flex flex-row items-center gap-[4px]">
-            <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${task.completed ? 'text-[#383838]' : 'text-[#8465ff]'}`}>{task.title}</span>
+            <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleClass}`}>{task.title}</span>
           </div>
           <div className="flex flex-row items-center gap-[6px]">
-            {client && project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : 'text-[#8465ff]'}`}>{client.short}<Arrowhead dim={task.completed} tone="milestone" />{project.name}</p>}
-            {client && !project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : 'text-[#8465ff]'}`}>{client.short}</p>}
-            {!client && project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : 'text-[#8465ff]'}`}>{project.name}</p>}
+            {client && project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${titleClass}`}>{client.short}<Arrowhead dim={task.completed} tone="milestone" />{project.name}</p>}
+            {client && !project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${titleClass}`}>{client.short}</p>}
+            {!client && project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${titleClass}`}>{project.name}</p>}
             {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone="scheduled" hollow={isPersonal} dim={task.completed} />)}
-            {showDate && task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : 'text-[#8465ff]'}`}>{formatDeadline(task.deadline)}</p>}
+            {showDate && task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${titleClass}`}>{formatDeadline(task.deadline)}</p>}
           </div>
         </div>
       </div>
@@ -3753,11 +3759,15 @@ export default function App() {
   //   - trashed tasks (they live in Settings → Trash)
   //   - tasks completed before today's day boundary (they live in Settings → Completed; calendar
   //     bypasses this filter and shows historical completions)
+  //   - expired milestones older than the 24-hour lingering window (visible in calendar permanently
+  //     via calendarTasks below; here they fall off list/project view after a day)
   // Recently revived tasks (revivedAt within 10 min) are always shown regardless of completedDay.
   const REVIVE_WINDOW_MS = 10 * 60 * 1000;
   const visibleTasks = useMemo(() => {
     const today = todayISO();
     const now = Date.now();
+    // Yesterday's ISO — milestones whose deadline is yesterday or today still show in list/project.
+    const yesterday = (() => { const d = new Date(); d.setHours(d.getHours() - 4); d.setDate(d.getDate() - 1); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; })();
     return tasks.filter((t) => {
       if (t.trashed) return false;
       if (t.clientId === PERSONAL_CLIENT_ID && !t.assignees.includes(currentUserShort)) return false;
@@ -3765,6 +3775,9 @@ export default function App() {
         // Hide unless within the post-revive grace window (handles re-completion after revival).
         if (!t.revivedAt || now - t.revivedAt > REVIVE_WINDOW_MS) return false;
       }
+      // Expired milestone: show for 24 hours after the deadline (linger), then hide.
+      // Calendar still shows them via calendarTasks below.
+      if (t.type === 'scheduled' && t.deadline && t.deadline < yesterday) return false;
       return true;
     });
   }, [tasks, currentUserShort]);
