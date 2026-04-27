@@ -1740,12 +1740,12 @@ function WeekCalendarMode({
 
   const todayAnchor = useMemo(() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; }, []);
   const dayOffsetFromToday = (d: Date) => Math.round((d.getTime() - todayAnchor.getTime()) / 86400000);
-  // Per-day cap: 8 total (mandatory + queue) — except TODAY and TOMORROW only auto-pull at
-  // most 3 queue tasks per list. Today/tomorrow are sacred-ish: the user manages those by hand
-  // and doesn't want the queue to flood them. The remaining queue overflows to Wed+ at the
-  // full 8-per-day rate.
+  // Per-day caps:
+  //   TASKS_PER_DAY (8)              — global cap on total slots (mandatory + queue)
+  //   QUEUE_CAP_PER_LIST_PER_DAY (3) — every day caps queue auto-fill at 3 PER list
+  // Mandatory tasks (deadlined / today / tomorrow placed) are exempt from both caps.
   const TASKS_PER_DAY = 8;
-  const QUEUE_CAP_TODAY_TOMORROW = 3;
+  const QUEUE_CAP_PER_LIST_PER_DAY = 3;
 
   const isWeekendDate = (x: Date) => x.getDay() === 0 || x.getDay() === 6;
 
@@ -1800,14 +1800,14 @@ function WeekCalendarMode({
       // Pass 2 — assign queue fillers per list, respecting:
       //   - the GLOBAL day budget (TASKS_PER_DAY - totalMandatory) — once mandatory hits 8,
       //     ZERO fillers for any list
-      //   - the today/tomorrow per-list cap (QUEUE_CAP_TODAY_TOMORROW)
+      //   - the per-list per-day queue cap (QUEUE_CAP_PER_LIST_PER_DAY = 3) — applies every day
       //   - the weekend rule for non-Projects lists
       let dayBudget = Math.max(0, TASKS_PER_DAY - totalMandatory);
+      void isTodayOrTomorrow; // kept for potential future use
       for (const listId of CAL_LISTS.map((c) => c.id)) {
         const m = mandatoryByList[listId];
         const skipQueueForWeekend = listId !== 'projects' && (d.getDay() === 0 || d.getDay() === 6);
-        let slotsLeft = dayBudget;
-        if (isTodayOrTomorrow) slotsLeft = Math.min(slotsLeft, QUEUE_CAP_TODAY_TOMORROW);
+        let slotsLeft = Math.min(dayBudget, QUEUE_CAP_PER_LIST_PER_DAY);
         if (skipQueueForWeekend) slotsLeft = 0;
         const queue = queues[listId];
         const fillers = queue.slice(queueIdxs[listId], queueIdxs[listId] + slotsLeft);
