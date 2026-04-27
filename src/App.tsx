@@ -1652,12 +1652,11 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
   // becomes the active drag.
   // Displacement: a motion.div wrapper animates y / marginTop so OTHER cards slide out of the way
   // to reveal where the dragged card will land ï¿½ same trick the list view uses.
-  // PORT: drag mechanics now mirror SortableTaskItem (list view) — single sortable wrapper,
-  // useSortable's transform straight on the row, opacity:0 to fade the source while dragging,
-  // dnd-kit's verticalListSortingStrategy handles in-cell displacement on its own. The legacy
-  // Displaced primitive + source-collapse max-height animation are gone; they were stacking
-  // multiple transforms and producing the messy drag the user reported.
+  // List-view-style drag mechanics with displacement RESTORED — the calendar's parent computes
+  // displacementOffset / insertionGap externally per cell and passes them in; the <Displaced>
+  // wrapper consumes them so neighbouring cards slide to make room (same trick list view uses).
   return (
+    <Displaced offset={displacementOffset} gap={insertionGap} active={isAnyDragging}>
     <motion.div
       ref={setNodeRef}
       style={style}
@@ -1710,6 +1709,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
         <Trash2 size={12} />
       </button>
     </motion.div>
+    </Displaced>
   );
 }
 
@@ -4147,10 +4147,14 @@ export default function App() {
       onDragOver={handleDragOver}
       onDragEnd={handleDragEnd}
       measuring={measuringConfig}
-      // Calendar drags are LOCKED HORIZONTAL — overlay slides between day columns and never
-      // leaves the source category's row (Work / Projects / Admin stays put). All other task
-      // drags (list view + project view) lock to vertical for in-column reorder.
-      modifiers={activeCalendarCellId ? [restrictToHorizontalAxis] : (activeType === 'task' || activeType === 'projTask' ? [restrictToVerticalAxis] : [])}
+      // Calendar drags use NO axis modifier — the overlay tracks the cursor freely so the
+      // user can move enough vertically to displace neighbouring cards in the source cell.
+      // The drop collision routes to the source list cell, so dropping in another category
+      // visually still lands the task back in its source category. Column-snap (the x:
+      // animation on the overlay wrapper) provides the "hopped to next day" visual cue.
+      // Other task drags (list view + project view) keep restrictToVerticalAxis for clean
+      // in-column reorder.
+      modifiers={activeCalendarCellId ? [] : (activeType === 'task' || activeType === 'projTask' ? [restrictToVerticalAxis] : [])}
     >
       <div className="relative min-h-screen bg-[#282828] overflow-x-auto">
         {mode === 'dashboard' && (
