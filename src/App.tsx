@@ -1740,10 +1740,12 @@ function WeekCalendarMode({
 
   const todayAnchor = useMemo(() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; }, []);
   const dayOffsetFromToday = (d: Date) => Math.round((d.getTime() - todayAnchor.getTime()) / 86400000);
-  // Per-day cap: 8 total (mandatory + queue). Mandatory = deadlined-for-this-day + today/tomorrow
-  // placed tasks. Queue = section='next' tasks without a deadline, distributed sequentially across
-  // days starting from today; each day takes (8 - mandatory) of them.
+  // Per-day cap: 8 total (mandatory + queue) — except TODAY and TOMORROW only auto-pull at
+  // most 3 queue tasks per list. Today/tomorrow are sacred-ish: the user manages those by hand
+  // and doesn't want the queue to flood them. The remaining queue overflows to Wed+ at the
+  // full 8-per-day rate.
   const TASKS_PER_DAY = 8;
+  const QUEUE_CAP_TODAY_TOMORROW = 3;
 
   const isWeekendDate = (x: Date) => x.getDay() === 0 || x.getDay() === 6;
 
@@ -1790,11 +1792,16 @@ function WeekCalendarMode({
             t.list === listId && t.section === 'tomorrow' && !t.deadline && t.type !== 'scheduled'
           ).sort((a, b) => a.order - b.order));
         }
-        // Queue fillers: take next (TASKS_PER_DAY - mandatory.filter(notCompleted).length) from
-        // the remaining queue. Completed mandatory tasks DO count against the cap (they still
-        // occupy a slot visually).
+        // Queue fillers: take next slots from the remaining queue.
+        //   - Today + Tomorrow are capped at QUEUE_CAP_TODAY_TOMORROW (3) queue items per list,
+        //     regardless of how many mandatory slots are open. Keeps those days uncluttered.
+        //   - Other days take min(remaining-after-mandatory, TASKS_PER_DAY) from the queue.
         const usedSlots = mandatory.length;
-        const slotsLeft = Math.max(0, TASKS_PER_DAY - usedSlots);
+        const baseSlotsLeft = Math.max(0, TASKS_PER_DAY - usedSlots);
+        const isTodayOrTomorrow = iso === todayIso || iso === tomorrowIso;
+        const slotsLeft = isTodayOrTomorrow
+          ? Math.min(baseSlotsLeft, QUEUE_CAP_TODAY_TOMORROW)
+          : baseSlotsLeft;
         const fillers = skipQueueForWeekend ? [] : queue.slice(queueIdx, queueIdx + slotsLeft);
         queueIdx += fillers.length;
         map[`${iso}:${listId}`] = [...mandatory, ...fillers];
