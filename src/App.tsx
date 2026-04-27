@@ -1714,7 +1714,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
 }
 
 function WeekCalendarMode({
-  tasks, projects, clients, onToggleTask, onRenameTask, onDeleteTask, onEditTask, onQuickEditTask, onAddSiblingTask, isAnyDragging,
+  tasks, projects, clients, onToggleTask, onRenameTask, onDeleteTask, onEditTask, onQuickEditTask, onAddSiblingTask, onSyncSections, isAnyDragging,
   activeTask, overTask, activeCellId, activeSlotHeight, taskOrder = 'ptc',
 }: {
   tasks: Task[]; projects: Project[]; clients: Client[];
@@ -1724,6 +1724,9 @@ function WeekCalendarMode({
   onEditTask: (t: Task) => void;
   onQuickEditTask?: (t: Task) => void;
   onAddSiblingTask: (t: Task) => void;
+  // Bulk section update — auto-promotes queue tasks landing on today/tomorrow into the
+  // matching section so list view mirrors the calendar's distribution.
+  onSyncSections: (updates: Array<{ id: string; section: SectionId }>) => void;
   isAnyDragging: boolean;
   // Drag context piped from App so the calendar can run the same displacement math the list view runs.
   activeTask: Task | null; overTask: Task | null; activeCellId: string | null; activeSlotHeight: number;
@@ -1823,6 +1826,28 @@ function WeekCalendarMode({
     }
     return map;
   }, [tasks, todayAnchor]);
+
+  // Auto-promote queue tasks the distributor lands on today / tomorrow so list view mirrors
+  // the calendar. A queue task that ends up in today's slot becomes section='today'; tomorrow
+  // becomes section='tomorrow'. Skips tasks already in the matching section. Excludes deadlined
+  // tasks (those are mandatory and already routed via deadline).
+  useEffect(() => {
+    const updates: Array<{ id: string; section: SectionId }> = [];
+    const todayIso = (() => { const d = todayAnchor; return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; })();
+    const tomorrowAnchor = addDaysToDate(todayAnchor, 1);
+    const tomorrowIso = `${tomorrowAnchor.getFullYear()}-${String(tomorrowAnchor.getMonth()+1).padStart(2,'0')}-${String(tomorrowAnchor.getDate()).padStart(2,'0')}`;
+    for (const listId of CAL_LISTS.map((c) => c.id)) {
+      for (const [iso, targetSection] of [[todayIso, 'today'], [tomorrowIso, 'tomorrow']] as const) {
+        const cellTasks = distributionByCell[`${iso}:${listId}`] || [];
+        for (const t of cellTasks) {
+          if (t.deadline) continue;
+          if (t.section === targetSection) continue;
+          updates.push({ id: t.id, section: targetSection });
+        }
+      }
+    }
+    if (updates.length > 0) onSyncSections(updates);
+  }, [distributionByCell, onSyncSections, todayAnchor]);
 
   const tasksForCell = (listId: ListId, d: Date): Task[] => {
     const off = dayOffsetFromToday(d);
@@ -2877,6 +2902,18 @@ export default function App() {
   // Hard-delete: actually remove from storage. Used by Settings → Trash "Empty" / per-row purge.
   const purgeTask = useCallback((id: string) => {
     setTasks((prev) => prev.filter((t) => t.id !== id));
+  }, []);
+
+  // Bulk-update sections to mirror the calendar's auto-distribution. Called by
+  // WeekCalendarMode after computing the per-cell distribution: any queue task that lands on
+  // today / tomorrow gets its section flipped so list view shows it in the matching bucket.
+  const syncCalendarSections = useCallback((updates: Array<{ id: string; section: SectionId }>) => {
+    if (updates.length === 0) return;
+    const map = new Map(updates.map((u) => [u.id, u.section]));
+    setTasks((prev) => prev.map((t) => {
+      const next = map.get(t.id);
+      return next && t.section !== next ? { ...t, section: next } : t;
+    }));
   }, []);
 
   // Sentence-case auto-converter. The trigger is BLUR (the user clicks/tabs off the title).
@@ -4365,6 +4402,7 @@ export default function App() {
             onEditTask={openEdit}
             onQuickEditTask={openQuick}
             onAddSiblingTask={addSiblingTask}
+            onSyncSections={syncCalendarSections}
             isAnyDragging={!!activeId}
             activeTask={activeTask}
             overTask={overTask}
