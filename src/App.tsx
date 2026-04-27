@@ -1800,23 +1800,23 @@ function WeekCalendarMode({
         mandatoryByList[listId] = m;
         totalMandatory += m.length;
       }
-      // Pass 2 — assign queue fillers per list, respecting:
-      //   - the GLOBAL day budget (TASKS_PER_DAY - totalMandatory) — once mandatory hits 8,
-      //     ZERO fillers for any list
-      //   - the per-list per-day SLOT budget: max 3 visible per band (mandatory + queue).
-      //     Mandatory takes priority; queue fills the remainder. So adding 2 mandatory tasks
-      //     to a category instantly pushes 2 queue fillers out of that band — they advance to
-      //     the next day with capacity. If mandatory >= 3, no queue fillers in that band
-      //     (mandatory still shown — it's exempt from the cap, but no more is added).
-      //   - the weekend rule for non-Projects lists.
+      // Pass 2 — assign queue fillers per list. TODAY and TOMORROW are STABLE during the day:
+      // their queue auto-fill happens once at the 4 AM refill (see App's refillNow), and after
+      // that the cells just show whatever's stored as deadlined / today / tomorrow. Wed+ is
+      // real-time and re-distributes on every change.
+      // Caps for Wed+:
+      //   - GLOBAL day budget (TASKS_PER_DAY - totalMandatory) — mandatory >= 8 → no fillers
+      //   - per-list slot budget: max 3 visible per band (mandatory + queue)
+      //   - weekend rule for non-Projects lists
       let dayBudget = Math.max(0, TASKS_PER_DAY - totalMandatory);
-      void isTodayOrTomorrow;
       for (const listId of CAL_LISTS.map((c) => c.id)) {
         const m = mandatoryByList[listId];
         const skipQueueForWeekend = listId !== 'projects' && (d.getDay() === 0 || d.getDay() === 6);
         const listFillerCap = Math.max(0, QUEUE_CAP_PER_LIST_PER_DAY - m.length);
         let slotsLeft = Math.min(dayBudget, listFillerCap);
         if (skipQueueForWeekend) slotsLeft = 0;
+        // Today / Tomorrow are sealed during the day — no real-time queue auto-fill.
+        if (isTodayOrTomorrow) slotsLeft = 0;
         const queue = queues[listId];
         const fillers = queue.slice(queueIdxs[listId], queueIdxs[listId] + slotsLeft);
         queueIdxs[listId] += fillers.length;
@@ -1827,27 +1827,10 @@ function WeekCalendarMode({
     return map;
   }, [tasks, todayAnchor]);
 
-  // Auto-promote queue tasks the distributor lands on today / tomorrow so list view mirrors
-  // the calendar. A queue task that ends up in today's slot becomes section='today'; tomorrow
-  // becomes section='tomorrow'. Skips tasks already in the matching section. Excludes deadlined
-  // tasks (those are mandatory and already routed via deadline).
-  useEffect(() => {
-    const updates: Array<{ id: string; section: SectionId }> = [];
-    const todayIso = (() => { const d = todayAnchor; return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; })();
-    const tomorrowAnchor = addDaysToDate(todayAnchor, 1);
-    const tomorrowIso = `${tomorrowAnchor.getFullYear()}-${String(tomorrowAnchor.getMonth()+1).padStart(2,'0')}-${String(tomorrowAnchor.getDate()).padStart(2,'0')}`;
-    for (const listId of CAL_LISTS.map((c) => c.id)) {
-      for (const [iso, targetSection] of [[todayIso, 'today'], [tomorrowIso, 'tomorrow']] as const) {
-        const cellTasks = distributionByCell[`${iso}:${listId}`] || [];
-        for (const t of cellTasks) {
-          if (t.deadline) continue;
-          if (t.section === targetSection) continue;
-          updates.push({ id: t.id, section: targetSection });
-        }
-      }
-    }
-    if (updates.length > 0) onSyncSections(updates);
-  }, [distributionByCell, onSyncSections, todayAnchor]);
+  // (Auto-promotion of queue tasks into today/tomorrow happens ONCE per day inside the 4 AM
+  //  refill effect in App. During the day today + tomorrow stay stable; only Wed+ continues to
+  //  re-distribute in real-time. The on-render effect that used to do this has been removed.)
+  void onSyncSections;
 
   const tasksForCell = (listId: ListId, d: Date): Task[] => {
     const off = dayOffsetFromToday(d);
@@ -3635,26 +3618,31 @@ export default function App() {
           const dueOrStarting = (t.deadline && t.deadline <= today) || (t.startDate && t.startDate <= today);
           return dueOrStarting ? { ...t, section: 'today' as SectionId } : t;
         });
-        // STEP B — top up Tomorrow to TARGET=3 from Next. Today is left untouched (sacred —
-        // only the deadline-driven promotion above adds to it).
+        // STEP B — snapshot fill Today AND Tomorrow from the queue. Each list pulls up to
+        // TARGET (3) queue tasks per day. After this snapshot the calendar leaves today +
+        // tomorrow alone for the rest of the day; only Wed+ keeps re-distributing in real-time.
         const lists: ListId[] = ['work', 'projects', 'admin'];
-        for (const listId of lists) {
-          const cmp = (a: Task, b: Task) => a.order - b.order;
-          const tomorrowList = next.filter((t) => t.list === listId && t.section === 'tomorrow' && t.type !== 'scheduled' && !t.completed).sort(cmp);
-          const nextList = next.filter((t) => t.list === listId && t.section === 'next' && t.type !== 'scheduled' && !t.completed).sort(cmp);
-          while (tomorrowList.length < TARGET && nextList.length > 0) {
-            const moved = nextList.shift()!;
-            const idx = next.findIndex((t) => t.id === moved.id);
-            if (idx >= 0) { next[idx] = { ...next[idx], section: 'tomorrow' }; tomorrowList.push(next[idx]); }
+        for (const targetSection of ['today', 'tomorrow'] as const) {
+          for (const listId of lists) {
+            const cmp = (a: Task, b: Task) => a.order - b.order;
+            const sectionList = next.filter((t) => t.list === listId && t.section === targetSection && t.type !== 'scheduled' && !t.completed).sort(cmp);
+            const nextList = next.filter((t) => t.list === listId && t.section === 'next' && t.type !== 'scheduled' && !t.completed && !t.deadline).sort(cmp);
+            while (sectionList.length < TARGET && nextList.length > 0) {
+              const moved = nextList.shift()!;
+              const idx = next.findIndex((t) => t.id === moved.id);
+              if (idx >= 0) { next[idx] = { ...next[idx], section: targetSection }; sectionList.push(next[idx]); }
+            }
           }
-          // Re-number order within Tomorrow + Next so newly moved tasks land at the end.
-          [tomorrowList, nextList].forEach((bucketList, bucketIdx) => {
-            const sec = (['tomorrow', 'next'] as SectionId[])[bucketIdx];
-            bucketList.forEach((t, i) => {
+        }
+        // Re-number order within each affected (list, section) so newly moved tasks land at the end.
+        for (const listId of lists) {
+          for (const sec of ['today', 'tomorrow', 'next'] as SectionId[]) {
+            const bucket = next.filter((t) => t.list === listId && t.section === sec && t.type !== 'scheduled' && !t.completed).sort((a, b) => a.order - b.order);
+            bucket.forEach((t, i) => {
               const idx = next.findIndex((x) => x.id === t.id);
-              if (idx >= 0) next[idx] = { ...next[idx], section: sec, order: i };
+              if (idx >= 0) next[idx] = { ...next[idx], order: i };
             });
-          });
+          }
         }
         return next;
       });
