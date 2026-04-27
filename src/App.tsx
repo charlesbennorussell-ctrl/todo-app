@@ -1935,9 +1935,14 @@ function WeekCalendarMode({
                 <p className={bodyFont}>{d.getDate()}</p>
                 {isToday && <p className={bodyFont}>(Today)</p>}
               </div>
-              {/* The last visible column gets the overflow stack of milestones whose deadlines fall beyond the window. */}
+              {/* The last visible column gets the overflow stack of milestones whose deadlines
+                  fall beyond the window — labelled "Coming Up" so it reads as a separate look-ahead
+                  group rather than as part of day 7's content. */}
               {iso === lastVisibleIso && overflowMilestones.length > 0 && (
                 <div className="mb-[12px]">
+                  <div className="h-[20px] px-[16px] flex items-center mb-[6px]">
+                    <p className={`${bodyFont} text-[#5e5e5e]`}>Coming Up</p>
+                  </div>
                   {overflowMilestones.map((t) => <MilestoneCard key={t.id} task={t} showDate />)}
                 </div>
               )}
