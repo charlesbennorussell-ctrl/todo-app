@@ -1902,11 +1902,14 @@ function WeekCalendarMode({
                           let displacementOffset = 0;
                           let insertionGap = 0;
                           if (activeTask && overTask && t.id !== activeTask.id) {
-                            if (activeInBucket && overInBucket) {
-                              if (aIdx < oIdx && index > aIdx && index <= oIdx) displacementOffset = -activeSlotHeight;
-                              else if (aIdx > oIdx && index >= oIdx && index < aIdx) displacementOffset = activeSlotHeight;
-                            } else if (!activeInBucket && overInBucket) {
-                              if (index === oIdx) insertionGap = activeSlotHeight;
+                            // SOURCE cell (active is here): leave displacement to dnd-kit's
+                            // verticalListSortingStrategy. Stacking the external offset on top
+                            // doubled the transform and made the source cell feel sticky/jumpy.
+                            // DESTINATION cell (active is elsewhere, over is here): dnd-kit
+                            // can't displace across SortableContexts, so we open an insertionGap
+                            // above the over card so the user sees where the drop will land.
+                            if (!activeInBucket && overInBucket && index === oIdx) {
+                              insertionGap = activeSlotHeight;
                             }
                           }
                           return (
@@ -4147,14 +4150,11 @@ export default function App() {
       onDragOver={handleDragOver}
       onDragEnd={handleDragEnd}
       measuring={measuringConfig}
-      // Calendar drags use NO axis modifier — the overlay tracks the cursor freely so the
-      // user can move enough vertically to displace neighbouring cards in the source cell.
-      // The drop collision routes to the source list cell, so dropping in another category
-      // visually still lands the task back in its source category. Column-snap (the x:
-      // animation on the overlay wrapper) provides the "hopped to next day" visual cue.
-      // Other task drags (list view + project view) keep restrictToVerticalAxis for clean
-      // in-column reorder.
-      modifiers={activeCalendarCellId ? [] : (activeType === 'task' || activeType === 'projTask' ? [restrictToVerticalAxis] : [])}
+      // Same modifier across list view, project view, and calendar: restrictToVerticalAxis
+      // locks the overlay to vertical movement so cursor-driven drag never fights the
+      // column-snap (which adds horizontal x via the overlay wrapper's animate). Vertical
+      // movement triggers in-cell displacement; column-snap handles the column-hop.
+      modifiers={activeType === 'task' || activeType === 'projTask' ? [restrictToVerticalAxis] : []}
     >
       <div className="relative min-h-screen bg-[#282828] overflow-x-auto">
         {mode === 'dashboard' && (
