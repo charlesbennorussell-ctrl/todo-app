@@ -1751,60 +1751,69 @@ function WeekCalendarMode({
 
   // Pre-compute the distribution for a horizon (today through ~12 weeks) so each cell render is
   // an O(1) map lookup. Recomputes only when the task list changes.
+  // The cap is GLOBAL per day: at most TASKS_PER_DAY (8) items total across all lists. Once the
+  // day's mandatory count reaches the cap, no queue fillers are added for ANY list.
   const distributionByCell = useMemo(() => {
     const map: Record<string, Task[]> = {};
     const HORIZON_DAYS = 84; // ~12 weeks
     const todayIso = (() => { const d = todayAnchor; return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; })();
     const tomorrowAnchor = addDaysToDate(todayAnchor, 1);
     const tomorrowIso = `${tomorrowAnchor.getFullYear()}-${String(tomorrowAnchor.getMonth()+1).padStart(2,'0')}-${String(tomorrowAnchor.getDate()).padStart(2,'0')}`;
+    // Per-list queues + their cursors. queues advance independently per list.
+    const queues: Record<string, Task[]> = {};
+    const queueIdxs: Record<string, number> = {};
     for (const listId of CAL_LISTS.map((c) => c.id)) {
-      // Per-list queue: section='next' OR section='inbox', no deadline, not a milestone, not completed.
-      // Sorted by order so the distribution is stable across renders.
-      const queue = tasks.filter((t) =>
+      queues[listId] = tasks.filter((t) =>
         t.list === listId &&
         (t.section === 'next' || t.section === 'inbox') &&
         !t.deadline &&
         t.type !== 'scheduled' &&
         !t.completed
       ).sort((a, b) => a.order - b.order);
-      let queueIdx = 0;
-      for (let off = 0; off < HORIZON_DAYS; off++) {
-        const d = addDaysToDate(todayAnchor, off);
-        const iso = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-        // Skip weekends for non-Projects lists when distributing the queue (matches the previous
-        // stripe-slot rule: Sat/Sun stay clean unless something is explicitly dropped there).
-        const skipQueueForWeekend = listId !== 'projects' && (d.getDay() === 0 || d.getDay() === 6);
-        // Mandatory tasks for this day (no cap).
-        const mandatory: Task[] = [];
-        // Deadlined for this exact day.
-        mandatory.push(...tasks.filter((t) =>
+      queueIdxs[listId] = 0;
+    }
+    for (let off = 0; off < HORIZON_DAYS; off++) {
+      const d = addDaysToDate(todayAnchor, off);
+      const iso = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+      const isTodayOrTomorrow = iso === todayIso || iso === tomorrowIso;
+      // Pass 1 — collect mandatory per list, sum the total.
+      const mandatoryByList: Record<string, Task[]> = {};
+      let totalMandatory = 0;
+      for (const listId of CAL_LISTS.map((c) => c.id)) {
+        const m: Task[] = [];
+        m.push(...tasks.filter((t) =>
           t.list === listId && t.deadline === iso && t.type !== 'scheduled'
         ).sort((a, b) => a.order - b.order));
-        // Today: section='today' tasks without a deadline (explicit "today" placement).
         if (iso === todayIso) {
-          mandatory.push(...tasks.filter((t) =>
+          m.push(...tasks.filter((t) =>
             t.list === listId && t.section === 'today' && !t.deadline && t.type !== 'scheduled'
           ).sort((a, b) => a.order - b.order));
         }
-        // Tomorrow: section='tomorrow' tasks without a deadline (explicit "tomorrow" placement).
         if (iso === tomorrowIso) {
-          mandatory.push(...tasks.filter((t) =>
+          m.push(...tasks.filter((t) =>
             t.list === listId && t.section === 'tomorrow' && !t.deadline && t.type !== 'scheduled'
           ).sort((a, b) => a.order - b.order));
         }
-        // Queue fillers: take next slots from the remaining queue.
-        //   - Today + Tomorrow are capped at QUEUE_CAP_TODAY_TOMORROW (3) queue items per list,
-        //     regardless of how many mandatory slots are open. Keeps those days uncluttered.
-        //   - Other days take min(remaining-after-mandatory, TASKS_PER_DAY) from the queue.
-        const usedSlots = mandatory.length;
-        const baseSlotsLeft = Math.max(0, TASKS_PER_DAY - usedSlots);
-        const isTodayOrTomorrow = iso === todayIso || iso === tomorrowIso;
-        const slotsLeft = isTodayOrTomorrow
-          ? Math.min(baseSlotsLeft, QUEUE_CAP_TODAY_TOMORROW)
-          : baseSlotsLeft;
-        const fillers = skipQueueForWeekend ? [] : queue.slice(queueIdx, queueIdx + slotsLeft);
-        queueIdx += fillers.length;
-        map[`${iso}:${listId}`] = [...mandatory, ...fillers];
+        mandatoryByList[listId] = m;
+        totalMandatory += m.length;
+      }
+      // Pass 2 — assign queue fillers per list, respecting:
+      //   - the GLOBAL day budget (TASKS_PER_DAY - totalMandatory) — once mandatory hits 8,
+      //     ZERO fillers for any list
+      //   - the today/tomorrow per-list cap (QUEUE_CAP_TODAY_TOMORROW)
+      //   - the weekend rule for non-Projects lists
+      let dayBudget = Math.max(0, TASKS_PER_DAY - totalMandatory);
+      for (const listId of CAL_LISTS.map((c) => c.id)) {
+        const m = mandatoryByList[listId];
+        const skipQueueForWeekend = listId !== 'projects' && (d.getDay() === 0 || d.getDay() === 6);
+        let slotsLeft = dayBudget;
+        if (isTodayOrTomorrow) slotsLeft = Math.min(slotsLeft, QUEUE_CAP_TODAY_TOMORROW);
+        if (skipQueueForWeekend) slotsLeft = 0;
+        const queue = queues[listId];
+        const fillers = queue.slice(queueIdxs[listId], queueIdxs[listId] + slotsLeft);
+        queueIdxs[listId] += fillers.length;
+        dayBudget -= fillers.length;
+        map[`${iso}:${listId}`] = [...m, ...fillers];
       }
     }
     return map;
