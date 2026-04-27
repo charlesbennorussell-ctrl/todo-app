@@ -1891,7 +1891,9 @@ function WeekCalendarMode({
           <div className="flex flex-row items-center gap-[4px]">
             <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleClass}`}>{task.title}</span>
           </div>
-          <div className="flex flex-row items-center gap-[6px]">
+          {/* Line 2 always reserves height so milestones with no client / project / assignees
+              don't render shorter than their siblings. min-h-[15px] matches the 11.5px text line. */}
+          <div className="flex flex-row items-center gap-[6px] min-h-[15px]">
             {client && project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${titleClass}`}>{client.short}<Arrowhead dim={task.completed} tone="milestone" />{project.name}</p>}
             {client && !project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${titleClass}`}>{client.short}</p>}
             {!client && project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${titleClass}`}>{project.name}</p>}
