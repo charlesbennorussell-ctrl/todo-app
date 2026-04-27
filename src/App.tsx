@@ -3220,6 +3220,10 @@ export default function App() {
   // calendarCollision's cross-list redirect). Used by the cell-drop handler to insert at
   // the user's intended position rather than appending to the end of the destination bucket.
   const lastCalOverTaskIdRef = useRef<string | null>(null);
+  // Tracks the cell id (cal:date:listId) the cursor was actually over BEFORE the category
+  // redirect. Lets the cell-drop handler tell whether the user released ABOVE the source
+  // category band (→ insert at top of source bucket) or BELOW (→ insert at bottom).
+  const lastCalOverCellIdRef = useRef<string | null>(null);
   const handleDragOver = useCallback((event: DragOverEvent) => {
     const { over } = event;
     setOverId((over?.id as string) || null);
@@ -3377,25 +3381,46 @@ export default function App() {
       const [, targetDate, targetListRaw] = overIdStr.split(':');
       const droppedList = targetListRaw as ListId;
       const srcTask = tasks.find((t) => t.id === activeTaskId);
-      // The redirected collision lost the original over-task — fall back to the ref captured
-      // by calendarCollision so we can insert at the user's intended position. If there's no
-      // hovered task in the destination cell (empty cell, or pure cell hover), append.
+      // The redirected collision lost the original over-task — fall back to the refs captured
+      // by calendarCollision so we can insert at the user's intended position.
       const intendedOverTaskId = lastCalOverTaskIdRef.current;
+      const droppedCellId = lastCalOverCellIdRef.current; // e.g. cal:2026-04-26:projects
       if (srcTask) {
         const targetList: ListId = ctrlDownRef.current ? droppedList : srcTask.list;
         const today = new Date(); today.setHours(0, 0, 0, 0);
         const targetDateObj = new Date(targetDate + 'T00:00:00');
         const targetSection: SectionId = targetDateObj.getTime() <= today.getTime() ? 'today' : 'next';
+        // If the user released the card OUTSIDE the source category band (Admin / Work /
+        // Projects) of the destination column, decide top vs bottom based on where they
+        // released relative to the source band. CAL_LISTS order is admin → work → projects;
+        // a smaller index means "above".
+        const droppedListId = droppedCellId ? (droppedCellId.split(':')[2] as ListId) : null;
+        const calIndex = (l: ListId | null) => CAL_LISTS.findIndex((c) => c.id === l);
+        const droppedIdx = calIndex(droppedListId);
+        const sourceIdx = calIndex(targetList);
+        // 'above' if the user released in a band that sits ABOVE the source band in the
+        // CAL_LISTS stack; 'below' if below; null if same (use task position).
+        const offCategoryDirection: 'above' | 'below' | null =
+          droppedListId && droppedIdx >= 0 && sourceIdx >= 0 && droppedIdx !== sourceIdx
+            ? (droppedIdx < sourceIdx ? 'above' : 'below')
+            : null;
         setTasks((prev) => {
           // Remove source first so it can't be double-counted.
           const without = prev.filter((t) => t.id !== srcTask.id);
           const moved: Task = { ...srcTask, list: targetList, section: targetSection, deadline: targetDate };
           // Build the destination bucket without the source.
           const toBucket = without.filter((t) => t.list === targetList && t.section === targetSection).sort((a, b) => a.order - b.order);
-          // Find the insert position: before the over-task if it's in the target bucket;
-          // otherwise append.
+          // Decide insert position:
+          //   - off-category ABOVE  → top (index 0)
+          //   - off-category BELOW  → bottom (append)
+          //   - same category & we have an over-task → before that task
+          //   - else → append
           let insertAt = toBucket.length;
-          if (intendedOverTaskId) {
+          if (offCategoryDirection === 'above') {
+            insertAt = 0;
+          } else if (offCategoryDirection === 'below') {
+            insertAt = toBucket.length;
+          } else if (intendedOverTaskId) {
             const idx = toBucket.findIndex((t) => t.id === intendedOverTaskId);
             if (idx >= 0) insertAt = idx;
           }
@@ -3411,6 +3436,7 @@ export default function App() {
         });
       }
       lastCalOverTaskIdRef.current = null;
+      lastCalOverCellIdRef.current = null;
       resetDragRefs();
       clearOverlay(); return;
     }
@@ -4161,6 +4187,10 @@ export default function App() {
       }
       if (id.startsWith('cal:')) {
         const [, date, list] = id.split(':');
+        // Remember which cell the cursor was REALLY over before any list-redirect — the
+        // drop handler uses this to know if the user released above / below / inside the
+        // source category band.
+        lastCalOverCellIdRef.current = id;
         if (allowListChange || list === activeList) {
           if (!seen.has(id)) { cellHits.push(c); seen.add(id); }
         } else {
@@ -4182,6 +4212,7 @@ export default function App() {
         // cell-drop handler can insert at that task's position AND the per-cell displacement
         // can open an insertion gap above it (cross-column visual cue).
         lastCalOverTaskIdRef.current = id;
+        if (otherCell) lastCalOverCellIdRef.current = otherCell;
         // Mirror to state so the per-cell displacement re-renders. Wrap in a setState only
         // when the value actually changes — calendarCollision runs on every cursor tick.
         setOverTaskIdHint((prev) => (prev === id ? prev : id));
