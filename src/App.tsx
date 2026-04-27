@@ -2946,8 +2946,9 @@ export default function App() {
     vocabRef.current = vocab;
   }, [clients, projects, people]);
   // Words that title-case-style guides keep lowercased even mid-sentence (articles, short
-  // conjunctions, prepositions). Used in 'title' mode only.
-  const TITLE_CASE_LOWER = new Set(['a', 'an', 'and', 'as', 'at', 'but', 'by', 'for', 'in', 'nor', 'of', 'on', 'or', 'so', 'the', 'to', 'up', 'yet', 'via', 'vs', 'vs.']);
+  // conjunctions, prepositions). Used in 'title' mode only. Note: 'up' is a particle that often
+  // pairs with a verb ("Catch Up", "Sign Up") so we capitalize it.
+  const TITLE_CASE_LOWER = new Set(['a', 'an', 'and', 'as', 'at', 'but', 'by', 'for', 'in', 'nor', 'of', 'on', 'or', 'so', 'the', 'to', 'yet', 'via', 'vs', 'vs.']);
   // Common-typo fixes — applied first, before the case logic. Map of lowercased core →
   // canonical form (preserving the apostrophe / canonical capitalization).
   const TYPO_FIXES: Record<string, string> = {
