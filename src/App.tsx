@@ -1744,10 +1744,10 @@ function WeekCalendarMode({
   const todayAnchor = useMemo(() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; }, []);
   const dayOffsetFromToday = (d: Date) => Math.round((d.getTime() - todayAnchor.getTime()) / 86400000);
   // Per-day caps:
-  //   TASKS_PER_DAY (8)              — global cap on total slots (mandatory + queue)
+  //   TASKS_PER_DAY (9)              — global cap on total slots (mandatory + queue)
   //   QUEUE_CAP_PER_LIST_PER_DAY (3) — every day caps queue auto-fill at 3 PER list
   // Mandatory tasks (deadlined / today / tomorrow placed) are exempt from both caps.
-  const TASKS_PER_DAY = 8;
+  const TASKS_PER_DAY = 9;
   const QUEUE_CAP_PER_LIST_PER_DAY = 3;
 
   const isWeekendDate = (x: Date) => x.getDay() === 0 || x.getDay() === 6;
