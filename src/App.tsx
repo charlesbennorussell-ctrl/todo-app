@@ -1881,12 +1881,10 @@ function WeekCalendarMode({
     const isExpired = !!task.deadline && task.deadline < todayISO();
     const milestonePurpleClass = isExpired ? 'text-[#3a3066]' : 'text-[#8465ff]';
     const titleClass = task.completed ? 'text-[#383838]' : milestonePurpleClass;
-    // Card bg: tinted faint purple. Live + expired milestones BOTH keep the tint (expired
-    // text is already dimmed; the subtle purple box helps the milestone read as "milestone" at
-    // a glance regardless of state). Dropped when completed (matches the regular completed
-    // card behavior). Inline style is used because Tailwind arbitrary opacity on hex colors
-    // wasn't reliably generating the CSS.
-    const cardBgStyle: React.CSSProperties | undefined = task.completed ? undefined : { backgroundColor: 'rgba(132, 101, 255, 0.10)' };
+    // Card bg: tinted faint purple ONLY on live milestones. Expired and completed milestones
+    // drop the box — the faint text alone reads as "no longer active". Inline style because
+    // Tailwind arbitrary opacity on hex colors wasn't reliably generating the CSS.
+    const cardBgStyle: React.CSSProperties | undefined = (task.completed || isExpired) ? undefined : { backgroundColor: 'rgba(132, 101, 255, 0.10)' };
     return (
       <div onDoubleClick={(e) => { e.stopPropagation(); onEditTask(task); }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onQuickEditTask?.(task); }} style={cardBgStyle} className="relative mx-[6px] mb-[4px] cursor-pointer">
         <div className="px-[10px] py-[6px] flex flex-col gap-[2px]">
