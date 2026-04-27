@@ -15,7 +15,7 @@ import {
   pointerWithin,
   useDroppable,
 } from '@dnd-kit/core';
-import { restrictToVerticalAxis, restrictToHorizontalAxis } from '@dnd-kit/modifiers';
+import { restrictToVerticalAxis, restrictToHorizontalAxis, restrictToParentElement } from '@dnd-kit/modifiers';
 import {
   arrayMove,
   SortableContext,
@@ -3452,12 +3452,18 @@ export default function App() {
     }
     if (a.list === o.list && a.section === o.section) {
       setTasks((prev) => {
-        const list = prev.filter((t) => t.list === a.list && t.section === a.section).sort((x, y) => x.order - y.order);
+        // Calendar drags share list+section across multiple days (every section='next' Work
+        // task lives in the same flat list); scoping the arrayMove to the cell's deadline
+        // keeps a same-day reorder from globally reshuffling other days' tasks.
+        const isCalendarDrag = !!activeCalendarCellId;
+        const dayMatch = (t: Task) => !isCalendarDrag || t.deadline === a.deadline;
+        const inBucket = (t: Task) => t.list === a.list && t.section === a.section && dayMatch(t);
+        const list = prev.filter(inBucket).sort((x, y) => x.order - y.order);
         const oldI = list.findIndex((t) => t.id === a.id);
         const newI = list.findIndex((t) => t.id === o.id);
         if (oldI === newI) return prev;
         const reordered = arrayMove(list, oldI, newI).map((t, i) => ({ ...t, order: i }));
-        return [...prev.filter((t) => !(t.list === a.list && t.section === a.section)), ...reordered];
+        return [...prev.filter((t) => !inBucket(t)), ...reordered];
       });
     } else {
       handleCrossSectionMove(a, o);
@@ -4194,11 +4200,13 @@ export default function App() {
       onDragOver={handleDragOver}
       onDragEnd={handleDragEnd}
       measuring={measuringConfig}
-      // Same modifier across list view, project view, and calendar: restrictToVerticalAxis
-      // locks the overlay to vertical movement so cursor-driven drag never fights the
-      // column-snap (which adds horizontal x via the overlay wrapper's animate). Vertical
-      // movement triggers in-cell displacement; column-snap handles the column-hop.
-      modifiers={activeType === 'task' || activeType === 'projTask' ? [restrictToVerticalAxis] : []}
+      // Modifier sets:
+      //   - Calendar drag: restrictToVerticalAxis + restrictToParentElement so the card stays
+      //     inside its source cell (Work / Projects / Admin band) — vertical motion is enough
+      //     to displace neighbours but the card can't visually wander into another band.
+      //     Column-snap handles the cross-day hop via wrapper animate.x.
+      //   - List + project drags: restrictToVerticalAxis only, for clean in-column reorder.
+      modifiers={activeCalendarCellId ? [restrictToVerticalAxis, restrictToParentElement] : (activeType === 'task' || activeType === 'projTask' ? [restrictToVerticalAxis] : [])}
     >
       <div className="relative min-h-screen bg-[#282828] overflow-x-auto">
         {mode === 'dashboard' && (
