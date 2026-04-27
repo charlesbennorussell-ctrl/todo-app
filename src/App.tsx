@@ -1740,49 +1740,77 @@ function WeekCalendarMode({
 
   const todayAnchor = useMemo(() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; }, []);
   const dayOffsetFromToday = (d: Date) => Math.round((d.getTime() - todayAnchor.getTime()) / 86400000);
-  const PER_DAY_CAP = 12;
+  // Per-day cap: 8 total (mandatory + queue). Mandatory = deadlined-for-this-day + today/tomorrow
+  // placed tasks. Queue = section='next' tasks without a deadline, distributed sequentially across
+  // days starting from today; each day takes (8 - mandatory) of them.
+  const TASKS_PER_DAY = 8;
 
   const isWeekendDate = (x: Date) => x.getDay() === 0 || x.getDay() === 6;
 
-  // Returns the 1-based stripe slot for day d when assigning the 'next' bucket across upcoming days.
-  // For Projects, every future day counts. For Work/Admin, weekends are skipped so striping lands
-  // only on weekdays ï¿½ Sat/Sun stay clean unless something is explicitly dropped there.
-  const stripeSlotForDay = (listId: ListId, d: Date): number | null => {
-    const off = dayOffsetFromToday(d);
-    if (off <= 0) return null;
-    if (listId !== 'projects' && isWeekendDate(d)) return null;
-    let slot = 0;
-    for (let i = 1; i <= off; i++) {
-      const day = addDaysToDate(todayAnchor, i);
-      if (listId === 'projects' || !isWeekendDate(day)) slot++;
+  // Pre-compute the distribution for a horizon (today through ~12 weeks) so each cell render is
+  // an O(1) map lookup. Recomputes only when the task list changes.
+  const distributionByCell = useMemo(() => {
+    const map: Record<string, Task[]> = {};
+    const HORIZON_DAYS = 84; // ~12 weeks
+    const todayIso = (() => { const d = todayAnchor; return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; })();
+    const tomorrowAnchor = addDaysToDate(todayAnchor, 1);
+    const tomorrowIso = `${tomorrowAnchor.getFullYear()}-${String(tomorrowAnchor.getMonth()+1).padStart(2,'0')}-${String(tomorrowAnchor.getDate()).padStart(2,'0')}`;
+    for (const listId of CAL_LISTS.map((c) => c.id)) {
+      // Per-list queue: section='next' OR section='inbox', no deadline, not a milestone, not completed.
+      // Sorted by order so the distribution is stable across renders.
+      const queue = tasks.filter((t) =>
+        t.list === listId &&
+        (t.section === 'next' || t.section === 'inbox') &&
+        !t.deadline &&
+        t.type !== 'scheduled' &&
+        !t.completed
+      ).sort((a, b) => a.order - b.order);
+      let queueIdx = 0;
+      for (let off = 0; off < HORIZON_DAYS; off++) {
+        const d = addDaysToDate(todayAnchor, off);
+        const iso = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+        // Skip weekends for non-Projects lists when distributing the queue (matches the previous
+        // stripe-slot rule: Sat/Sun stay clean unless something is explicitly dropped there).
+        const skipQueueForWeekend = listId !== 'projects' && (d.getDay() === 0 || d.getDay() === 6);
+        // Mandatory tasks for this day (no cap).
+        const mandatory: Task[] = [];
+        // Deadlined for this exact day.
+        mandatory.push(...tasks.filter((t) =>
+          t.list === listId && t.deadline === iso && t.type !== 'scheduled'
+        ).sort((a, b) => a.order - b.order));
+        // Today: section='today' tasks without a deadline (explicit "today" placement).
+        if (iso === todayIso) {
+          mandatory.push(...tasks.filter((t) =>
+            t.list === listId && t.section === 'today' && !t.deadline && t.type !== 'scheduled'
+          ).sort((a, b) => a.order - b.order));
+        }
+        // Tomorrow: section='tomorrow' tasks without a deadline (explicit "tomorrow" placement).
+        if (iso === tomorrowIso) {
+          mandatory.push(...tasks.filter((t) =>
+            t.list === listId && t.section === 'tomorrow' && !t.deadline && t.type !== 'scheduled'
+          ).sort((a, b) => a.order - b.order));
+        }
+        // Queue fillers: take next (TASKS_PER_DAY - mandatory.filter(notCompleted).length) from
+        // the remaining queue. Completed mandatory tasks DO count against the cap (they still
+        // occupy a slot visually).
+        const usedSlots = mandatory.length;
+        const slotsLeft = Math.max(0, TASKS_PER_DAY - usedSlots);
+        const fillers = skipQueueForWeekend ? [] : queue.slice(queueIdx, queueIdx + slotsLeft);
+        queueIdx += fillers.length;
+        map[`${iso}:${listId}`] = [...mandatory, ...fillers];
+      }
     }
-    return slot;
-  };
+    return map;
+  }, [tasks, todayAnchor]);
 
   const tasksForCell = (listId: ListId, d: Date): Task[] => {
     const off = dayOffsetFromToday(d);
     const iso = dateToISO(d);
-    if (off === 0) {
-      // Today column: every today-section task lives here, regardless of any explicit deadline.
-      return tasks.filter((t) => t.list === listId && t.section === 'today' && t.type !== 'scheduled').sort((a, b) => a.order - b.order);
+    // Past days: keep showing whatever was actually there (deadlined or completed-on-this-day).
+    if (off < 0) {
+      return tasks.filter((t) => t.list === listId && t.deadline === iso && t.type !== 'scheduled').sort((a, b) => a.order - b.order);
     }
-    if (off > 0) {
-      // Future days: a task with deadline === iso is pinned to this exact day (this is how a
-      // work/admin task ends up on a weekend ï¿½ drop it there, the drop handler writes the deadline,
-      // and we render it on that day instead of striping it through the next weekday).
-      const pinned = tasks.filter((t) => t.list === listId && t.section === 'next' && t.type !== 'scheduled' && t.deadline === iso).sort((a, b) => a.order - b.order);
-      const slot = stripeSlotForDay(listId, d);
-      let striped: Task[] = [];
-      if (slot !== null) {
-        // Striped pool excludes anything that's pinned somewhere (its date already chose where it goes).
-        const nextBucket = tasks.filter((t) => t.list === listId && t.section === 'next' && t.type !== 'scheduled' && !t.deadline).sort((a, b) => a.order - b.order);
-        const start = (slot - 1) * PER_DAY_CAP;
-        striped = nextBucket.slice(start, start + PER_DAY_CAP);
-      }
-      return [...pinned, ...striped];
-    }
-    // Past days: completed tasks whose deadline matches this day
-    return tasks.filter((t) => t.list === listId && t.completed && t.deadline === iso && t.type !== 'scheduled').sort((a, b) => a.order - b.order);
+    return distributionByCell[`${iso}:${listId}`] || [];
   };
 
   // Milestones (scheduled tasks) render at the top of the column matching their deadline.
@@ -3388,8 +3416,23 @@ export default function App() {
       if (srcTask) {
         const targetList: ListId = ctrlDownRef.current ? droppedList : srcTask.list;
         const today = new Date(); today.setHours(0, 0, 0, 0);
+        const tomorrow = new Date(today); tomorrow.setDate(today.getDate() + 1);
         const targetDateObj = new Date(targetDate + 'T00:00:00');
-        const targetSection: SectionId = targetDateObj.getTime() <= today.getTime() ? 'today' : 'next';
+        const tomorrowIso = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, '0')}-${String(tomorrow.getDate()).padStart(2, '0')}`;
+        // Section follows the target column's date relationship: today → 'today',
+        // tomorrow → 'tomorrow', any other day → 'next' (queue).
+        let targetSection: SectionId;
+        if (targetDateObj.getTime() <= today.getTime()) targetSection = 'today';
+        else if (targetDate === tomorrowIso) targetSection = 'tomorrow';
+        else targetSection = 'next';
+        // RULES (per user spec):
+        //   A. If the source task HAS a deadline: rewrite its deadline to the target date
+        //      (calendar drag = reschedule).
+        //   B. If the source task has NO deadline: leave deadline alone — the drop just
+        //      changes its priority/order in the queue. Today / Tomorrow drops still flip
+        //      section to 'today' / 'tomorrow' (explicit placement); future-day drops keep
+        //      section='next' so the task stays in the auto-distributed queue.
+        const isQueueTask = !srcTask.deadline;
         // If the user released the card OUTSIDE the source category band (Admin / Work /
         // Projects) of the destination column, decide top vs bottom based on where they
         // released relative to the source band. CAL_LISTS order is admin → work → projects;
@@ -3407,7 +3450,11 @@ export default function App() {
         setTasks((prev) => {
           // Remove source first so it can't be double-counted.
           const without = prev.filter((t) => t.id !== srcTask.id);
-          const moved: Task = { ...srcTask, list: targetList, section: targetSection, deadline: targetDate };
+          // Rule A vs B: rewrite deadline only when the source already had one. Queue tasks
+          // keep their (undefined) deadline so they stay in the auto-distributed queue.
+          const moved: Task = isQueueTask
+            ? { ...srcTask, list: targetList, section: targetSection }
+            : { ...srcTask, list: targetList, section: targetSection, deadline: targetDate };
           // Build the destination bucket without the source.
           const toBucket = without.filter((t) => t.list === targetList && t.section === targetSection).sort((a, b) => a.order - b.order);
           // Decide insert position:
