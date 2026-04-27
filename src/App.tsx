@@ -88,10 +88,12 @@ function MilestoneToggle({ value, onChange }: { value: boolean; onChange: (v: bo
   );
 }
 
-function AssigneeBadge({ letter, tone, hollow = false, dim = false, active = false }: { letter: Assignee; tone: 'scheduled' | 'todo'; hollow?: boolean; dim?: boolean; active?: boolean }) {
+function AssigneeBadge({ letter, tone, hollow = false, dim = false, active = false, faint = false }: { letter: Assignee; tone: 'scheduled' | 'todo'; hollow?: boolean; dim?: boolean; active?: boolean; faint?: boolean }) {
   // `dim` matches the muted palette used for completed tasks; `active` swaps the fill to white
   // for the panel's "selected resource" treatment so the badge pops alongside its bold-white name.
-  const color = dim ? '#383838' : active ? '#ffffff' : (tone === 'scheduled' ? '#8465FF' : '#656464');
+  // `faint` (used for expired milestones) drops the scheduled purple to its faint variant.
+  const scheduledColor = faint ? '#3a3066' : '#8465FF';
+  const color = dim ? '#383838' : active ? '#ffffff' : (tone === 'scheduled' ? scheduledColor : '#656464');
   // Multi-character shorts (auto-disambiguated when two people share an initial) render as a
   // pill instead of a circle: same height, expanded width, fully rounded ends. The width grows
   // ~5px per extra character beyond the first.
@@ -366,7 +368,7 @@ function SortableTaskItem({
   // purple so it's visible (lingering) but visually quieted vs. live milestones.
   const isExpiredMilestone = isScheduled && !!task.deadline && task.deadline < todayISO();
   // Live milestones: vivid purple. Expired milestones (lingering for 24h): faint purple.
-  const milestonePurpleClass = isExpiredMilestone ? 'text-[#4a3d8a]' : 'text-[#8465ff]';
+  const milestonePurpleClass = isExpiredMilestone ? 'text-[#3a3066]' : 'text-[#8465ff]';
   // Completed tasks fade to a near-background color across ALL their text â€” no strikethrough,
   // just visually quieted. #383838 is one step off the #282828 page background.
   const titleColor = isScheduled ? milestonePurpleClass : task.completed ? 'text-[#383838]' : isNext ? 'text-[#a8a8a8]' : 'text-white';
@@ -643,7 +645,7 @@ function SortableTaskItem({
           )}
         </div>
         {/* Assignees hide at density >= 5. */}
-        {density < 5 && task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} />)}
+        {density < 5 && task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} faint={isExpiredMilestone} />)}
         {task.deadline && (
           <>
             {!isScheduled && <DeadlineArrow dim={task.completed} small={density >= 3} />}
@@ -1877,7 +1879,7 @@ function WeekCalendarMode({
     // title and the second-row meta to mark them visually. Expired milestones (deadline before
     // today) render in faint purple — they linger on the calendar permanently as a record.
     const isExpired = !!task.deadline && task.deadline < todayISO();
-    const milestonePurpleClass = isExpired ? 'text-[#4a3d8a]' : 'text-[#8465ff]';
+    const milestonePurpleClass = isExpired ? 'text-[#3a3066]' : 'text-[#8465ff]';
     const titleClass = task.completed ? 'text-[#383838]' : milestonePurpleClass;
     return (
       <div onDoubleClick={(e) => { e.stopPropagation(); onEditTask(task); }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onQuickEditTask?.(task); }} className="relative mx-[6px] mb-[4px] cursor-pointer">
@@ -1889,7 +1891,7 @@ function WeekCalendarMode({
             {client && project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${titleClass}`}>{client.short}<Arrowhead dim={task.completed} tone="milestone" />{project.name}</p>}
             {client && !project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${titleClass}`}>{client.short}</p>}
             {!client && project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${titleClass}`}>{project.name}</p>}
-            {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone="scheduled" hollow={isPersonal} dim={task.completed} />)}
+            {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone="scheduled" hollow={isPersonal} dim={task.completed} faint={isExpired} />)}
             {showDate && task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${titleClass}`}>{formatDeadline(task.deadline)}</p>}
           </div>
         </div>
