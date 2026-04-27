@@ -2717,6 +2717,10 @@ export default function App() {
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [activeProjTask, setActiveProjTask] = useState<Task | null>(null);
   const [overId, setOverId] = useState<string | null>(null);
+  // For calendar cross-list redirects: the redirected `over` is a cell id and loses the
+  // task identity. We mirror the task id into state so the per-cell displacement compute
+  // (which feeds <Displaced> wrappers) can react to it on re-render.
+  const [overTaskIdHint, setOverTaskIdHint] = useState<string | null>(null);
   const [activeRectWidth, setActiveRectWidth] = useState<number | undefined>(undefined);
   const [activeRectHeight, setActiveRectHeight] = useState<number | undefined>(undefined);
   // When the active drag originated from a calendar card, this holds its source cell id (e.g. "cal:2026-04-25:work").
@@ -3207,9 +3211,24 @@ export default function App() {
     };
   }, [activeId, activeRectWidth, activeCalendarCellId]);
 
+  // Tracks the id of the most recent calendar TASK the cursor was over (before
+  // calendarCollision's cross-list redirect). Used by the cell-drop handler to insert at
+  // the user's intended position rather than appending to the end of the destination bucket.
+  const lastCalOverTaskIdRef = useRef<string | null>(null);
   const handleDragOver = useCallback((event: DragOverEvent) => {
     const { over } = event;
     setOverId((over?.id as string) || null);
+    // If over is a task (not a cell), remember its id. If user dragged off everything, clear.
+    const overTask = over?.data.current?.task as Task | undefined;
+    if (overTask) {
+      lastCalOverTaskIdRef.current = overTask.id;
+      setOverTaskIdHint(overTask.id);
+    } else if (!over) {
+      lastCalOverTaskIdRef.current = null;
+      setOverTaskIdHint(null);
+    }
+    // (when over is a redirected cell id, calendarCollision has already updated the ref/state
+    //  via pushHint; we leave them alone here so the hint persists across the redirect.)
   }, []);
 
   const handleCrossSectionMove = useCallback((a: Task, o: Task) => {
@@ -3227,6 +3246,7 @@ export default function App() {
   const handleDragEnd = useCallback((event: DragEndEvent) => {
     const { active, over } = event;
     setOverId(null);
+    setOverTaskIdHint(null);
     const clearOverlay = () => { setActiveId(null); setActiveTaskIdState(null); setActiveType(null); setActiveProject(null); setActiveProjTask(null); setActiveCalendarCellId(null); };
     const resetDragRefs = () => {
       setColumnOffset(0); pendingOffsetRef.current = 0;
@@ -3352,31 +3372,40 @@ export default function App() {
       const [, targetDate, targetListRaw] = overIdStr.split(':');
       const droppedList = targetListRaw as ListId;
       const srcTask = tasks.find((t) => t.id === activeTaskId);
+      // The redirected collision lost the original over-task — fall back to the ref captured
+      // by calendarCollision so we can insert at the user's intended position. If there's no
+      // hovered task in the destination cell (empty cell, or pure cell hover), append.
+      const intendedOverTaskId = lastCalOverTaskIdRef.current;
       if (srcTask) {
-        // Default: snap back to source category. Hold Ctrl/Cmd to allow category change.
         const targetList: ListId = ctrlDownRef.current ? droppedList : srcTask.list;
         const today = new Date(); today.setHours(0, 0, 0, 0);
         const targetDateObj = new Date(targetDate + 'T00:00:00');
         const targetSection: SectionId = targetDateObj.getTime() <= today.getTime() ? 'today' : 'next';
-        const sameBucket = srcTask.list === targetList && srcTask.section === targetSection;
         setTasks((prev) => {
           // Remove source first so it can't be double-counted.
           const without = prev.filter((t) => t.id !== srcTask.id);
           const moved: Task = { ...srcTask, list: targetList, section: targetSection, deadline: targetDate };
-          if (sameBucket) {
-            // Append moved to end of the combined bucket, reorder, leave other buckets untouched.
-            const bucket = without.filter((t) => t.list === targetList && t.section === targetSection);
-            const reordered = [...bucket, moved].map((t, i) => ({ ...t, order: i }));
-            const untouched = without.filter((t) => !(t.list === targetList && t.section === targetSection));
-            return [...untouched, ...reordered];
+          // Build the destination bucket without the source.
+          const toBucket = without.filter((t) => t.list === targetList && t.section === targetSection).sort((a, b) => a.order - b.order);
+          // Find the insert position: before the over-task if it's in the target bucket;
+          // otherwise append.
+          let insertAt = toBucket.length;
+          if (intendedOverTaskId) {
+            const idx = toBucket.findIndex((t) => t.id === intendedOverTaskId);
+            if (idx >= 0) insertAt = idx;
           }
-          const fromOthers = without.filter((t) => t.list === srcTask.list && t.section === srcTask.section).map((t, i) => ({ ...t, order: i }));
-          const toBucket = without.filter((t) => t.list === targetList && t.section === targetSection);
-          const reorderedTo = [...toBucket, moved].map((t, i) => ({ ...t, order: i }));
+          const reorderedTo = [...toBucket.slice(0, insertAt), moved, ...toBucket.slice(insertAt)].map((t, i) => ({ ...t, order: i }));
+          const fromOthers = without.filter((t) => t.list === srcTask.list && t.section === srcTask.section && t.id !== srcTask.id).map((t, i) => ({ ...t, order: i }));
           const untouched = without.filter((t) => !(t.list === srcTask.list && t.section === srcTask.section) && !(t.list === targetList && t.section === targetSection));
+          // sameBucket short-circuit: don't double-include `fromOthers` AND `reorderedTo`.
+          const sameBucket = srcTask.list === targetList && srcTask.section === targetSection;
+          if (sameBucket) {
+            return [...untouched, ...reorderedTo];
+          }
           return [...untouched, ...fromOthers, ...reorderedTo];
         });
       }
+      lastCalOverTaskIdRef.current = null;
       resetDragRefs();
       clearOverlay(); return;
     }
@@ -3710,14 +3739,22 @@ export default function App() {
 
   const activeTask = activeTaskId ? tasks.find((t) => t.id === activeTaskId) : null;
   // overId may carry a sortable prefix (e.g. "dash:work:taskId"). Strip it so we can resolve the
-  // real task â€” otherwise hovering over a dashboard card returns null and displacement bails out.
+  // real task — otherwise hovering over a dashboard card returns null and displacement bails out.
+  // For calendar cross-list redirects, overId is a `cal:date:list` cell id and the task identity
+  // is lost; fall back to overTaskIdHint which calendarCollision captured before redirecting.
   const overTask = useMemo(() => {
-    if (!overId) return null;
+    if (!overId) {
+      if (overTaskIdHint) return tasks.find((t) => t.id === overTaskIdHint) ?? null;
+      return null;
+    }
     const s = String(overId);
+    if (s.startsWith('cal:') && overTaskIdHint) {
+      return tasks.find((t) => t.id === overTaskIdHint) ?? null;
+    }
     const i = s.lastIndexOf(':');
     const taskId = i >= 0 ? s.substring(i + 1) : s;
     return tasks.find((t) => t.id === taskId) ?? null;
-  }, [overId, tasks]);
+  }, [overId, overTaskIdHint, tasks]);
   // For project view, over IDs are namespaced as `projtask-${listId}-${taskId}`. Resolve the underlying task
   // so ProjectListColumn can run the same displacement math the list view runs.
   const overProjTask = useMemo(() => {
@@ -4130,6 +4167,13 @@ export default function App() {
       }
       const day = otherCell ? otherCell.split(':')[1] : dayFromCollision(c);
       if (day) {
+        // BEFORE we redirect this task collision to a cell id, remember the task id so the
+        // cell-drop handler can insert at that task's position AND the per-cell displacement
+        // can open an insertion gap above it (cross-column visual cue).
+        lastCalOverTaskIdRef.current = id;
+        // Mirror to state so the per-cell displacement re-renders. Wrap in a setState only
+        // when the value actually changes — calendarCollision runs on every cursor tick.
+        setOverTaskIdHint((prev) => (prev === id ? prev : id));
         const redirectId = `cal:${day}:${activeList}`;
         if (!seen.has(redirectId)) { cellHits.push({ ...c, id: redirectId }); seen.add(redirectId); }
       }
@@ -4323,7 +4367,9 @@ export default function App() {
                 initial={{ scale: 1, x: 0 }}
                 animate={{
                   scale: 1.02,
-                  x: columnOffset * (activeRectWidth || 200),
+                  // Card width + 12px (mx-[6px] each side) ≈ full column-to-column distance.
+                  // activeRectWidth alone undershot — overlay landed in the gap between cols.
+                  x: columnOffset * ((activeRectWidth || 200) + 12),
                   boxShadow: "0 1.875px 7.5px -0.625px rgba(0, 0, 0, 0.35), 0 1.25px 3.125px -0.3125px rgba(0, 0, 0, 0.25)",
                 }}
                 transition={{
