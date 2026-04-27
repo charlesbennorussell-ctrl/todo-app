@@ -1901,7 +1901,12 @@ function WeekCalendarMode({
                         {bucket.map((t, index) => {
                           let displacementOffset = 0;
                           let insertionGap = 0;
-                          if (activeTask && overTask && t.id !== activeTask.id) {
+                          // CATEGORY GATE: only displace when this cell's list matches the
+                          // source task's list. Cards in other categories (Work source dragging
+                          // into Projects band of any column) never react — drops route back to
+                          // the source list anyway, so feedback should match.
+                          const sameCategory = activeTask && activeTask.list === listId;
+                          if (sameCategory && activeTask && overTask && t.id !== activeTask.id) {
                             // SOURCE cell (active is here): leave displacement to dnd-kit's
                             // verticalListSortingStrategy. Stacking the external offset on top
                             // doubled the transform and made the source cell feel sticky/jumpy.
@@ -4200,13 +4205,10 @@ export default function App() {
       onDragOver={handleDragOver}
       onDragEnd={handleDragEnd}
       measuring={measuringConfig}
-      // Modifier sets:
-      //   - Calendar drag: restrictToVerticalAxis + restrictToParentElement so the card stays
-      //     inside its source cell (Work / Projects / Admin band) — vertical motion is enough
-      //     to displace neighbours but the card can't visually wander into another band.
-      //     Column-snap handles the cross-day hop via wrapper animate.x.
-      //   - List + project drags: restrictToVerticalAxis only, for clean in-column reorder.
-      modifiers={activeCalendarCellId ? [restrictToVerticalAxis, restrictToParentElement] : (activeType === 'task' || activeType === 'projTask' ? [restrictToVerticalAxis] : [])}
+      // restrictToVerticalAxis for all task drags. The category lock is enforced at the
+      // displacement+drop layer (cells in different categories don't displace, drops route
+      // back to source list) so the card visually moves freely while the data stays clean.
+      modifiers={activeType === 'task' || activeType === 'projTask' ? [restrictToVerticalAxis] : []}
     >
       <div className="relative min-h-screen bg-[#282828] overflow-x-auto">
         {mode === 'dashboard' && (
