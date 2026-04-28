@@ -154,8 +154,10 @@ function taskOrderSlots(order: TaskOrder, hasProject: boolean, hasClient: boolea
 // to land on the text's baseline band — see DeadlineArrow). Tone:
 //   - 'default'   → #656464 (matches DeadlineArrow's fill)
 //   - 'milestone' → #8465ff (matches milestone purple)
-function Arrowhead({ dim = false, tone = 'default' }: { dim?: boolean; tone?: 'default' | 'milestone' }) {
-  const fill = dim ? '#383838' : tone === 'milestone' ? '#8465ff' : '#656464';
+function Arrowhead({ dim = false, tone = 'default', faint = false }: { dim?: boolean; tone?: 'default' | 'milestone'; faint?: boolean }) {
+  // `faint` (used for expired milestones) drops the milestone purple to its faint variant.
+  const milestoneFill = faint ? '#3a3066' : '#8465ff';
+  const fill = dim ? '#383838' : tone === 'milestone' ? milestoneFill : '#656464';
   return (
     <span className="inline-flex items-center shrink-0 mx-[4px] -mt-[2px] align-middle" style={{ height: 12 }}>
       <svg width="4" height="8" viewBox="0 0 4 8" fill="none">
@@ -452,7 +454,7 @@ function SortableTaskItem({
               // -mx-[4px] cancels the parent flex's gap-[4px] on each side, so the total
               // visible spacing around the arrowhead matches the inline cp slot use
               // (where there's no flex gap, just the Arrowhead's own mx-[4px]).
-              return <span key={key} className="-mx-[4px] inline-flex items-center"><Arrowhead dim={task.completed} tone="milestone" /></span>;
+              return <span key={key} className="-mx-[4px] inline-flex items-center"><Arrowhead dim={task.completed} tone="milestone" faint={isExpiredMilestone} /></span>;
             };
             return taskOrderSlots(taskOrder, showProject, showClient).flatMap((slot, i) => {
               const metaCls = `font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : 'text-[#656464]'}`;
@@ -1898,7 +1900,7 @@ function WeekCalendarMode({
           {/* Line 2 always reserves height so milestones with no client / project / assignees
               don't render shorter than their siblings. min-h-[15px] matches the 11.5px text line. */}
           <div className="flex flex-row items-center gap-[6px] min-h-[15px]">
-            {client && project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${titleClass}`}>{client.short}<Arrowhead dim={task.completed} tone="milestone" />{project.name}</p>}
+            {client && project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${titleClass}`}>{client.short}<Arrowhead dim={task.completed} tone="milestone" faint={isExpired} />{project.name}</p>}
             {client && !project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${titleClass}`}>{client.short}</p>}
             {!client && project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${titleClass}`}>{project.name}</p>}
             {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone="scheduled" hollow={isPersonal} dim={task.completed} faint={isExpired} />)}
