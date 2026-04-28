@@ -92,7 +92,7 @@ function AssigneeBadge({ letter, tone, hollow = false, dim = false, active = fal
   // `dim` matches the muted palette used for completed tasks; `active` swaps the fill to white
   // for the panel's "selected resource" treatment so the badge pops alongside its bold-white name.
   // `faint` (used for expired milestones) drops the scheduled purple to its faint variant.
-  const scheduledColor = faint ? '#453880' : '#8465FF';
+  const scheduledColor = faint ? '#524595' : '#8465FF';
   const color = dim ? '#383838' : active ? '#ffffff' : (tone === 'scheduled' ? scheduledColor : '#656464');
   // Multi-character shorts (auto-disambiguated when two people share an initial) render as a
   // pill instead of a circle: same height, expanded width, fully rounded ends. The width grows
@@ -156,7 +156,7 @@ function taskOrderSlots(order: TaskOrder, hasProject: boolean, hasClient: boolea
 //   - 'milestone' → #8465ff (matches milestone purple)
 function Arrowhead({ dim = false, tone = 'default', faint = false }: { dim?: boolean; tone?: 'default' | 'milestone'; faint?: boolean }) {
   // `faint` (used for expired milestones) drops the milestone purple to its faint variant.
-  const milestoneFill = faint ? '#453880' : '#8465ff';
+  const milestoneFill = faint ? '#524595' : '#8465ff';
   const fill = dim ? '#383838' : tone === 'milestone' ? milestoneFill : '#656464';
   return (
     <span className="inline-flex items-center shrink-0 mx-[4px] -mt-[2px] align-middle" style={{ height: 12 }}>
@@ -370,7 +370,7 @@ function SortableTaskItem({
   // purple so it's visible (lingering) but visually quieted vs. live milestones.
   const isExpiredMilestone = isScheduled && !!task.deadline && task.deadline < todayISO();
   // Live milestones: vivid purple. Expired milestones (lingering for 24h): faint purple.
-  const milestonePurpleClass = isExpiredMilestone ? 'text-[#453880]' : 'text-[#8465ff]';
+  const milestonePurpleClass = isExpiredMilestone ? 'text-[#524595]' : 'text-[#8465ff]';
   // Completed tasks fade to a near-background color across ALL their text â€” no strikethrough,
   // just visually quieted. #383838 is one step off the #282828 page background.
   const titleColor = isScheduled ? milestonePurpleClass : task.completed ? 'text-[#383838]' : isNext ? 'text-[#a8a8a8]' : 'text-white';
@@ -1885,7 +1885,7 @@ function WeekCalendarMode({
     // white tint. Title always on line 1; meta on line 2. Expired milestones (deadline before
     // today) render in faint purple text — they linger on the calendar permanently as a record.
     const isExpired = !!task.deadline && task.deadline < todayISO();
-    const milestonePurpleClass = isExpired ? 'text-[#453880]' : 'text-[#8465ff]';
+    const milestonePurpleClass = isExpired ? 'text-[#524595]' : 'text-[#8465ff]';
     const titleClass = task.completed ? 'text-[#383838]' : milestonePurpleClass;
     // Card bg: tinted faint purple ONLY on live milestones. Expired and completed milestones
     // drop the box — the faint text alone reads as "no longer active". Inline style because
