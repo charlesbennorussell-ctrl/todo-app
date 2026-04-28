@@ -399,15 +399,16 @@ function SortableTaskItem({
       className={`relative shrink-0 w-full group overflow-hidden ${nonDraggable || isDragOverlay ? '' : 'cursor-grab active:cursor-grabbing'} ${isDragOverlay ? 'z-50 bg-[#333333]' : ''}`}
       animate={{
         scale: isDragOverlay ? 1.02 : 1,
-        // `fading` overrides the normal opacity to drive the 3-second fade-out before deletion.
-        opacity: fading ? 0 : (isDragging ? 0 : 1),
+        // No visible fade for the 15-min "fresh-empty" delete countdown — the row stays full
+        // opacity until silent deletion. Only isDragging fades the source while a drag is happening.
+        opacity: isDragging ? 0 : 1,
         // Hover tint: 60ms in / 300ms out, heavy ease in-out. Driven by JS state (smoother
         // framer interpolation than CSS transitions during fast cursor changes).
         ...(isDragOverlay ? {} : { backgroundColor: hovered && !isDragging ? "rgba(255, 255, 255, 0.03)" : "rgba(255, 255, 255, 0)" }),
       }}
       transition={{
         scale: { duration: 0.18 },
-        opacity: fading ? { duration: 3, ease: 'linear' } : isDragging ? { duration: 0.12, ease: "easeOut" } : { duration: 0 },
+        opacity: isDragging ? { duration: 0.12, ease: "easeOut" } : { duration: 0 },
         backgroundColor: { duration: hovered ? 0.06 : 0.3, ease: [0.85, 0, 0.15, 1] },
       }}
     >
@@ -533,10 +534,13 @@ function SortableTaskItem({
               const next = (e.currentTarget.textContent || '').trim();
               if (onRename && next && next !== task.title) onRename(next);
               setEditing(false);
-              // Fresh + still empty after blur → start the 3-second fade-then-delete sequence.
+              // Fresh + still empty after blur → silently soft-delete after 15 minutes if the
+              // user hasn't come back to fill it in. No visual fade — the row stays normal until
+              // it quietly disappears (and lands in Settings → Trash since onDelete soft-deletes).
+              // 15 min gives plenty of time to step away and return.
               if (fresh && !next && onDelete) {
                 setFading(true);
-                fadeTimerRef.current = setTimeout(() => { onDelete(); fadeTimerRef.current = null; }, 3000);
+                fadeTimerRef.current = setTimeout(() => { onDelete(); fadeTimerRef.current = null; }, 15 * 60 * 1000);
               }
             }}
             onKeyDown={(e) => {
