@@ -1981,7 +1981,7 @@ function WeekCalendarMode({
           <button onClick={() => setWeekOffset(0)} className={`${bodyFont} text-[#656464] hover:text-white ml-2 transition-colors`}>Today</button>
         )}
       </div>
-      <div className="grid grid-cols-7 gap-0">
+      <div className="grid grid-cols-7 gap-0 px-[35px]">
         {days.map((d, i) => {
           const iso = dateToISO(d);
           const isToday = iso === todayIso;
