@@ -63,7 +63,7 @@ function TopHeader({ viewName }: { viewName: string }) {
   h = h % 12 || 12;
   const time = `${h}:${String(m).padStart(2, '0')}${ampm}`;
   return (
-    <div className="px-[35px]" style={{ marginBottom: SPACING.dcr }}>
+    <div className="px-[35px]" style={{ marginBottom: SPACING.cr }}>
       <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">
         {viewName} — {day}, {month} {n}{ord} — {time}
       </p>
@@ -1426,7 +1426,7 @@ function ProjectViewMode({
   const bodyFont = "font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap";
 
   const Header = ({ title, onAdd }: { title: string; onAdd?: () => void }) => (
-    <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[74px]">
+    <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[37px]">
       <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">{title}</p>
       {onAdd && <AddPlus onClick={onAdd} />}
     </div>
@@ -1510,7 +1510,7 @@ function ProjectViewMode({
     const { setNodeRef } = useDroppable({ id: `projlist:${listId}`, data: { type: 'projList', listId } });
     return (
     <div ref={setNodeRef} className={`flex-1 min-w-[280px]`}>
-      <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[74px]">
+      <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[37px]">
         <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">{title}</p>
         <HeaderAddMenu
           clients={clients}
@@ -1986,7 +1986,7 @@ function WeekCalendarMode({
           const isToday = iso === todayIso;
           return (
             <CalendarColumnDroppable key={iso} date={iso}>
-              <div className={`h-[37px] flex items-baseline gap-2 px-[16px] mb-[74px] ${isToday ? 'text-[#8465ff]' : (d.getDay() === 0 || d.getDay() === 6 ? 'text-[#656464]' : 'text-white')}`}>
+              <div className={`h-[37px] flex items-baseline gap-2 px-[16px] mb-[37px] ${isToday ? 'text-[#8465ff]' : (d.getDay() === 0 || d.getDay() === 6 ? 'text-[#656464]' : 'text-white')}`}>
                 <p className="font-['NB_International:Regular',sans-serif]">{dayNameShort(d)}</p>
                 <p className={bodyFont}>{d.getDate()}</p>
                 {isToday && <p className={bodyFont}>(Today)</p>}
@@ -1995,7 +1995,7 @@ function WeekCalendarMode({
                   fall beyond the window — labelled "Coming Up" so it reads as a separate look-ahead
                   group rather than as part of day 7's content. */}
               {iso === lastVisibleIso && overflowMilestones.length > 0 && (
-                <div className="mb-[12px]">
+                <div className="mb-[37px]">
                   <div className="h-[20px] px-[16px] flex items-center mb-[6px]">
                     <p className={`${bodyFont} text-[#5e5e5e]`}>Coming Up</p>
                   </div>
@@ -2121,10 +2121,10 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
       <TopHeader viewName="Settings" />
       <div className="flex gap-0">
       <div className="flex-1 min-w-[280px]">
-        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[20px]">
+        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-0">
           <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">I am</p>
         </div>
-        <div className="px-[31px] mb-[50px] flex flex-wrap gap-2">
+        <div className="px-[31px] mb-[37px] flex flex-wrap gap-2">
           {people.map((p) => {
             const active = p.short === currentUserShort;
             return (
@@ -2136,10 +2136,10 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
           {people.length === 0 && <span className="text-[#666] text-[12px]">Add a person below first.</span>}
         </div>
         {/* Task display order — three options. Persisted per-browser via localStorage. */}
-        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[20px]">
+        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-0">
           <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Task order</p>
         </div>
-        <div className="px-[31px] mb-[50px] flex flex-col gap-2">
+        <div className="px-[31px] mb-[37px] flex flex-col gap-2">
           {([
             { id: 'cpt' as TaskOrder, parts: ['Client - Project', 'Task'] as const },
             { id: 'ptc' as TaskOrder, parts: ['Project', 'Task', 'Client'] as const },
@@ -2165,24 +2165,24 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
         {/* Tomorrow section toggle. Off → tomorrow tasks visually fall back into Next (data
             preserved). The midnight refill keeps Tomorrow at 5 tasks even while hidden — flip
             back on and you see the buffer ready to go. */}
-        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[20px]">
+        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-0">
           <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Tomorrow section</p>
         </div>
-        <div className="px-[31px] mb-[50px] flex flex-row gap-4">
+        <div className="px-[31px] mb-[37px] flex flex-row gap-4">
           <button type="button" onClick={() => onSetTomorrowEnabled(true)} className={`text-[13px] transition-colors ${tomorrowEnabled ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>On</button>
           <button type="button" onClick={() => onSetTomorrowEnabled(false)} className={`text-[13px] transition-colors ${!tomorrowEnabled ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>Off</button>
         </div>
         {/* Title-case auto-correct. 2 seconds after the user blurs a title, rewrite to title
             case. Brand-name vocabulary + ALL-CAPS acronyms are preserved; small words ("and",
             "the", "of"…) stay lowercase. Off → leave titles exactly as typed. */}
-        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[20px]">
+        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-0">
           <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Title case auto-correct</p>
         </div>
-        <div className="px-[31px] mb-[50px] flex flex-row gap-4">
+        <div className="px-[31px] mb-[37px] flex flex-row gap-4">
           <button type="button" onClick={() => onSetCaseMode('off')} className={`text-[13px] transition-colors ${caseMode === 'off' ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>Off</button>
           <button type="button" onClick={() => onSetCaseMode('title')} className={`text-[13px] transition-colors ${caseMode === 'title' ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>On</button>
         </div>
-        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[74px]">
+        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[37px]">
           <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">People</p>
           <AddPlus onClick={onAddPerson} />
         </div>
@@ -2206,7 +2206,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
       {/* TRASH column — every soft-deleted task lives here until the user revives it (up arrow)
           or purges it (X). Newest-first by trashedAt. */}
       <div className="flex-1 min-w-[280px]">
-        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[74px]">
+        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[37px]">
           <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Trash</p>
           <p className="text-[#666] text-[12px] ml-2">{trashedTasks.length}</p>
         </div>
@@ -2249,7 +2249,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
           Clicking the checkbox un-completes the task — the row stays visible for 10 minutes via
           the revivedAt grace window so a misclick can be undone. */}
       <div className="flex-1 min-w-[280px]">
-        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[74px]">
+        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[37px]">
           <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Completed</p>
           <p className="text-[#666] text-[12px] ml-2">{completedTasks.length}</p>
         </div>
@@ -4131,7 +4131,7 @@ export default function App() {
     const milestones = listId === 'dashboard' ? [] : (tasksByKey[`${listId}:milestones`] || []);
     return (
       <div key={listId} className="flex-1 min-w-[280px]">
-        <p className={`font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] px-[35px] mb-[74px] ${listId === 'dashboard' ? 'text-[#8465ff]' : 'text-white'}`}>
+        <p className={`font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] px-[35px] mb-[37px] ${listId === 'dashboard' ? 'text-[#8465ff]' : 'text-white'}`}>
           {LIST_TITLES[listId]}
           {listId === 'dashboard' && (
             <span> ({people.find((p) => p.short === currentUserShort)?.name || currentUserShort})</span>
@@ -4277,7 +4277,7 @@ export default function App() {
       <div key={listId} className="flex-1 min-w-[280px]">
         {/* Column header with the cascading add menu (HeaderAddMenu) for adding a client,
             project (optionally under a client), or blank task into THIS column. */}
-        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[74px]">
+        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[37px]">
           <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">
             {LIST_TITLES[listId]}
           </p>
@@ -4454,7 +4454,7 @@ export default function App() {
             <div className="flex gap-0">
             {/* Sidebar: Resources (people) + Clients */}
             <div className="flex-1 min-w-[280px]">
-              <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[74px]">
+              <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[37px]">
                 <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Resources</p>
                 <AddPlus onClick={addPerson} />
               </div>
@@ -4462,7 +4462,7 @@ export default function App() {
                 <ResourceRow key={p.id} person={p} bodyFont={proj2BodyFont} onDelete={() => deletePerson(p.id)} />
               ))}
               <Spacer />
-              <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[74px]">
+              <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[37px]">
                 <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Clients</p>
                 <AddPlus onClick={addBlankClient} />
               </div>
