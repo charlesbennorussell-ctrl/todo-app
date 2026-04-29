@@ -2036,7 +2036,7 @@ function WeekCalendarMode({
                 const overInBucket = oIdx >= 0;
                 return (
                   <CalendarDayDroppable key={listId} id={`cal:${iso}:${listId}`} isEmpty={bucket.length === 0 && dayMilestones.length === 0} className="pb-[37px] last:pb-0">
-                    <div className="h-[37px] px-[16px] flex items-center">
+                    <div className="h-[20px] px-[16px] flex items-center mb-[6px]">
                       <p className={`${bodyFont} text-[#5e5e5e]`}>{label}</p>
                     </div>
                     {dayMilestones.length > 0 && (
