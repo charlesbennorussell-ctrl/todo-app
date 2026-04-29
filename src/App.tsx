@@ -4137,9 +4137,9 @@ export default function App() {
     const milestones = listId === 'dashboard' ? [] : (tasksByKey[`${listId}:milestones`] || []);
     return (
       <div key={listId} className="flex-1 min-w-[280px]">
-        {/* Column title — wrapped in a 37px-tall flex container so the gap to the first
-            section matches Project View's column titles. */}
-        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[37px]">
+        {/* Column title — 37px-tall flex container with a DOUBLE carriage-return below so the
+            column header has a clear paragraph break before its first section. */}
+        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]" style={{ marginBottom: SPACING.dcr }}>
           <p className={`font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] ${listId === 'dashboard' ? 'text-[#8465ff]' : 'text-white'}`}>
             {LIST_TITLES[listId]}
             {listId === 'dashboard' && (
@@ -4285,9 +4285,9 @@ export default function App() {
       .filter((b) => b.projects.length > 0);
     return (
       <div key={listId} className="flex-1 min-w-[280px]">
-        {/* Column header with the cascading add menu (HeaderAddMenu) for adding a client,
-            project (optionally under a client), or blank task into THIS column. */}
-        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[37px]">
+        {/* Column header with the cascading add menu (HeaderAddMenu). DOUBLE carriage-return
+            below for a paragraph break before the first client / project block. */}
+        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]" style={{ marginBottom: SPACING.dcr }}>
           <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">
             {LIST_TITLES[listId]}
           </p>
@@ -4464,7 +4464,7 @@ export default function App() {
             <div className="flex gap-0">
             {/* Sidebar: Resources (people) + Clients */}
             <div className="flex-1 min-w-[280px]">
-              <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[37px]">
+              <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]" style={{ marginBottom: SPACING.dcr }}>
                 <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Resources</p>
                 <AddPlus onClick={addPerson} />
               </div>
@@ -4472,7 +4472,7 @@ export default function App() {
                 <ResourceRow key={p.id} person={p} bodyFont={proj2BodyFont} onDelete={() => deletePerson(p.id)} />
               ))}
               <Spacer />
-              <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[37px]">
+              <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]" style={{ marginBottom: SPACING.dcr }}>
                 <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Clients</p>
                 <AddPlus onClick={addBlankClient} />
               </div>
