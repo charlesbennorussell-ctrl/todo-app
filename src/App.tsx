@@ -1964,9 +1964,11 @@ function WeekCalendarMode({
     const end = addDaysToDate(weekStart, 6);
     const mon = weekStart.toLocaleDateString('en-US', { month: 'short' });
     const monEnd = end.toLocaleDateString('en-US', { month: 'short' });
+    // Use — (em dash) for the range separator. Previous source had UTF-8 mojibake from an
+    // editor reinterpreting bytes as Latin-1.
     return mon === monEnd
-      ? `${mon} ${weekStart.getDate()}â€“${end.getDate()}, ${end.getFullYear()}`
-      : `${mon} ${weekStart.getDate()} â€“ ${monEnd} ${end.getDate()}, ${end.getFullYear()}`;
+      ? `${mon} ${weekStart.getDate()}—${end.getDate()}, ${end.getFullYear()}`
+      : `${mon} ${weekStart.getDate()} — ${monEnd} ${end.getDate()}, ${end.getFullYear()}`;
   };
 
   return (
@@ -1990,7 +1992,7 @@ function WeekCalendarMode({
           const isToday = iso === todayIso;
           return (
             <CalendarColumnDroppable key={iso} date={iso}>
-              <div className={`h-[37px] flex items-baseline gap-2 px-[16px] mb-[37px] ${isToday ? 'text-[#8465ff]' : (d.getDay() === 0 || d.getDay() === 6 ? 'text-[#656464]' : 'text-white')}`}>
+              <div className={`h-[37px] flex items-center gap-2 px-[16px] mb-[37px] ${isToday ? 'text-[#8465ff]' : (d.getDay() === 0 || d.getDay() === 6 ? 'text-[#656464]' : 'text-white')}`}>
                 <p className="font-['NB_International:Regular',sans-serif]">{dayNameShort(d)}</p>
                 <p className={bodyFont}>{d.getDate()}</p>
                 {isToday && <p className={bodyFont}>(Today)</p>}
