@@ -1722,7 +1722,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
     <motion.div
       ref={setNodeRef}
       style={style}
-      className={`relative mx-[6px] mb-[4px] group ${task.completed ? '' : 'bg-white/[0.03]'} ${dimmed ? 'opacity-60' : ''}`}
+      className={`relative mx-[6px] mb-[4px] group h-[55px] ${task.completed ? '' : 'bg-white/[0.03]'} ${dimmed ? 'opacity-60' : ''}`}
       animate={{ opacity: isDragging ? 0 : 1 }}
       transition={{ opacity: { duration: 0.12, ease: 'easeOut' } }}
     >
@@ -1941,7 +1941,7 @@ function WeekCalendarMode({
     // Tailwind arbitrary opacity on hex colors wasn't reliably generating the CSS.
     const cardBgStyle: React.CSSProperties | undefined = (task.completed || isExpired) ? undefined : { backgroundColor: 'rgba(132, 101, 255, 0.10)' };
     return (
-      <div onDoubleClick={(e) => { e.stopPropagation(); onEditTask(task); }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onQuickEditTask?.(task); }} style={cardBgStyle} className="relative mx-[6px] mb-[4px] cursor-pointer">
+      <div onDoubleClick={(e) => { e.stopPropagation(); onEditTask(task); }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onQuickEditTask?.(task); }} style={cardBgStyle} className="relative mx-[6px] mb-[4px] cursor-pointer h-[55px]">
         <div className="px-[10px] py-[6px] flex flex-col gap-[2px]">
           <div className="flex flex-row items-center gap-[4px]">
             <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleClass}`}>{task.title}</span>
