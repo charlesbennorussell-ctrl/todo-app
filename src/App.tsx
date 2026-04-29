@@ -45,6 +45,32 @@ import {
 } from './data';
 
 
+// View header — appears at the very top of every mode (list / project / calendar / settings).
+// "{viewName} — Monday, April 28th — 12:25pm". Updates the clock once a minute.
+function TopHeader({ viewName }: { viewName: string }) {
+  const [now, setNow] = useState(new Date());
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(new Date()), 60_000);
+    return () => window.clearInterval(t);
+  }, []);
+  const day = now.toLocaleDateString('en-US', { weekday: 'long' });
+  const month = now.toLocaleDateString('en-US', { month: 'long' });
+  const n = now.getDate();
+  const ord = (n > 3 && n < 21) ? 'th' : (['th', 'st', 'nd', 'rd', 'th', 'th', 'th', 'th', 'th', 'th'][n % 10]);
+  let h = now.getHours();
+  const m = now.getMinutes();
+  const ampm = h >= 12 ? 'pm' : 'am';
+  h = h % 12 || 12;
+  const time = `${h}:${String(m).padStart(2, '0')}${ampm}`;
+  return (
+    <div className="px-[35px]" style={{ marginBottom: SPACING.dcr }}>
+      <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">
+        {viewName} — {day}, {month} {n}{ord} — {time}
+      </p>
+    </div>
+  );
+}
+
 function TaskCheckbox({ completed, onToggle }: { completed: boolean; onToggle: () => void }) {
   // Completed state matches the faded row palette â€” fill + border collapse into the same muted
   // mid-tone as the text (#383838), with a slightly lighter tick (#6a6a6a) and a chunkier
@@ -214,6 +240,29 @@ const MOTION = {
   displace: 600,
 };
 const DISPLACE_TRANSITION = `transform ${MOTION.displace}ms ${MOTION.easeOut}, margin-top ${MOTION.displace}ms ${MOTION.easeOut}`;
+
+// --- Spacing vocabulary ------------------------------------------------------
+// One row in the layout = 37px (the height of a task row, the section header, etc.).
+// Treat the whole layout like a raw text document:
+//   - tight        : 0px → continuous flow, like consecutive lines (no blank line between).
+//   - SPACING.cr   : 37px → ONE carriage return. A blank line. The default "this is a new
+//                    section" beat. Use between section header → next section, or between
+//                    distinct groups in a column.
+//   - SPACING.dcr  : 74px → DOUBLE carriage return. A paragraph break. Use sparingly — at
+//                    the top of the page (header → content), and between top-level views'
+//                    column titles → first section.
+// Shorthand we use in chat:
+//   "tight" / "T"     → no gap
+//   "cr"    / "1"     → SPACING.cr (one blank line)
+//   "double" / "2"    → SPACING.dcr (paragraph break)
+// "Move that to a CR" = use SPACING.cr; "give it a double" = use SPACING.dcr.
+const ROW_PX = 37;
+const SPACING = {
+  tight: 0,
+  cr: ROW_PX,         // one carriage return = 37px
+  dcr: ROW_PX * 2,    // two carriage returns = 74px
+  topMargin: 30,      // distance from page top to the View header (List — Mon, Apr 28th — 12:25pm)
+};
 
 // --- Displaced ----------------------------------------------------------------
 // Unified displacement primitive for ALL draggable rows (list, project, calendar).
@@ -1921,7 +1970,8 @@ function WeekCalendarMode({
   };
 
   return (
-    <div className="pt-[106px] pb-[140px] px-[35px] min-w-[1400px]">
+    <div className="pb-[140px] px-[35px] min-w-[1400px]" style={{ paddingTop: SPACING.topMargin }}>
+      <TopHeader viewName="Calendar" />
       <div className="flex items-center gap-3 mb-[37px]">
         <button onClick={() => setWeekOffset((o) => o - 1)} className="p-1 text-[#656464] hover:text-white transition-colors"><ChevronLeft size={20} /></button>
         <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">{formatRange()}</p>
@@ -2067,7 +2117,9 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
 }) {
   const bodyFont = "font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap";
   return (
-    <div className="pt-[106px] pb-[140px] flex gap-0">
+    <div className="pb-[140px]" style={{ paddingTop: SPACING.topMargin }}>
+      <TopHeader viewName="Settings" />
+      <div className="flex gap-0">
       <div className="flex-1 min-w-[280px]">
         <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[20px]">
           <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">I am</p>
@@ -2218,6 +2270,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
             </div>
           );
         })}
+      </div>
       </div>
     </div>
   );
@@ -4383,23 +4436,8 @@ export default function App() {
     >
       <div className="relative min-h-screen bg-[#282828] overflow-x-auto">
         {mode === 'dashboard' && (
-          <div className="pt-[30px] pb-[140px]">
-            {/* Top-of-page header — "List — Monday, April 28th". 30px from the top edge,
-                with a double-line gap below before the column row begins. The column-row's own
-                column titles ("Dashboard", "Work", …) keep their existing mb-[74px] which serves
-                as the matching gap before the Today section. Two gaps total. */}
-            <div className="px-[35px] mb-[74px]">
-              <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">
-                {(() => {
-                  const d = new Date();
-                  const day = d.toLocaleDateString('en-US', { weekday: 'long' });
-                  const month = d.toLocaleDateString('en-US', { month: 'long' });
-                  const n = d.getDate();
-                  const ord = (n > 3 && n < 21) ? 'th' : ['th', 'st', 'nd', 'rd', 'th', 'th', 'th', 'th', 'th', 'th'][n % 10];
-                  return `List — ${day}, ${month} ${n}${ord}`;
-                })()}
-              </p>
-            </div>
+          <div className="pb-[140px]" style={{ paddingTop: SPACING.topMargin }}>
+            <TopHeader viewName="List" />
             <div className="flex gap-0">
               {LISTS.map(renderColumn)}
             </div>
@@ -4411,7 +4449,9 @@ export default function App() {
           // getAnimationProps, the existing DragOverlay path). The only diff is the column body
           // uses renderProjectGroupedColumn (with client > project hierarchy) instead of
           // renderColumn. The Dashboard column is replaced with a Resources + Clients sidebar.
-          <div className="pt-[106px] pb-[140px] flex gap-0">
+          <div className="pb-[140px]" style={{ paddingTop: SPACING.topMargin }}>
+            <TopHeader viewName="Projects" />
+            <div className="flex gap-0">
             {/* Sidebar: Resources (people) + Clients */}
             <div className="flex-1 min-w-[280px]">
               <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[74px]">
@@ -4440,6 +4480,7 @@ export default function App() {
               ))}
             </div>
             {(['work', 'projects', 'admin'] as ListId[]).map((l) => renderProjectGroupedColumn(l))}
+            </div>
           </div>
         )}
         {/* Legacy ProjectViewMode removed — `mode === 'projectView'` now renders the new
