@@ -4383,8 +4383,26 @@ export default function App() {
     >
       <div className="relative min-h-screen bg-[#282828] overflow-x-auto">
         {mode === 'dashboard' && (
-          <div className="pt-[106px] pb-[140px] flex gap-0">
-            {LISTS.map(renderColumn)}
+          <div className="pt-[30px] pb-[140px]">
+            {/* Top-of-page header — "List — Monday, April 28th". 30px from the top edge,
+                with a double-line gap below before the column row begins. The column-row's own
+                column titles ("Dashboard", "Work", …) keep their existing mb-[74px] which serves
+                as the matching gap before the Today section. Two gaps total. */}
+            <div className="px-[35px] mb-[74px]">
+              <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">
+                {(() => {
+                  const d = new Date();
+                  const day = d.toLocaleDateString('en-US', { weekday: 'long' });
+                  const month = d.toLocaleDateString('en-US', { month: 'long' });
+                  const n = d.getDate();
+                  const ord = (n > 3 && n < 21) ? 'th' : ['th', 'st', 'nd', 'rd', 'th', 'th', 'th', 'th', 'th', 'th'][n % 10];
+                  return `List — ${day}, ${month} ${n}${ord}`;
+                })()}
+              </p>
+            </div>
+            <div className="flex gap-0">
+              {LISTS.map(renderColumn)}
+            </div>
           </div>
         )}
         {mode === 'projectView' && (
