@@ -242,26 +242,24 @@ const MOTION = {
 const DISPLACE_TRANSITION = `transform ${MOTION.displace}ms ${MOTION.easeOut}, margin-top ${MOTION.displace}ms ${MOTION.easeOut}`;
 
 // --- Spacing vocabulary ------------------------------------------------------
-// One row in the layout = 37px (the height of a task row, the section header, etc.).
-// Treat the whole layout like a raw text document:
-//   - tight        : 0px → continuous flow, like consecutive lines (no blank line between).
-//   - SPACING.cr   : 37px → ONE carriage return. A blank line. The default "this is a new
-//                    section" beat. Use between section header → next section, or between
-//                    distinct groups in a column.
-//   - SPACING.dcr  : 74px → DOUBLE carriage return. A paragraph break. Use sparingly — at
-//                    the top of the page (header → content), and between top-level views'
-//                    column titles → first section.
+// Treat the whole layout like a raw text document. The base unit is a TEXT LINE
+// (≈ 20px at our 14px / 1.4 line-height), NOT a task row (37px). So a "carriage
+// return" leaves one blank text line of breathing room — about half a row, which
+// reads as "new section" without dropping a full row of empty space.
+//   - tight        : 0px  → continuous flow, like consecutive lines (no blank line between)
+//   - SPACING.cr   : 20px → ONE carriage return. A blank text line. Default "new section" beat.
+//   - SPACING.dcr  : 40px → DOUBLE carriage return. Paragraph break. Use sparingly.
 // Shorthand we use in chat:
-//   "tight" / "T"     → no gap
-//   "cr"    / "1"     → SPACING.cr (one blank line)
-//   "double" / "2"    → SPACING.dcr (paragraph break)
+//   "tight"  / "T" → no gap
+//   "cr"     / "1" → SPACING.cr (one blank line)
+//   "double" / "2" → SPACING.dcr (paragraph break)
 // "Move that to a CR" = use SPACING.cr; "give it a double" = use SPACING.dcr.
-const ROW_PX = 37;
+const ROW_PX = 37;          // task / section-header row height — used by drag/displacement, not spacing
 const SPACING = {
   tight: 0,
-  cr: ROW_PX,         // one carriage return = 37px
-  dcr: ROW_PX * 2,    // two carriage returns = 74px
-  topMargin: 30,      // distance from page top to the View header (List — Mon, Apr 28th — 12:25pm)
+  cr: 20,            // one carriage return ≈ one blank text line
+  dcr: 40,           // two carriage returns
+  topMargin: 30,     // distance from page top to the View header (List — Mon, Apr 28th — 12:25pm)
 };
 
 // --- Displaced ----------------------------------------------------------------
@@ -780,7 +778,8 @@ function SectionHeader({ title, onAdd }: { title: string; onAdd?: () => void }) 
   );
 }
 
-function Spacer() { return <div className="h-[37px] shrink-0 w-full" />; }
+// One carriage return of vertical breathing room — used between sub-list groups inside a column.
+function Spacer() { return <div className="shrink-0 w-full" style={{ height: SPACING.cr }} />; }
 
 function SectionDroppable({ id, children }: { id: string; children: React.ReactNode }) {
   const { setNodeRef } = useDroppable({ id });
@@ -1426,7 +1425,7 @@ function ProjectViewMode({
   const bodyFont = "font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap";
 
   const Header = ({ title, onAdd }: { title: string; onAdd?: () => void }) => (
-    <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[37px]">
+    <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[20px]">
       <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">{title}</p>
       {onAdd && <AddPlus onClick={onAdd} />}
     </div>
@@ -1510,7 +1509,7 @@ function ProjectViewMode({
     const { setNodeRef } = useDroppable({ id: `projlist:${listId}`, data: { type: 'projList', listId } });
     return (
     <div ref={setNodeRef} className={`flex-1 min-w-[280px]`}>
-      <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[37px]">
+      <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[20px]">
         <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">{title}</p>
         <HeaderAddMenu
           clients={clients}
@@ -1520,14 +1519,14 @@ function ProjectViewMode({
         />
       </div>
       {milestones.length > 0 && (
-        <div className="mb-[37px]">
+        <div className="mb-[20px]">
           {milestones.map((t) => (
             <ProjectTaskRow key={t.id} task={t} listId={listId} onToggle={() => onToggleTask(t.id)} onRename={(title) => onRenameTask(t.id, title)} onDelete={() => onDeleteTask(t.id)} onEdit={() => onEditTask(t)} isAnyDragging={isAnyDragging} autoFocus={t.id === newId} nonDraggable projects={projects} clients={clients} showContext />
           ))}
         </div>
       )}
       {unassigned.length > 0 && (
-        <div className="mb-[37px]">
+        <div className="mb-[20px]">
           <SortableContext items={unassigned.map((t) => `projtask-${listId}-${t.id}`)} strategy={verticalListSortingStrategy}>
             {unassigned.map((t, i) => {
               const { displacementOffset, insertionGap } = projAnimProps(unassigned, t, i);
@@ -1539,7 +1538,7 @@ function ProjectViewMode({
         </div>
       )}
       {noClientProjects.length > 0 && (
-        <div className="mb-[37px]">
+        <div className="mb-[20px]">
           <SortableContext items={noClientProjects.map((p) => `projrow-${listId}-${p.id}`)} strategy={verticalListSortingStrategy}>
             {noClientProjects.map((p) => {
               const projTasks = tasksForProjectList(p, listId);
@@ -1972,7 +1971,7 @@ function WeekCalendarMode({
   return (
     <div className="pb-[140px] px-[35px] min-w-[1400px]" style={{ paddingTop: SPACING.topMargin }}>
       <TopHeader viewName="Calendar" />
-      <div className="flex items-center gap-3 mb-[37px]">
+      <div className="flex items-center gap-3 mb-[20px]">
         <button onClick={() => setWeekOffset((o) => o - 1)} className="p-1 text-[#656464] hover:text-white transition-colors"><ChevronLeft size={20} /></button>
         <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">{formatRange()}</p>
         <button onClick={() => setWeekOffset((o) => o + 1)} className="p-1 text-[#656464] hover:text-white transition-colors"><ChevronRight size={20} /></button>
@@ -1986,7 +1985,7 @@ function WeekCalendarMode({
           const isToday = iso === todayIso;
           return (
             <CalendarColumnDroppable key={iso} date={iso}>
-              <div className={`h-[37px] flex items-baseline gap-2 px-[16px] mb-[37px] ${isToday ? 'text-[#8465ff]' : (d.getDay() === 0 || d.getDay() === 6 ? 'text-[#656464]' : 'text-white')}`}>
+              <div className={`h-[37px] flex items-baseline gap-2 px-[16px] mb-[20px] ${isToday ? 'text-[#8465ff]' : (d.getDay() === 0 || d.getDay() === 6 ? 'text-[#656464]' : 'text-white')}`}>
                 <p className="font-['NB_International:Regular',sans-serif]">{dayNameShort(d)}</p>
                 <p className={bodyFont}>{d.getDate()}</p>
                 {isToday && <p className={bodyFont}>(Today)</p>}
@@ -1995,7 +1994,7 @@ function WeekCalendarMode({
                   fall beyond the window — labelled "Coming Up" so it reads as a separate look-ahead
                   group rather than as part of day 7's content. */}
               {iso === lastVisibleIso && overflowMilestones.length > 0 && (
-                <div className="mb-[37px]">
+                <div className="mb-[20px]">
                   <div className="h-[20px] px-[16px] flex items-center mb-[6px]">
                     <p className={`${bodyFont} text-[#5e5e5e]`}>Coming Up</p>
                   </div>
@@ -2124,7 +2123,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
         <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-0">
           <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">I am</p>
         </div>
-        <div className="px-[31px] mb-[37px] flex flex-wrap gap-2">
+        <div className="px-[31px] mb-[20px] flex flex-wrap gap-2">
           {people.map((p) => {
             const active = p.short === currentUserShort;
             return (
@@ -2139,7 +2138,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
         <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-0">
           <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Task order</p>
         </div>
-        <div className="px-[31px] mb-[37px] flex flex-col gap-2">
+        <div className="px-[31px] mb-[20px] flex flex-col gap-2">
           {([
             { id: 'cpt' as TaskOrder, parts: ['Client - Project', 'Task'] as const },
             { id: 'ptc' as TaskOrder, parts: ['Project', 'Task', 'Client'] as const },
@@ -2168,7 +2167,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
         <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-0">
           <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Tomorrow section</p>
         </div>
-        <div className="px-[31px] mb-[37px] flex flex-row gap-4">
+        <div className="px-[31px] mb-[20px] flex flex-row gap-4">
           <button type="button" onClick={() => onSetTomorrowEnabled(true)} className={`text-[13px] transition-colors ${tomorrowEnabled ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>On</button>
           <button type="button" onClick={() => onSetTomorrowEnabled(false)} className={`text-[13px] transition-colors ${!tomorrowEnabled ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>Off</button>
         </div>
@@ -2178,11 +2177,11 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
         <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-0">
           <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Title case auto-correct</p>
         </div>
-        <div className="px-[31px] mb-[37px] flex flex-row gap-4">
+        <div className="px-[31px] mb-[20px] flex flex-row gap-4">
           <button type="button" onClick={() => onSetCaseMode('off')} className={`text-[13px] transition-colors ${caseMode === 'off' ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>Off</button>
           <button type="button" onClick={() => onSetCaseMode('title')} className={`text-[13px] transition-colors ${caseMode === 'title' ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>On</button>
         </div>
-        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[37px]">
+        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[20px]">
           <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">People</p>
           <AddPlus onClick={onAddPerson} />
         </div>
@@ -2206,7 +2205,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
       {/* TRASH column — every soft-deleted task lives here until the user revives it (up arrow)
           or purges it (X). Newest-first by trashedAt. */}
       <div className="flex-1 min-w-[280px]">
-        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[37px]">
+        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[20px]">
           <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Trash</p>
           <p className="text-[#666] text-[12px] ml-2">{trashedTasks.length}</p>
         </div>
@@ -2249,7 +2248,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
           Clicking the checkbox un-completes the task — the row stays visible for 10 minutes via
           the revivedAt grace window so a misclick can be undone. */}
       <div className="flex-1 min-w-[280px]">
-        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[37px]">
+        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[20px]">
           <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Completed</p>
           <p className="text-[#666] text-[12px] ml-2">{completedTasks.length}</p>
         </div>
@@ -4131,7 +4130,7 @@ export default function App() {
     const milestones = listId === 'dashboard' ? [] : (tasksByKey[`${listId}:milestones`] || []);
     return (
       <div key={listId} className="flex-1 min-w-[280px]">
-        <p className={`font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] px-[35px] mb-[37px] ${listId === 'dashboard' ? 'text-[#8465ff]' : 'text-white'}`}>
+        <p className={`font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] px-[35px] mb-[20px] ${listId === 'dashboard' ? 'text-[#8465ff]' : 'text-white'}`}>
           {LIST_TITLES[listId]}
           {listId === 'dashboard' && (
             <span> ({people.find((p) => p.short === currentUserShort)?.name || currentUserShort})</span>
@@ -4277,7 +4276,7 @@ export default function App() {
       <div key={listId} className="flex-1 min-w-[280px]">
         {/* Column header with the cascading add menu (HeaderAddMenu) for adding a client,
             project (optionally under a client), or blank task into THIS column. */}
-        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[37px]">
+        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[20px]">
           <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">
             {LIST_TITLES[listId]}
           </p>
@@ -4289,7 +4288,7 @@ export default function App() {
           />
         </div>
         {orphans.length > 0 && (
-          <div className="mb-[37px]">
+          <div className="mb-[20px]">
             {renderProjectBucket(orphans, `proj2:${listId}:none:`, false)}
           </div>
         )}
@@ -4454,7 +4453,7 @@ export default function App() {
             <div className="flex gap-0">
             {/* Sidebar: Resources (people) + Clients */}
             <div className="flex-1 min-w-[280px]">
-              <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[37px]">
+              <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[20px]">
                 <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Resources</p>
                 <AddPlus onClick={addPerson} />
               </div>
@@ -4462,7 +4461,7 @@ export default function App() {
                 <ResourceRow key={p.id} person={p} bodyFont={proj2BodyFont} onDelete={() => deletePerson(p.id)} />
               ))}
               <Spacer />
-              <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[37px]">
+              <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[20px]">
                 <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Clients</p>
                 <AddPlus onClick={addBlankClient} />
               </div>
