@@ -1975,8 +1975,9 @@ function WeekCalendarMode({
     <div className="pb-[140px] min-w-[1400px]" style={{ paddingTop: SPACING.topMargin }}>
       <TopHeader viewName="Calendar" />
       {/* Week-range navigator — same px-[35px] as TopHeader so it lines up vertically. h-[37px]
-          matches the standard header row so the rhythm with TopHeader → grid is identical. */}
-      <div className="flex items-center gap-3 mb-[37px] px-[35px] h-[37px]">
+          matches the standard header row. DOUBLE carriage-return below so the day-name row
+          gets the same paragraph-break gap that column titles in List + Project use. */}
+      <div className="flex items-center gap-3 px-[35px] h-[37px]" style={{ marginBottom: SPACING.dcr }}>
         <button onClick={() => setWeekOffset((o) => o - 1)} className="p-1 text-[#656464] hover:text-white transition-colors"><ChevronLeft size={20} /></button>
         <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">{formatRange()}</p>
         <button onClick={() => setWeekOffset((o) => o + 1)} className="p-1 text-[#656464] hover:text-white transition-colors"><ChevronRight size={20} /></button>
