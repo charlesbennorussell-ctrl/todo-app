@@ -1970,9 +1970,10 @@ function WeekCalendarMode({
   };
 
   return (
-    <div className="pb-[140px] px-[35px] min-w-[1400px]" style={{ paddingTop: SPACING.topMargin }}>
+    <div className="pb-[140px] min-w-[1400px]" style={{ paddingTop: SPACING.topMargin }}>
       <TopHeader viewName="Calendar" />
-      <div className="flex items-center gap-3 mb-[37px]">
+      {/* Week-range navigator — same px-[35px] as TopHeader so it lines up vertically. */}
+      <div className="flex items-center gap-3 mb-[37px] px-[35px]">
         <button onClick={() => setWeekOffset((o) => o - 1)} className="p-1 text-[#656464] hover:text-white transition-colors"><ChevronLeft size={20} /></button>
         <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">{formatRange()}</p>
         <button onClick={() => setWeekOffset((o) => o + 1)} className="p-1 text-[#656464] hover:text-white transition-colors"><ChevronRight size={20} /></button>
@@ -4131,12 +4132,16 @@ export default function App() {
     const milestones = listId === 'dashboard' ? [] : (tasksByKey[`${listId}:milestones`] || []);
     return (
       <div key={listId} className="flex-1 min-w-[280px]">
-        <p className={`font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] px-[35px] mb-[37px] ${listId === 'dashboard' ? 'text-[#8465ff]' : 'text-white'}`}>
-          {LIST_TITLES[listId]}
-          {listId === 'dashboard' && (
-            <span> ({people.find((p) => p.short === currentUserShort)?.name || currentUserShort})</span>
-          )}
-        </p>
+        {/* Column title — wrapped in a 37px-tall flex container so the gap to the first
+            section matches Project View's column titles. */}
+        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[37px]">
+          <p className={`font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] ${listId === 'dashboard' ? 'text-[#8465ff]' : 'text-white'}`}>
+            {LIST_TITLES[listId]}
+            {listId === 'dashboard' && (
+              <span> ({people.find((p) => p.short === currentUserShort)?.name || currentUserShort})</span>
+            )}
+          </p>
+        </div>
         {milestones.length > 0 && wrap('milestones', milestoneBucket(milestones))}
         {(tasksByKey[`${listId}:inbox`] || []).length > 0 && wrap('inbox', bucket(tasksByKey[`${listId}:inbox`] || []))}
         {listId === 'dashboard' ? (
