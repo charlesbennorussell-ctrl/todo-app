@@ -2100,11 +2100,11 @@ function FocusDamGroup({
       </SortableContext>
     );
   }
-  // Row-height tier. Zoom All "zooms out" — the smallest row height in the
-  // set, so the most images fit per row and the user gets a fly-over of the
-  // whole collection. S / M climb from there. L is its own branch above
-  // (one image per row, viewport-capped).
-  const rowH = tileView === 'zoom' ? 80 : tileView === 'sm' ? 120 : tileView === 'md' ? 240 : 360;
+  // Row-height tier. Zoom All "zooms out" — half the size of S — so the most
+  // images fit per row and the user gets a fly-over of the whole collection
+  // at a glance. S / M climb from there. L is its own branch above (one
+  // image per row, viewport-capped).
+  const rowH = tileView === 'zoom' ? 40 : tileView === 'sm' ? 120 : tileView === 'md' ? 240 : 360;
   // Split: favorited images go in the first row block, the rest in the
   // second. The favoriting logic (toggleFocusImageFavorite) already keeps
   // favorited images at the front of the bucket array, so this split
