@@ -4496,54 +4496,14 @@ export default function App() {
     storage.set('focusImages' as never, (slice.focusImages ?? {}) as never);
     storage.set('focusReferences' as never, (slice.focusReferences ?? {}) as never);
   }, []);
-  // ONE-TIME FULL PURGE of all focus-mode storage. Briefs/notes, sub-tasks, images, and
-  // references are wiped — every key in every record. Triggered the first time any
-  // browser sees the marker `focus-purge-v2`; localStorage stamps the same key after
-  // the purge so this never runs twice on the same browser. Subsequent sessions just
-  // see clean storage.
-  //
-  // For images we ALSO fire-and-forget Supabase blob deletions so the underlying WebP
-  // blobs go too — full clean slate, server-side included. Failures are swallowed:
-  // Liveblocks metadata is the source of truth, and orphan blobs are harmless if any
-  // single delete fails.
-  const purgeRanRef = useRef(false);
-  useEffect(() => {
-    if (purgeRanRef.current) return;
-    if (typeof window === 'undefined') return;
-    // v2 marker — v1 was the previous attempt that silently failed because the
-    // hook's wipe-guard rejected our setter calls. Bumping the marker forces the
-    // purge to re-run on every browser even if v1 was already stamped.
-    const PURGE_MARKER = 'focus-purge-v2';
-    if (localStorage.getItem(PURGE_MARKER)) return;
-    // Wait until the room has actually hydrated. If tasks AND projects AND focus
-    // storage are ALL empty, we may be looking at a pre-load snapshot — defer.
-    const anyFocusData = Object.keys(focusBriefs).length + Object.keys(focusSubtasks).length
-      + Object.keys(focusImages).length + Object.keys(focusReferences).length;
-    if (anyFocusData === 0 && tasks.length === 0 && projects.length === 0) return;
-    purgeRanRef.current = true;
-    const briefCount = Object.keys(focusBriefs).length;
-    const subtaskCount = Object.keys(focusSubtasks).length;
-    const imageKeyCount = Object.keys(focusImages).length;
-    const imageRowCount = Object.values(focusImages).reduce((n, arr) => n + (arr?.length || 0), 0);
-    const referenceCount = Object.keys(focusReferences).length;
-    console.log('[focus-purge] Wiping ALL focus content:', {
-      briefs: briefCount,
-      subtasks: subtaskCount,
-      imageKeys: imageKeyCount,
-      imageRows: imageRowCount,
-      references: referenceCount,
-    });
-    // Fire blob deletes for every image we know about (best effort).
-    for (const arr of Object.values(focusImages)) {
-      if (!arr) continue;
-      for (const img of arr) {
-        deleteFocusImageBlob(img.id).catch(() => {});
-      }
-    }
-    purgeAllFocusStorage();
-    localStorage.setItem(PURGE_MARKER, new Date().toISOString());
-    console.log('[focus-purge] Done. Clean slate.');
-  }, [tasks, projects, focusBriefs, focusSubtasks, focusImages, focusReferences, purgeAllFocusStorage]);
+  // (Removed) The previous one-time `focus-purge-v2` startup wipe is gone for
+  // good. It was scoped to localStorage, so opening the app from a NEW origin
+  // (e.g. switching from local dev to GitHub Pages, or browser-to-desktop)
+  // would re-run the purge there and wipe the cloud (Liveblocks) state again
+  // — taking out any references the user had legitimately re-added since the
+  // first purge. The purgeAllFocusStorage mutation above is still defined in
+  // case we ever need a manual nuke from a Settings button, but it's not
+  // wired to a startup effect anymore.
   // --- Local backup hooks ---------------------------------------------------
   // Builds the current backup slice from live state. Used by the auto-snapshot
   // interval and the manual Download Backup button. Declared HERE (after the
