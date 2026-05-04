@@ -726,7 +726,15 @@ function SortableTaskItem({
     }, 0);
     return () => clearTimeout(handle);
   }, [editing]);
-  const sortable = useSortable({ id: `${idPrefix}${task.id}`, data: { type: 'task', task } });
+  const sortable = useSortable({
+    id: `${idPrefix}${task.id}`,
+    data: { type: 'task', task },
+    // Buttery displacement — longer duration + ease-out-expo. Same curve
+    // applied to the references-gallery folder rows + image tiles, so every
+    // sortable in the app glides on one motion vocabulary rather than each
+    // surface picking its own snap.
+    transition: { duration: 350, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' },
+  });
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = sortable;
   // Inside <DragOverlay>, the cloned row still calls useSortable (it lives inside DndContext) and
   // gets back transform/isDragging values describing the SOURCE row's reordering. Applying those to
@@ -1583,6 +1591,8 @@ function SortableSubtaskRow({
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: sortableId,
     data: { type: 'subtask', key: storageKey, subId: sub.id },
+    // Buttery displacement — match the rest of the app's sortables.
+    transition: { duration: 350, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' },
   });
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
@@ -1961,6 +1971,9 @@ function FocusDamTile({
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: `dam-image:${img.id}`,
     data: { type: 'damImage', imageId: img.id, ownerKey, folderId: img.folderId ?? null, img },
+    // Buttery displacement: 350ms ease-out-expo. Same curve as the folder
+    // rows so reorder + cross-list drag share one motion vocabulary.
+    transition: { duration: 350, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' },
   });
   // Hide the source while dragging — DragOverlay renders the floating preview.
   // Without `visibility: hidden` the source would also render at the cursor,
@@ -2087,7 +2100,11 @@ function FocusDamGroup({
       </SortableContext>
     );
   }
-  const rowH = tileView === 'sm' ? 120 : tileView === 'md' ? 240 : 360;
+  // Row-height tier. Zoom All "zooms out" — the smallest row height in the
+  // set, so the most images fit per row and the user gets a fly-over of the
+  // whole collection. S / M climb from there. L is its own branch above
+  // (one image per row, viewport-capped).
+  const rowH = tileView === 'zoom' ? 80 : tileView === 'sm' ? 120 : tileView === 'md' ? 240 : 360;
   // Split: favorited images go in the first row block, the rest in the
   // second. The favoriting logic (toggleFocusImageFavorite) already keeps
   // favorited images at the front of the bucket array, so this split
@@ -2151,24 +2168,35 @@ function FocusDamFolderRow({
   onDelete: () => void;
 }) {
   const sortableId = `dam-folder:${bucketKey}:${folder.id}`;
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: sortableId, data: { type: 'damFolder', bucketKey, folderId: folder.id } });
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: sortableId,
+    data: { type: 'damFolder', bucketKey, folderId: folder.id },
+    // Buttery transition — longer duration + ease-out-expo so the displaced
+    // peer folders glide rather than snap. Same easing on FocusDamTile so the
+    // gallery moves with one rhythm.
+    transition: { duration: 350, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' },
+  });
   const style: React.CSSProperties = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : 1 };
   return (
     <div
       ref={setNodeRef}
       style={style}
-      // pb-[14px] adds the requested ~10px of breathing room below the folder
-      // name (was py-1 = 4px each side; now 4px top, 14px bottom). The label
-      // wasn't cramped at the top — only at the bottom where it kissed the
-      // images / Drop Images Here sheet.
-      className="group flex flex-row items-center gap-2 pt-1 pb-[14px] select-none"
+      // The whole row is the drag handle now (not just the tiny FolderTree
+      // icon). PointerSensor's distance:8 keeps stationary clicks as clicks,
+      // so clicking the folder name still triggers rename and clicking the
+      // trash still deletes — drag only activates after 8px of movement.
+      // pt-1 + pb-[5px] gives a tight but breathable row; the visual gap
+      // between this row and the images below comes from the gap-1 in the
+      // folder-block flex-col plus a small extra cushion (see usage site).
+      {...attributes}
+      {...listeners}
+      className="group flex flex-row items-center gap-2 pt-1 pb-[5px] select-none"
     >
-      {/* Drag handle — visible on hover so the row reads quiet at rest. */}
+      {/* Drag-affordance icon — hover-revealed so the row reads quiet at
+          rest. No drag listeners on it; the parent row is the handle. */}
       <div
-        {...attributes}
-        {...listeners}
-        className="opacity-0 group-hover:opacity-100 text-[#a8a8a8] cursor-grab active:cursor-grabbing transition-opacity"
-        aria-label="Drag folder to reorder"
+        className="opacity-0 group-hover:opacity-100 text-[#a8a8a8] transition-opacity"
+        aria-hidden
       >
         <FolderTree size={12} />
       </div>
@@ -2956,7 +2984,11 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
   const project = task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
   const resolvedClientId = task.clientId ?? project?.clientId;
   const client = resolvedClientId ? clients.find((c) => c.id === resolvedClientId) : undefined;
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: task.id, data: { type: 'task', task, calendarCellId: cellId } });
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: task.id,
+    data: { type: 'task', task, calendarCellId: cellId },
+    transition: { duration: 350, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' },
+  });
   const style = { transform: CSS.Transform.toString(transform), transition: isAnyDragging ? `transform ${MOTION.base}ms ${MOTION.easeOut}` : 'none' };
   const isScheduled = task.type === 'scheduled';
   const isNext = task.section === 'next' || task.section === 'tomorrow';
@@ -3766,7 +3798,11 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
 }
 
 function SortableProjectRow({ project, listId, onRename, onDelete, onAddTask, autoFocus, isAnyDragging }: { project: Project; listId: ListId; onRename: (id: string, name: string) => void; onDelete: (id: string) => void; onAddTask: (projectId: string, listId: ListId) => void; autoFocus?: boolean; isAnyDragging?: boolean }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: `projrow-${listId}-${project.id}`, data: { type: 'project', project, listId } });
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: `projrow-${listId}-${project.id}`,
+    data: { type: 'project', project, listId },
+    transition: { duration: 350, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' },
+  });
   const style = { transform: CSS.Transform.toString(transform), transition: isAnyDragging ? 'transform 360ms cubic-bezier(0.22, 1, 0.36, 1)' : 'none', opacity: isDragging ? 0 : 1 };
   const bodyFont = "font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap";
   return (
@@ -3824,7 +3860,11 @@ function LIndent() {
 }
 
 function ProjectTaskRow({ task, listId, onToggle, onRename, onDelete, onEdit, onQuickEdit, onAddSibling, isAnyDragging, autoFocus, collapsed, nonDraggable = false, projects = [], clients = [], showContext = false, displacementOffset = 0, insertionGap = 0, taskOrder = 'ptc', density = 0 }: { task: Task; listId: ListId; onToggle: () => void; onRename: (t: string) => void; onDelete?: () => void; onEdit?: () => void; onQuickEdit?: () => void; onAddSibling?: () => void; isAnyDragging?: boolean; autoFocus?: boolean; collapsed?: boolean; nonDraggable?: boolean; projects?: Project[]; clients?: Client[]; showContext?: boolean; displacementOffset?: number; insertionGap?: number; taskOrder?: TaskOrder; density?: number }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: `projtask-${listId}-${task.id}`, data: { type: 'projTask', task, listId } });
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: `projtask-${listId}-${task.id}`,
+    data: { type: 'projTask', task, listId },
+    transition: { duration: 350, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' },
+  });
   const style = { transform: CSS.Transform.toString(transform), transition: isAnyDragging ? `transform ${MOTION.base}ms ${MOTION.easeOut}` : 'none' };
   const bodyFont = "font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap";
   const isScheduled = task.type === 'scheduled';
@@ -7650,20 +7690,28 @@ export default function App() {
                                       })}
                                     </SortableContext>
                                     {/* Root images render AFTER the folders — loose
-                                        items at the bottom of the section. Same drop
-                                        target wrapping so a multi-select can be
-                                        dropped into the bucket's root. */}
+                                        items at the bottom of the section. When folders
+                                        ARE present, we add a chunk of top-margin equal
+                                        to a folder row's vertical footprint so the
+                                        boundary between "in a folder" and "not in a
+                                        folder" reads with the same beat as the boundary
+                                        between two folders. Without it, root images
+                                        kiss the last folder's images and lose the
+                                        structural break. Same drop-target wrapping so
+                                        a multi-select can land at the bucket root. */}
                                     <FocusDamFolderDropTarget bucketKey={bucket.key} folderId={null}>
                                       {rootImages.length > 0 ? (
-                                        <FocusDamGroup
-                                          images={rootImages}
-                                          tileView={focusDamTileHeight}
-                                          ownerKey={bucket.key}
-                                          selectedImageIds={selectedImageIds}
-                                          onImageClick={handleImageClick}
-                                          onDelete={deleteFocusImage}
-                                          onToggleFavorite={toggleFocusImageFavorite}
-                                        />
+                                        <div style={bucket.folders.length > 0 ? { marginTop: 24 } : undefined}>
+                                          <FocusDamGroup
+                                            images={rootImages}
+                                            tileView={focusDamTileHeight}
+                                            ownerKey={bucket.key}
+                                            selectedImageIds={selectedImageIds}
+                                            onImageClick={handleImageClick}
+                                            onDelete={deleteFocusImage}
+                                            onToggleFavorite={toggleFocusImageFavorite}
+                                          />
+                                        </div>
                                       ) : (
                                         <div className="h-1" />
                                       )}
