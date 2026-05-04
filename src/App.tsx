@@ -5323,6 +5323,16 @@ export default function App() {
     ro.observe(el);
     return () => ro.disconnect();
   }, [galleryContainerEl]);
+  // 1-up navigation refs. The IIFE that builds the sectioned data writes the
+  // visual-order flat list of images plus the per-container groups (folders +
+  // bucket roots) here so the keydown / wheel handlers can cycle through them
+  // without recomputing the bucket structure. Visual order = same order the
+  // user sees in the gallery (folders first, then root, by bucket).
+  const damVisualFlatRef = useRef<FocusDamImage[]>([]);
+  const damContainersRef = useRef<{ key: string; images: FocusDamImage[] }[]>([]);
+  // Wheel throttle for 1-up cycling — without it a smooth-trackpad swipe
+  // burns through every image in the gallery on a single gesture.
+  const lastDamWheelRef = useRef(0);
   // The currently-selected task. Set on single-click of a task row, or when the user opens
   // the edit / quick-edit panel. The Focus mode's Information column dynamically shows the
   // project tied to this task, and rows render a 25%-brighter highlight while selected.
@@ -5336,6 +5346,45 @@ export default function App() {
     const onKey = (e: KeyboardEvent) => {
       // Escape exits 1-up view if active.
       if (focusOneUpImageId && e.key === 'Escape') { e.preventDefault(); setFocusOneUpImageId(null); return; }
+      // 1-up navigation: arrow keys cycle. Left / Right walk the visual flat
+      // list (every image, in gallery order). Up / Down jump to the next /
+      // previous container (folder or bucket-root) and land on its first image.
+      // Empty containers are skipped so the user always lands on an actual
+      // image. Wrap-around is preserved at both ends.
+      if (focusOneUpImageId && (e.key === 'ArrowLeft' || e.key === 'ArrowRight' || e.key === 'ArrowUp' || e.key === 'ArrowDown')) {
+        const flat = damVisualFlatRef.current;
+        if (flat.length === 0) return;
+        if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+          const idx = flat.findIndex((img) => img.id === focusOneUpImageId);
+          if (idx < 0) return;
+          e.preventDefault();
+          const dir = e.key === 'ArrowRight' ? 1 : -1;
+          const next = (idx + dir + flat.length) % flat.length;
+          setFocusOneUpImageId(flat[next].id);
+          return;
+        }
+        // Up / Down — folder hop. Build "current container key" from the
+        // current image, then walk to the next non-empty container.
+        const containers = damContainersRef.current;
+        if (containers.length === 0) return;
+        const cur = flat.find((img) => img.id === focusOneUpImageId);
+        if (!cur) return;
+        const containerKey = `${cur.ownerKey}::${cur.folderId ?? 'root'}`;
+        let containerIdx = containers.findIndex((c) => c.key === containerKey);
+        if (containerIdx < 0) return;
+        e.preventDefault();
+        const dir = e.key === 'ArrowDown' ? 1 : -1;
+        // Walk up to one full revolution looking for a non-empty container.
+        for (let attempts = 0; attempts < containers.length; attempts++) {
+          containerIdx = (containerIdx + dir + containers.length) % containers.length;
+          const next = containers[containerIdx];
+          if (next.images.length > 0) {
+            setFocusOneUpImageId(next.images[0].id);
+            return;
+          }
+        }
+        return;
+      }
       const t = e.target as HTMLElement | null;
       const inEditable = !!(t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable));
       const isMod = e.ctrlKey || e.metaKey;
@@ -7552,7 +7601,26 @@ export default function App() {
                     const damBuckets: FocusDamBucket[] = favoritesFilterActive
                       ? damBucketsAll.map((b) => ({ ...b, images: b.images.filter((i) => i.favorited) }))
                       : damBucketsAll;
-                    const flatImages: FocusDamImage[] = damBuckets.flatMap((b) => b.images);
+                    // Build the visual-order containers + flat list. Visual order
+                    // matches the gallery: folders first (in bucket-folder order),
+                    // then bucket-root images. flatImages is the concatenation —
+                    // used for left/right arrow + scroll-wheel cycling. Containers
+                    // are used for up/down arrow folder/section jumping. We mirror
+                    // both into refs at the App level so the keyboard handler can
+                    // navigate without recomputing on every key.
+                    const damContainers: { key: string; images: FocusDamImage[] }[] = [];
+                    for (const bucket of damBuckets) {
+                      const folderIdSet = new Set(bucket.folders.map((f) => f.id));
+                      for (const folder of bucket.folders) {
+                        const folderImgs = bucket.images.filter((i) => i.folderId === folder.id);
+                        damContainers.push({ key: `${bucket.key}::${folder.id}`, images: folderImgs });
+                      }
+                      const rootImgs = bucket.images.filter((i) => !i.folderId || !folderIdSet.has(i.folderId));
+                      damContainers.push({ key: `${bucket.key}::root`, images: rootImgs });
+                    }
+                    const flatImages: FocusDamImage[] = damContainers.flatMap((c) => c.images);
+                    damVisualFlatRef.current = flatImages;
+                    damContainersRef.current = damContainers;
                     // "Completely empty" uses the UNFILTERED set — if the user has images
                     // but the favorites filter happens to hide them all, we still render
                     // the gallery (with empty rows) instead of falling back to the
@@ -7569,7 +7637,14 @@ export default function App() {
                     let zoomRowH: number | undefined;
                     if (focusDamTileHeight === 'zoom') {
                       const W = Math.max(1, galleryContainerDims.width - 62); // px-[31px] both sides
-                      const H = Math.max(1, galleryContainerDims.height - 8 - 37); // pb-[8px] + SPACING.cr top
+                      // Safety buffer (-60) on top of the deterministic chrome
+                      // subtractions — covers small rounding inside flex-wrap,
+                      // line-height differences across browsers, and the gaps
+                      // between the section's flex-col children that the per-
+                      // section accounting doesn't fully model. Without it the
+                      // bottom row gets clipped because the search converges to
+                      // a row height ~5–10px taller than what genuinely fits.
+                      const H = Math.max(1, galleryContainerDims.height - 8 - 37 - 60);
                       const rowsHeightAt = (imgs: FocusDamImage[], rowH: number): number => {
                         if (imgs.length === 0) return 0;
                         let rows = 1;
@@ -7719,7 +7794,29 @@ export default function App() {
                             const img = flatImages.find((i) => i.id === focusOneUpImageId);
                             if (!img) return null;
                             return (
-                              <div className="w-full">
+                              <div
+                                className="w-full"
+                                // Scroll-wheel cycling. Each notch moves to
+                                // the next / previous image in the visual
+                                // flat list. Throttled (~140ms) so a single
+                                // smooth-trackpad swipe doesn't blow past
+                                // 20 images at once. preventDefault stops
+                                // page scroll while in 1-up.
+                                onWheel={(e) => {
+                                  if (Math.abs(e.deltaY) < 4) return;
+                                  const now = Date.now();
+                                  if (now - lastDamWheelRef.current < 140) { e.preventDefault(); return; }
+                                  lastDamWheelRef.current = now;
+                                  e.preventDefault();
+                                  const flat = damVisualFlatRef.current;
+                                  if (flat.length === 0) return;
+                                  const idx = flat.findIndex((i) => i.id === focusOneUpImageId);
+                                  if (idx < 0) return;
+                                  const dir = e.deltaY > 0 ? 1 : -1;
+                                  const next = (idx + dir + flat.length) % flat.length;
+                                  setFocusOneUpImageId(flat[next].id);
+                                }}
+                              >
                                 <div
                                   className="relative group inline-block cursor-zoom-out"
                                   onClick={() => setFocusOneUpImageId(null)}
