@@ -4457,9 +4457,16 @@ export default function App() {
   // Tomorrow section toggle. When ON: a "Tomorrow" section sits between Today and Next.
   // When OFF: tasks tagged section='tomorrow' visually fall back into Next (data is preserved
   // — re-enabling the toggle restores them to Tomorrow without losing context).
+  // DEFAULT: ON for users who haven't explicitly toggled it. The previous default (OFF
+  // when the localStorage key was missing) hid Tomorrow from anyone who'd never visited
+  // Settings, which is the wrong "don't surprise them" — surprising them with a missing
+  // section beats surprising them with an unexpected one. Users who explicitly turned it
+  // off retain that preference (we only default-on when the key is unset).
   const [tomorrowEnabled, setTomorrowEnabledState] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return false;
-    return window.localStorage.getItem('todo-app-tomorrow-enabled') === '1';
+    if (typeof window === 'undefined') return true;
+    const v = window.localStorage.getItem('todo-app-tomorrow-enabled');
+    if (v === null) return true;
+    return v === '1';
   });
   const setTomorrowEnabled = useCallback((v: boolean) => {
     setTomorrowEnabledState(v);
