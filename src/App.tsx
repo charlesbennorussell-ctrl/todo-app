@@ -6541,6 +6541,21 @@ export default function App() {
                         : 'Information'}
                     </p>
                   </div>
+                  {/* When nothing's selected (no project / no task), the entire
+                      scroll body is replaced by a single full-fill rectangle:
+                      bg = the row hover-tint (rgba(255,255,255,0.03)), so it
+                      reads as a soft "drop a task here" surface; centered text
+                      "Select a Task" in the page background color (#282828) so
+                      it's a quiet emboss rather than a foreground label. The
+                      rectangle takes the full remaining flex space below the
+                      column title — no gap, no extra padding chrome — so the
+                      empty state feels like the column itself is paused. */}
+                  {!activeProjectId && (
+                    <div className="flex-1 mx-[31px] mb-[8px] bg-white/[0.03] rounded-md flex items-center justify-center">
+                      <span className="text-[#282828] text-[18px] font-bold">Select a Task</span>
+                    </div>
+                  )}
+                  {activeProjectId && (
                   <CustomScroll>
                   {/* Brief / Notes section. Three cases:
                         - Selection has a project → "Project Brief" (shared across the project)
@@ -6670,10 +6685,8 @@ export default function App() {
                       </div>
                     </>
                   )}
-                  {!activeProjectId && (
-                    <div className="px-[31px] text-[#656464] text-[14px]">Select a task to see its information.</div>
-                  )}
                   </CustomScroll>
+                  )}
                 </div>
                 {/* Column 3 — References. Twice the width of the Dashboard / Information
                     columns (flex-[2]) since reference cards are a richer visual surface and
