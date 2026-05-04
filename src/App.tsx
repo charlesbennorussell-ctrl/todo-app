@@ -1703,16 +1703,12 @@ function FocusDamViewer({
     ro.observe(el);
     return () => ro.disconnect();
   }, [tileView, oneUpImageId]);
+  // Empty-state rendering moved to the parent (the column 3 gallery slot)
+  // so the same sheet can host the No Images Yet label + the drop zones
+  // beneath it. When this component is rendered with zero images, just emit
+  // an empty fragment — the parent decides what to show in its place.
   if (images.length === 0) {
-    // Same full-fill rectangle empty state as Information column's "Select a
-    // Task" — soft hover-tint sheet, dummy text in the page background color
-    // so the panel reads as a paused / waiting-for-content surface rather
-    // than a hard chrome panel.
-    return (
-      <div className="h-full w-full bg-white/[0.03] flex items-center justify-center">
-        <span className="text-[#656464] text-[18px] font-bold">No Images Yet</span>
-      </div>
-    );
+    return null;
   }
   // 1-up inline view — when an image is single-clicked, it expands to fill the column. Click
   // again (or hit Esc, handled by App's keydown effect) to collapse back to the active grid /
@@ -6714,38 +6710,11 @@ export default function App() {
                   <div className="shrink-0 group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]" style={{ marginBottom: SPACING.dcr }}>
                     <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">References</p>
                   </div>
-                  {/* Reference drop zones — moved here directly under the References
-                      header so the action (drop a file) and the result (the gallery
-                      below) share the same visual zone. Stacked vertically inside a
-                      sheet (soft hover-tint background); each zone gets its own 2px
-                      dashed grey border. WIP routes to the project key for now —
-                      same destination as the project zone — so it's a visual third
-                      bucket without a separate data model yet. */}
-                  {(projectKey || taskKey) && (
-                    <div className="shrink-0 mx-[31px] mb-[37px] bg-white/[0.03] p-3 flex flex-col gap-2">
-                      {projectKey && (
-                        <FocusDropZone
-                          label={`(${(taskProject?.name || 'Project').trim() || 'Project'}) Related References`}
-                          sublabel="Drop images here"
-                          onDropFiles={(files) => addFocusImages(projectKey, files)}
-                        />
-                      )}
-                      {taskKey && (
-                        <FocusDropZone
-                          label={`(${(selectedTask?.title || 'Task').trim() || 'Task'}) Related References`}
-                          sublabel="Drop images here"
-                          onDropFiles={(files) => addFocusImages(taskKey, files)}
-                        />
-                      )}
-                      {projectKey && (
-                        <FocusDropZone
-                          label="WIP"
-                          sublabel="Drop images here"
-                          onDropFiles={(files) => addFocusImages(projectKey, files)}
-                        />
-                      )}
-                    </div>
-                  )}
+                  {/* (Drop zones live INSIDE the empty state below — see the
+                      gallery slot. When there are images, the gallery itself is
+                      the surface; when there are no images, the empty state
+                      shows the No Images Yet label with the three drop zones
+                      laid out side by side beneath it.) */}
                   {/* Existing URL references (link list) */}
                   {refs.length > 0 && (
                     <div className="shrink-0 px-[31px] flex flex-col gap-2 pb-[37px]">
@@ -6788,9 +6757,38 @@ export default function App() {
                       FocusDamViewer's `h-full` (zoom mode) both correctly take the
                       remaining space. Zoom All: render gallery directly (no scrollbar,
                       gallery's ResizeObserver fits to this exact box). Small/Medium/Large:
-                      wrap in CustomScroll so rows can overflow + scroll. */}
+                      wrap in CustomScroll so rows can overflow + scroll.
+                      EMPTY STATE: when there are no images yet AND a project / task is
+                      selected, render a single sheet with the "No Images Yet" label
+                      stacked above the three drop zones (Project / Task / WIP) side by
+                      side. Combines the prompt + the action affordance into one zone
+                      instead of carrying a separate Reference Drops section above. */}
                   <div className="flex-1 min-h-0 px-[31px] pb-[8px] flex flex-col">
-                    {focusDamTileHeight === 'zoom' ? (
+                    {allImages.length === 0 && (projectKey || taskKey) ? (
+                      <div className="flex-1 bg-white/[0.03] flex flex-col items-center justify-center gap-6 p-6">
+                        <span className="text-[#656464] text-[18px] font-bold">No Images Yet</span>
+                        <div className="flex flex-row gap-3 w-full max-w-[700px]">
+                          {projectKey && (
+                            <FocusDropZone
+                              label="Project"
+                              onDropFiles={(files) => addFocusImages(projectKey, files)}
+                            />
+                          )}
+                          {taskKey && (
+                            <FocusDropZone
+                              label="Task"
+                              onDropFiles={(files) => addFocusImages(taskKey, files)}
+                            />
+                          )}
+                          {projectKey && (
+                            <FocusDropZone
+                              label="WIP"
+                              onDropFiles={(files) => addFocusImages(projectKey, files)}
+                            />
+                          )}
+                        </div>
+                      </div>
+                    ) : focusDamTileHeight === 'zoom' ? (
                       <FocusDamViewer
                         images={allImages.map((img) => {
                           const ownerKey = (projectKey && (focusImages[projectKey] || []).some((i) => i.id === img.id))
