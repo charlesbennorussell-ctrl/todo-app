@@ -1960,8 +1960,10 @@ function FocusDropZone({ label, sublabel, onDropFiles }: { label: string; sublab
         if (e.dataTransfer.files?.length) onDropFiles!(e.dataTransfer.files);
       } : undefined}
       // 2px dashed grey border, no background fill (the parent sheet's tint
-      // shows through). Hover / drag-over brightens the border.
-      className={`flex-1 flex flex-col items-center justify-center min-h-[80px] border-2 border-dashed transition-colors ${interactive ? 'cursor-pointer' : 'cursor-default'} ${over ? 'border-white' : 'border-[#656464] hover:border-white'}`}
+      // shows through). Hover lifts to the same dim-white (#a8a8a8) used by
+      // Next-section task text — softer than full white. Drag-over commits
+      // to full white as a "yes, drop here" signal.
+      className={`flex-1 flex flex-col items-center justify-center min-h-[80px] border-2 border-dashed transition-colors ${interactive ? 'cursor-pointer' : 'cursor-default'} ${over ? 'border-white' : 'border-[#656464] hover:border-[#a8a8a8]'}`}
     >
       {interactive && (
         <input
@@ -6683,7 +6685,11 @@ export default function App() {
                         <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[#656464] text-[14px] whitespace-nowrap">Integrations</p>
                       </div>
                       <div className="px-[31px] flex flex-col gap-2">
-                        <button type="button" onClick={() => console.log('connect dropbox', activeProjectId)} className="flex flex-row items-center justify-between bg-[#1f1f1f] hover:bg-[#262626] rounded-md px-3 py-2 text-[14px] text-white text-left transition-colors">
+                        <button
+                          type="button"
+                          onClick={() => console.log('connect dropbox', activeProjectId)}
+                          className="flex flex-row items-center justify-between bg-white/[0.03] hover:bg-white/[0.06] px-3 py-2 text-[14px] text-[#656464] hover:text-white text-left transition-colors"
+                        >
                           <span>Dropbox</span>
                           <span className="text-[#656464] text-[12px]">Connect</span>
                         </button>
@@ -6732,21 +6738,25 @@ export default function App() {
                       ))}
                     </div>
                   )}
-                  {/* View-mode toggles — Zoom All auto-fits every image into the visible
-                      area; Small / Medium / Large use fixed row heights (120 / 180 / 260px). */}
+                  {/* View-mode toggles. "Zoom All" stays a wordmark since it's a
+                      mode rather than a size; the size knobs collapse to one-letter
+                      glyphs (S / M / L). Active = white text, no background pill —
+                      contrast alone signals selection. Inactive = grey, brightens to
+                      white on hover. Wider gap between the buttons since the labels
+                      are now narrower. */}
                   <div className="shrink-0 px-[31px]">
-                    <div className="flex flex-row gap-2 mb-3 text-[12px] flex-wrap">
+                    <div className="flex flex-row gap-4 mb-3 text-[12px] flex-wrap items-center">
                       {([
                         ['zoom', 'Zoom All'],
-                        ['sm', 'Small'],
-                        ['md', 'Medium'],
-                        ['lg', 'Large'],
+                        ['sm', 'S'],
+                        ['md', 'M'],
+                        ['lg', 'L'],
                       ] as const).map(([key, label]) => (
                         <button
                           key={key}
                           type="button"
                           onClick={() => setFocusDamTileHeight(key)}
-                          className={`px-2 py-1 rounded-md transition-colors ${focusDamTileHeight === key ? 'bg-[#3a3a3a] text-white' : 'text-[#656464] hover:text-white'}`}
+                          className={`transition-colors ${focusDamTileHeight === key ? 'text-white' : 'text-[#656464] hover:text-white'}`}
                         >
                           {label}
                         </button>
@@ -6765,9 +6775,14 @@ export default function App() {
                       instead of carrying a separate Reference Drops section above. */}
                   <div className="flex-1 min-h-0 px-[31px] pb-[8px] flex flex-col">
                     {allImages.length === 0 && (projectKey || taskKey) ? (
-                      <div className="flex-1 bg-white/[0.03] flex flex-col items-center justify-center gap-6 p-6">
+                      <div className="flex-1 bg-white/[0.03] flex flex-col items-center justify-center gap-3 p-6">
                         <span className="text-[#656464] text-[18px] font-bold">No Images Yet</span>
-                        <div className="flex flex-row gap-3 w-full max-w-[700px]">
+                        <p className="text-[#656464] text-[13px] text-center max-w-[480px]">
+                          Drop images into one of the buckets below — Project for shared
+                          references that belong to the whole project, Task for the one
+                          you've got selected, or WIP for in-progress work.
+                        </p>
+                        <div className="flex flex-row gap-3 w-full max-w-[700px] mt-3">
                           {projectKey && (
                             <FocusDropZone
                               label="Project"
