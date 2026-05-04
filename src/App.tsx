@@ -14,7 +14,6 @@ import {
   MeasuringStrategy,
   pointerWithin,
   useDroppable,
-  useDraggable,
 } from '@dnd-kit/core';
 import { restrictToVerticalAxis, restrictToHorizontalAxis, restrictToParentElement } from '@dnd-kit/modifiers';
 import {
@@ -22,6 +21,7 @@ import {
   SortableContext,
   sortableKeyboardCoordinates,
   verticalListSortingStrategy,
+  rectSortingStrategy,
   useSortable,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -1934,13 +1934,11 @@ type FocusDamImage = { id: string; url?: string; dataUrl?: string; filename: str
 type FocusDamFolder = { id: string; name: string };
 type FocusDamBucket = { key: string; label: string; images: FocusDamImage[]; folders: FocusDamFolder[] };
 
-// FocusDamTile: one image cell, draggable. The whole tile is the drag handle
-// (PointerSensor's distance:8 activation keeps stationary clicks as clicks),
-// so a plain click still routes to onImageClick for 1-up / select toggling.
-// During a drag, the original tile fades to 0.4 — dnd-kit's default visual
-// for the source. The data payload carries the image's source bucket and
-// current folderId so the drop handler can decide between intra-bucket move
-// (just flip folderId) and cross-bucket move (splice + append).
+// FocusDamTile: one image cell. Sortable so reorders inside the same context
+// animate (the other tiles slide to make room for the dragged one), AND the
+// drag is picked up by a DragOverlay rendered up at the DndContext level so
+// the drag preview locks 1:1 to the cursor instead of just fading the source.
+// PointerSensor's distance:8 activation keeps stationary clicks as clicks.
 function FocusDamTile({
   img,
   tileView,
@@ -1960,11 +1958,17 @@ function FocusDamTile({
   onDelete: (ownerKey: string, id: string) => void;
   onToggleFavorite: (ownerKey: string, id: string) => void;
 }) {
-  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: `dam-image:${img.id}`,
-    data: { type: 'damImage', imageId: img.id, ownerKey, folderId: img.folderId ?? null },
+    data: { type: 'damImage', imageId: img.id, ownerKey, folderId: img.folderId ?? null, img },
   });
+  // Hide the source while dragging — DragOverlay renders the floating preview.
+  // Without `visibility: hidden` the source would also render at the cursor,
+  // doubling the image. opacity:0 alone leaves the layout but blocks pointer
+  // events on the now-empty cell, which makes drop-target detection flaky.
+  const dragVisibility: React.CSSProperties = isDragging ? { opacity: 0 } : {};
   if (tileView === 'lg') {
+    const lgStyle: React.CSSProperties = { transform: CSS.Transform.toString(transform), transition, ...dragVisibility };
     return (
       <div
         ref={setNodeRef}
@@ -1972,7 +1976,7 @@ function FocusDamTile({
         onClick={(e) => onImageClick(img.id, e)}
         {...attributes}
         {...listeners}
-        style={{ opacity: isDragging ? 0.4 : 1 }}
+        style={lgStyle}
       >
         <div className={`relative inline-block cursor-zoom-in ${isSelected ? 'ring-2 ring-[#7363FF] ring-offset-0' : ''}`}>
           <CachedImage src={resolveImageSrc(img)} alt={img.filename} className="block max-w-full max-h-[70vh] w-auto h-auto" />
@@ -1997,6 +2001,15 @@ function FocusDamTile({
     );
   }
   const ar = (img.width || 1) / (img.height || 1);
+  const tileStyle: React.CSSProperties = {
+    height: rowH,
+    flexGrow: ar,
+    flexBasis: ar * rowH,
+    minWidth: Math.min(60, ar * rowH),
+    transform: CSS.Transform.toString(transform),
+    transition,
+    ...dragVisibility,
+  };
   return (
     <div
       ref={setNodeRef}
@@ -2004,7 +2017,7 @@ function FocusDamTile({
       {...attributes}
       {...listeners}
       className={`relative group bg-[#1f1f1f] overflow-hidden cursor-zoom-in ${isSelected ? 'outline outline-2 outline-[#7363FF]' : ''}`}
-      style={{ height: rowH, flexGrow: ar, flexBasis: ar * rowH, minWidth: Math.min(60, ar * rowH), opacity: isDragging ? 0.4 : 1 }}
+      style={tileStyle}
     >
       <CachedImage src={resolveImageSrc(img)} alt={img.filename} className="block w-full h-full object-cover" />
       <button
@@ -2028,10 +2041,12 @@ function FocusDamTile({
 }
 
 // FocusDamGroup: renders ONE flat block of images at the requested tile size
-// (sm / md / lg / zoom). No empty handling, no one-up handling, no folder
-// awareness — just the justified-gallery / column-stack flex layout. Each tile
-// is a FocusDamTile (draggable). The parent (FocusDamGallery) decides which
-// images belong to which block and composes blocks together.
+// (sm / md / lg / zoom). All tiles share a single SortableContext so dnd-kit
+// can animate the displacement when one tile is dragged among them. Inside the
+// context we split into two flex rows — favorited images first, then the rest
+// — so favorited images get a guaranteed row break between themselves and the
+// unfavorited group. The split is visual only; ordering / dragging remains
+// across the whole array.
 function FocusDamGroup({
   images,
   tileView,
@@ -2050,29 +2065,40 @@ function FocusDamGroup({
   onToggleFavorite: (ownerKey: string, id: string) => void;
 }) {
   if (images.length === 0) return null;
+  const sortableIds = images.map((img) => `dam-image:${img.id}`);
   if (tileView === 'lg') {
     return (
-      <div className="flex flex-col gap-1 pr-1">
-        {images.map((img) => (
-          <FocusDamTile
-            key={img.id}
-            img={img}
-            tileView="lg"
-            ownerKey={ownerKey}
-            isSelected={selectedImageIds.has(img.id)}
-            rowH={0}
-            onImageClick={onImageClick}
-            onDelete={onDelete}
-            onToggleFavorite={onToggleFavorite}
-          />
-        ))}
-      </div>
+      <SortableContext items={sortableIds} strategy={verticalListSortingStrategy}>
+        <div className="flex flex-col gap-1 pr-1">
+          {images.map((img) => (
+            <FocusDamTile
+              key={img.id}
+              img={img}
+              tileView="lg"
+              ownerKey={ownerKey}
+              isSelected={selectedImageIds.has(img.id)}
+              rowH={0}
+              onImageClick={onImageClick}
+              onDelete={onDelete}
+              onToggleFavorite={onToggleFavorite}
+            />
+          ))}
+        </div>
+      </SortableContext>
     );
   }
   const rowH = tileView === 'sm' ? 120 : tileView === 'md' ? 240 : 360;
-  return (
+  // Split: favorited images go in the first row block, the rest in the
+  // second. The favoriting logic (toggleFocusImageFavorite) already keeps
+  // favorited images at the front of the bucket array, so this split
+  // preserves array order. The two rows are stacked in a flex-col with a
+  // small gap matching the inter-image gap-1, so the favorites end their
+  // visual row even when there's spare width — what the user asked for.
+  const favorited = images.filter((img) => img.favorited);
+  const rest = images.filter((img) => !img.favorited);
+  const renderRow = (items: FocusDamImage[], rowKey: string) => (
     <div className="flex flex-row flex-wrap gap-1 content-start">
-      {images.map((img) => (
+      {items.map((img) => (
         <FocusDamTile
           key={img.id}
           img={img}
@@ -2086,9 +2112,17 @@ function FocusDamGroup({
         />
       ))}
       {Array.from({ length: 4 }).map((_, i) => (
-        <span key={`phantom-${i}`} className="grow-[1000]" aria-hidden />
+        <span key={`phantom-${rowKey}-${i}`} className="grow-[1000]" aria-hidden />
       ))}
     </div>
+  );
+  return (
+    <SortableContext items={sortableIds} strategy={rectSortingStrategy}>
+      <div className="flex flex-col gap-1">
+        {favorited.length > 0 && renderRow(favorited, 'fav')}
+        {rest.length > 0 && renderRow(rest, 'rest')}
+      </div>
+    </SortableContext>
   );
 }
 
@@ -2123,13 +2157,17 @@ function FocusDamFolderRow({
     <div
       ref={setNodeRef}
       style={style}
-      className="group flex flex-row items-center gap-2 py-1 select-none"
+      // pb-[14px] adds the requested ~10px of breathing room below the folder
+      // name (was py-1 = 4px each side; now 4px top, 14px bottom). The label
+      // wasn't cramped at the top — only at the bottom where it kissed the
+      // images / Drop Images Here sheet.
+      className="group flex flex-row items-center gap-2 pt-1 pb-[14px] select-none"
     >
       {/* Drag handle — visible on hover so the row reads quiet at rest. */}
       <div
         {...attributes}
         {...listeners}
-        className="opacity-0 group-hover:opacity-100 text-[#5e5e5e] cursor-grab active:cursor-grabbing transition-opacity"
+        className="opacity-0 group-hover:opacity-100 text-[#a8a8a8] cursor-grab active:cursor-grabbing transition-opacity"
         aria-label="Drag folder to reorder"
       >
         <FolderTree size={12} />
@@ -2145,12 +2183,18 @@ function FocusDamFolderRow({
             if (e.key === 'Enter') { e.preventDefault(); onCommitRename((e.target as HTMLInputElement).value.trim()); }
             else if (e.key === 'Escape') { e.preventDefault(); onCancelRename(); }
           }}
-          className="bg-transparent text-white outline-none border-b border-[#7363FF] flex-1 min-w-0"
+          // Folder-name input matches the folder name's resting tone (grey),
+          // not white — the brand-purple underline is plenty of "I'm being
+          // edited" signal without needing the text colour to swap.
+          className="bg-transparent text-[#a8a8a8] outline-none border-b border-[#7363FF] flex-1 min-w-0"
           placeholder="Folder name…"
         />
       ) : (
         <span
-          className="text-white cursor-text flex-1 min-w-0 truncate"
+          // Folder names render in the same grey as the section header and
+          // the icons — the user wants the whole "this is structure, not
+          // content" row to read as a single muted band.
+          className="text-[#a8a8a8] cursor-text flex-1 min-w-0 truncate"
           onClick={onStartEdit}
         >
           {folder.name || <span className="text-[#656464]">Untitled folder</span>}
@@ -4441,9 +4485,16 @@ export default function App() {
   // but for prefixed contexts (dashboard sub-lists) activeId is e.g. "dash:work:taskId" while
   // activeTaskId stays "taskId" so tasks.find(t.id === activeTaskId) resolves the real task.
   const [activeTaskId, setActiveTaskIdState] = useState<string | null>(null);
-  const [activeType, setActiveType] = useState<'task' | 'project' | 'projTask' | null>(null);
+  const [activeType, setActiveType] = useState<'task' | 'project' | 'projTask' | 'damImage' | null>(null);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [activeProjTask, setActiveProjTask] = useState<Task | null>(null);
+  // The image being dragged in the references gallery — held so DragOverlay
+  // can render a 1:1 floating preview that locks to the cursor (the source
+  // tile is hidden via visibility:hidden during drag). activeDamMultiCount
+  // is set > 1 when the dragged tile is part of a multi-selection, so the
+  // overlay can stamp a "+N" badge to communicate that more is moving.
+  const [activeDamImage, setActiveDamImage] = useState<FocusDamImage | null>(null);
+  const [activeDamMultiCount, setActiveDamMultiCount] = useState(1);
   const [overId, setOverId] = useState<string | null>(null);
   // For calendar cross-list redirects: the redirected `over` is a cell id and loses the
   // task identity. We mirror the task id into state so the per-cell displacement compute
@@ -5421,6 +5472,22 @@ export default function App() {
       if (rect) setActiveRectWidth(rect.width);
       return;
     }
+    // DAM image drag: capture the image + the multi-select count so the
+    // DragOverlay can render the floating preview at the source tile's exact
+    // size, plus a "+N" badge if a multi-selection is being moved together.
+    if (type === 'damImage') {
+      setActiveId(e.active.id as string);
+      setActiveType('damImage');
+      const img = e.active.data.current?.img as FocusDamImage | undefined;
+      setActiveDamImage(img ?? null);
+      const draggedId = e.active.data.current?.imageId as string | undefined;
+      const sel = selectedImageIdsRef.current;
+      const isInSelection = !!draggedId && sel.has(draggedId);
+      setActiveDamMultiCount(isInSelection && sel.size > 1 ? sel.size : 1);
+      const rect = e.active.rect.current.initial;
+      if (rect) { setActiveRectWidth(rect.width); setActiveRectHeight(rect.height); }
+      return;
+    }
     setActiveId(e.active.id as string);
     setActiveTaskIdState((e.active.data.current?.task as Task | undefined)?.id ?? String(e.active.id));
     setActiveType('task');
@@ -5510,7 +5577,7 @@ export default function App() {
     const { active, over } = event;
     setOverId(null);
     setOverTaskIdHint(null);
-    const clearOverlay = () => { setActiveId(null); setActiveTaskIdState(null); setActiveType(null); setActiveProject(null); setActiveProjTask(null); setActiveCalendarCellId(null); };
+    const clearOverlay = () => { setActiveId(null); setActiveTaskIdState(null); setActiveType(null); setActiveProject(null); setActiveProjTask(null); setActiveCalendarCellId(null); setActiveDamImage(null); setActiveDamMultiCount(1); };
     const resetDragRefs = () => {
       setColumnOffset(0); pendingOffsetRef.current = 0;
       if (dwellTimerRef.current) { clearTimeout(dwellTimerRef.current); dwellTimerRef.current = null; }
@@ -5547,23 +5614,72 @@ export default function App() {
       clearOverlay();
       return;
     }
-    // DAM image drag-move. The dragged tile carries { type: 'damImage', imageId,
-    // ownerKey, folderId } and the drop target carries { type: 'damFolderDrop',
-    // bucketKey, folderId } (folderId === null for the bucket root). If the
-    // dragged image is part of the active multi-selection AND the selection has
-    // more than one member, the WHOLE selection moves; otherwise just the
-    // dragged image moves.
+    // DAM image drag. The dragged tile carries { type: 'damImage', imageId,
+    // ownerKey, folderId, img } and the drop target is either:
+    //   - 'damFolderDrop' (folder header / bucket root container — no peer
+    //     position is implied, the moving images are appended to that
+    //     folder / root), or
+    //   - 'damImage' (a peer tile — the moving images land just before the
+    //     over peer, so the user gets the "drop where you saw the gap"
+    //     positioning that matches the in-place displacement animation).
+    // If the dragged image is part of the active multi-selection AND the
+    // selection has more than one member, the WHOLE selection moves;
+    // otherwise just the dragged image.
     if (active.data.current?.type === 'damImage') {
       const overData = over?.data.current;
+      const draggedId = active.data.current.imageId as string;
+      const fromBucketActive = active.data.current.ownerKey as string;
+      // Resolve destination from over.data — both shapes give us bucket +
+      // folder, plus an optional `overImageId` for peer-on-peer drops.
+      let toBucket: string | null = null;
+      let toFolderId: string | null = null;
+      let overImageId: string | null = null;
       if (overData?.type === 'damFolderDrop') {
-        const draggedId = active.data.current.imageId as string;
-        const toBucket = overData.bucketKey as string;
-        const toFolderId = (overData.folderId ?? null) as string | null;
+        toBucket = overData.bucketKey as string;
+        toFolderId = (overData.folderId ?? null) as string | null;
+      } else if (overData?.type === 'damImage') {
+        toBucket = overData.ownerKey as string;
+        toFolderId = (overData.folderId ?? null) as string | null;
+        overImageId = overData.imageId as string;
+      }
+      if (toBucket) {
         const sel = selectedImageIdsRef.current;
         const idsToMove = sel.has(draggedId) && sel.size > 1 ? Array.from(sel) : [draggedId];
-        // Look up each id's current bucket so we can group cross-bucket moves
-        // by source. The selection set is bucket-agnostic (ids only), so we
-        // walk focusImages once to build an id→bucket map for the moving set.
+        // Detect "no-op self drop": user picked up a tile and dropped it on
+        // itself without moving. Skip — running the reorder/move pipeline
+        // would just churn storage for no reason.
+        if (idsToMove.length === 1 && overImageId === draggedId) {
+          resetDragRefs();
+          clearOverlay();
+          return;
+        }
+        // Reorder fast-path: same bucket + same folder + single item +
+        // dropped on a peer. Use arrayMove on the bucket's image array so
+        // dnd-kit's displacement animation matches the final layout.
+        const fromFolderActive = (active.data.current.folderId ?? null) as string | null;
+        if (
+          idsToMove.length === 1 &&
+          fromBucketActive === toBucket &&
+          fromFolderActive === toFolderId &&
+          overImageId &&
+          overImageId !== draggedId
+        ) {
+          setFocusImages((prev) => {
+            const arr = prev[toBucket!] || [];
+            const fromIdx = arr.findIndex((i) => i.id === draggedId);
+            const toIdx = arr.findIndex((i) => i.id === overImageId);
+            if (fromIdx < 0 || toIdx < 0) return prev;
+            return { ...prev, [toBucket!]: arrayMove(arr, fromIdx, toIdx) };
+          });
+          resetDragRefs();
+          clearOverlay();
+          return;
+        }
+        // General path (move + optional insertion). Walk focusImages once to
+        // group the moving ids by source bucket, then for each source emit
+        // ONE storage update that splices the moving images out of the
+        // source array and inserts them in the destination array at the
+        // chosen insertion index.
         const movingSet = new Set(idsToMove);
         const idToBucket = new Map<string, string>();
         const focusImagesNow = focusImagesRef.current;
@@ -5572,7 +5688,6 @@ export default function App() {
             if (movingSet.has(img.id)) idToBucket.set(img.id, bucketKey);
           }
         }
-        // Group ids by source bucket so we can issue one move call per source.
         const groups = new Map<string, string[]>();
         for (const id of idsToMove) {
           const src = idToBucket.get(id);
@@ -5580,15 +5695,39 @@ export default function App() {
           if (!groups.has(src)) groups.set(src, []);
           groups.get(src)!.push(id);
         }
-        for (const [src, ids] of groups) {
-          if (src === toBucket) {
-            moveFocusImagesToFolder(toBucket, ids, toFolderId);
-          } else {
-            moveFocusImagesToBucket(src, toBucket, ids, toFolderId);
+        // Apply storage updates in a single setFocusImages so Liveblocks
+        // batches them as one transaction (and so we don't read stale
+        // bucket arrays mid-loop after the first source mutates).
+        setFocusImages((prev) => {
+          let next: typeof prev = prev;
+          // Pull moving images out of each source bucket. Stamp each with
+          // the new folderId so they land in the right folder at the dest.
+          const movingImages: FocusDamImage[] = [];
+          for (const [src, ids] of groups) {
+            const idSet = new Set(ids);
+            const arr = next[src] || [];
+            const moved = arr
+              .filter((img) => idSet.has(img.id))
+              .map((img) => ({ ...img, folderId: toFolderId ?? undefined } as FocusDamImage));
+            movingImages.push(...moved);
+            const remaining = arr.filter((img) => !idSet.has(img.id));
+            next = { ...next, [src]: remaining };
           }
-        }
-        // Selection cleared after a successful move so the user starts fresh
-        // for the next operation. The 1-up state is left untouched.
+          // Insert into destination bucket. If overImageId is provided AND
+          // resolves in the (possibly already-mutated) destination array,
+          // insert at that index; else append.
+          const destArr = next[toBucket!] || [];
+          let insertIdx = destArr.length;
+          if (overImageId) {
+            const oi = destArr.findIndex((i) => i.id === overImageId);
+            if (oi >= 0) insertIdx = oi;
+          }
+          const destNext = [...destArr.slice(0, insertIdx), ...movingImages, ...destArr.slice(insertIdx)];
+          next = { ...next, [toBucket!]: destNext };
+          return next;
+        });
+        // Selection clears after a successful move/reorder so the next
+        // operation starts fresh. 1-up state is left untouched.
         setSelectedImageIds(new Set());
       }
       resetDragRefs();
@@ -5887,7 +6026,7 @@ export default function App() {
       handleCrossSectionMove(a, o);
     }
     setActiveId(null); setActiveTaskIdState(null); setActiveType(null); setActiveCalendarCellId(null); setColumnOffset(0); pendingOffsetRef.current = 0; if (dwellTimerRef.current) { clearTimeout(dwellTimerRef.current); dwellTimerRef.current = null; } if (collapseTimerRef.current) { clearTimeout(collapseTimerRef.current); collapseTimerRef.current = null; } setSourceCollapsed(false);
-  }, [tasks, reorderFocusSubtask, reorderFocusFolder, moveFocusImagesToFolder, moveFocusImagesToBucket]);
+  }, [tasks, reorderFocusSubtask, reorderFocusFolder, moveFocusImagesToFolder, moveFocusImagesToBucket, setFocusImages]);
 
   // Default to first person if unset
   useEffect(() => {
@@ -7798,6 +7937,36 @@ export default function App() {
               <LIndent />
               <TaskCheckbox completed={activeProjTask.completed} onToggle={() => {}} />
               <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap ${activeProjTask.completed ? 'text-[#474747]' : 'text-white'}`}>{activeProjTask.title}</span>
+            </motion.div>
+          ) : null}
+          {/* References-gallery image drag preview. Locks 1:1 to the cursor
+              (DragOverlay positions it at the active rect during drag), at
+              the source tile's exact width × height so the user sees the
+              tile they grabbed under their cursor instead of a re-flow of
+              the gallery. The "+N" badge stamps the upper-right corner
+              when a multi-selection is being moved together so it's
+              obvious the operation will land more than one image. */}
+          {activeType === 'damImage' && activeDamImage ? (
+            <motion.div
+              initial={{ scale: 1 }}
+              animate={{
+                scale: 1.02,
+                boxShadow: "0 1.875px 7.5px -0.625px rgba(0, 0, 0, 0.35), 0 1.25px 3.125px -0.3125px rgba(0, 0, 0, 0.25)",
+              }}
+              transition={{ scale: { type: "spring", stiffness: 600, damping: 30, mass: 0.4 } }}
+              className="relative bg-[#1f1f1f] overflow-hidden"
+              style={{ width: activeRectWidth, height: activeRectHeight, willChange: 'transform' }}
+            >
+              <CachedImage
+                src={resolveImageSrc(activeDamImage)}
+                alt={activeDamImage.filename}
+                className="block w-full h-full object-cover"
+              />
+              {activeDamMultiCount > 1 ? (
+                <div className="absolute top-1 right-1 bg-[#7363FF] text-white px-2 py-0.5 rounded-full pointer-events-none">
+                  +{activeDamMultiCount - 1}
+                </div>
+              ) : null}
             </motion.div>
           ) : null}
         </DragOverlay>
