@@ -2068,6 +2068,7 @@ function FocusDamGroup({
   onImageClick,
   onDelete,
   onToggleFavorite,
+  rowHOverride,
 }: {
   images: FocusDamImage[];
   tileView: 'zoom' | 'sm' | 'md' | 'lg';
@@ -2076,6 +2077,10 @@ function FocusDamGroup({
   onImageClick: (id: string, e: React.MouseEvent) => void;
   onDelete: (ownerKey: string, id: string) => void;
   onToggleFavorite: (ownerKey: string, id: string) => void;
+  // Optional override for the row height. Used by Zoom All so the parent can
+  // binary-search a "fit-everything-in-the-box" row height that's the same
+  // across every group in the gallery.
+  rowHOverride?: number;
 }) {
   if (images.length === 0) return null;
   const sortableIds = images.map((img) => `dam-image:${img.id}`);
@@ -2100,11 +2105,11 @@ function FocusDamGroup({
       </SortableContext>
     );
   }
-  // Row-height tier. Zoom All "zooms out" — half the size of S — so the most
-  // images fit per row and the user gets a fly-over of the whole collection
-  // at a glance. S / M climb from there. L is its own branch above (one
-  // image per row, viewport-capped).
-  const rowH = tileView === 'zoom' ? 40 : tileView === 'sm' ? 120 : tileView === 'md' ? 240 : 360;
+  // Row-height tier. Zoom All takes its row height from rowHOverride (the
+  // parent runs a binary search to fit everything in the viewport, with 40px
+  // as the floor); S / M / Zoom-fallback are static. L is its own branch
+  // above (one image per row, viewport-capped).
+  const rowH = rowHOverride ?? (tileView === 'zoom' ? 40 : tileView === 'sm' ? 120 : tileView === 'md' ? 240 : 360);
   // Split: favorited images go in the first row block, the rest in the
   // second. The favoriting logic (toggleFocusImageFavorite) already keeps
   // favorited images at the front of the bucket array, so this split
@@ -5288,6 +5293,11 @@ export default function App() {
   // currently in edit mode (renamed via the inline input next to the icon).
   // Setting null exits rename mode. New folders auto-enter rename mode on creation.
   const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
+  // Favorites-only filter for the references gallery — when active, every
+  // bucket renders only its favorited images (folders that go empty under
+  // the filter still render, so the user can still see / use them as drop
+  // targets while filtered).
+  const [favoritesFilterActive, setFavoritesFilterActive] = useState(false);
   // Refs for the multi-select drag handler — handleDragEnd is wrapped in
   // useCallback and would be recreated on every selection / image change if we
   // depended on the values directly. Using refs lets the callback read the
@@ -5297,6 +5307,22 @@ export default function App() {
   useEffect(() => { selectedImageIdsRef.current = selectedImageIds; }, [selectedImageIds]);
   const focusImagesRef = useRef(focusImages);
   useEffect(() => { focusImagesRef.current = focusImages; }, [focusImages]);
+  // Gallery-container dimension tracking — Zoom All needs to know how much
+  // room the sectioned content has so we can binary-search the largest row
+  // height that still fits everything in the viewport. Using a state-based
+  // ref (not useRef) so the effect re-runs when the container actually mounts
+  // / unmounts as the user switches modes — useRef wouldn't trigger re-render.
+  const [galleryContainerEl, setGalleryContainerEl] = useState<HTMLDivElement | null>(null);
+  const [galleryContainerDims, setGalleryContainerDims] = useState({ width: 800, height: 600 });
+  useLayoutEffect(() => {
+    if (!galleryContainerEl) return;
+    const el = galleryContainerEl;
+    const update = () => setGalleryContainerDims({ width: el.clientWidth, height: el.clientHeight });
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [galleryContainerEl]);
   // The currently-selected task. Set on single-click of a task row, or when the user opens
   // the edit / quick-edit panel. The Focus mode's Information column dynamically shows the
   // project tied to this task, and rows render a 25%-brighter highlight while selected.
@@ -7411,7 +7437,14 @@ export default function App() {
                       project bucket (or task bucket if no project) and putting it
                       straight into rename mode. */}
                   <div className="shrink-0 px-[31px]">
-                    <div className="flex flex-row gap-4 mb-3 text-[12px] flex-wrap items-center">
+                    {/* Toggles + actions row. Each button gets px-2 py-1 so the
+                        hotspot is roughly twice the glyph's footprint — easier
+                        to land a click on the single-letter S / M / L glyphs.
+                        gap-3 between toggles gives more visual buffer than the
+                        old gap-4 + skinny buttons did. The ml-2 step before the
+                        heart filter (and the ml-auto on Add Image) groups the
+                        toolbar into "view modes | favorites filter | actions". */}
+                    <div className="flex flex-row gap-3 mb-3 text-[12px] flex-wrap items-center">
                       {([
                         ['zoom', 'Zoom All'],
                         ['sm', 'S'],
@@ -7422,7 +7455,7 @@ export default function App() {
                           key={key}
                           type="button"
                           onClick={() => setFocusDamTileHeight(key)}
-                          className={`transition-colors ${focusDamTileHeight === key ? 'text-white' : 'text-[#656464] hover:text-white'}`}
+                          className={`px-2 py-1 transition-colors ${focusDamTileHeight === key ? 'text-white' : 'text-[#656464] hover:text-white'}`}
                         >
                           {label}
                         </button>
@@ -7430,8 +7463,24 @@ export default function App() {
                       {(projectKey || taskKey) && (
                         <button
                           type="button"
+                          onClick={() => setFavoritesFilterActive((v) => !v)}
+                          // Heart filter — toggles the gallery to favorites-only.
+                          // Active state matches the heart-on-tile color (#FF7171,
+                          // filled); inactive is the same muted grey as the view
+                          // toggles. Sits before Add Image so the toolbar reads
+                          // "view modes | filter | actions" left-to-right.
+                          className={`ml-auto px-2 py-1 transition-colors ${favoritesFilterActive ? 'text-[#FF7171]' : 'text-[#656464] hover:text-white'}`}
+                          aria-label={favoritesFilterActive ? 'Show all images' : 'Show favorites only'}
+                          aria-pressed={favoritesFilterActive}
+                        >
+                          <Heart size={14} fill={favoritesFilterActive ? 'currentColor' : 'none'} />
+                        </button>
+                      )}
+                      {(projectKey || taskKey) && (
+                        <button
+                          type="button"
                           onClick={() => refsAddInputRef.current?.click()}
-                          className="ml-auto flex flex-row items-center gap-1 text-[#656464] hover:text-white transition-colors"
+                          className="px-2 py-1 flex flex-row items-center gap-1 text-[#656464] hover:text-white transition-colors"
                         >
                           <span>Add Image</span>
                           <Plus size={14} />
@@ -7451,7 +7500,7 @@ export default function App() {
                             const id = addFocusFolder(target);
                             setEditingFolderId(id);
                           }}
-                          className="flex flex-row items-center gap-1 text-[#656464] hover:text-white transition-colors"
+                          className="px-2 py-1 flex flex-row items-center gap-1 text-[#656464] hover:text-white transition-colors"
                         >
                           <span>Add Folder</span>
                           <Plus size={14} />
@@ -7493,12 +7542,94 @@ export default function App() {
                     // Each bucket carries its key (for delete / move callbacks),
                     // its label (for the section header), the images stamped with
                     // their ownerKey, and the folders for that bucket.
-                    const damBuckets: FocusDamBucket[] = [];
-                    if (wipKey) damBuckets.push({ key: wipKey, label: 'WIP', images: wipImgs.map((i) => ({ ...i, ownerKey: wipKey })), folders: wipFolders });
-                    if (projectKey) damBuckets.push({ key: projectKey, label: 'Project', images: projectImgs.map((i) => ({ ...i, ownerKey: projectKey })), folders: projectFolders });
-                    if (taskKey) damBuckets.push({ key: taskKey, label: 'Task', images: taskImgs.map((i) => ({ ...i, ownerKey: taskKey })), folders: taskFolders });
+                    const damBucketsAll: FocusDamBucket[] = [];
+                    if (wipKey) damBucketsAll.push({ key: wipKey, label: 'WIP', images: wipImgs.map((i) => ({ ...i, ownerKey: wipKey })), folders: wipFolders });
+                    if (projectKey) damBucketsAll.push({ key: projectKey, label: 'Project', images: projectImgs.map((i) => ({ ...i, ownerKey: projectKey })), folders: projectFolders });
+                    if (taskKey) damBucketsAll.push({ key: taskKey, label: 'Task', images: taskImgs.map((i) => ({ ...i, ownerKey: taskKey })), folders: taskFolders });
+                    // Favorites filter: when on, strip non-favorited images from each
+                    // bucket. Folders + buckets stay (so they remain valid drop targets);
+                    // they just render empty placeholders if all their images filter out.
+                    const damBuckets: FocusDamBucket[] = favoritesFilterActive
+                      ? damBucketsAll.map((b) => ({ ...b, images: b.images.filter((i) => i.favorited) }))
+                      : damBucketsAll;
                     const flatImages: FocusDamImage[] = damBuckets.flatMap((b) => b.images);
-                    const isCompletelyEmpty = flatImages.length === 0 && damBuckets.every((b) => b.folders.length === 0);
+                    // "Completely empty" uses the UNFILTERED set — if the user has images
+                    // but the favorites filter happens to hide them all, we still render
+                    // the gallery (with empty rows) instead of falling back to the
+                    // No-Images-Yet sheet.
+                    const isCompletelyEmpty = damBucketsAll.flatMap((b) => b.images).length === 0
+                      && damBucketsAll.every((b) => b.folders.length === 0);
+                    // Zoom All fit-to-box: when the user picks Zoom All, binary-search
+                    // the largest row height that still keeps the sectioned content
+                    // inside the gallery's viewport (no scroll). Floor 40, ceil 360 —
+                    // small collections grow toward L; large collections shrink toward
+                    // the floor. Subtractions account for section headers (24), folder
+                    // rows (30 each), the SPACING.cr top padding (37), the pb-[8px]
+                    // bottom padding (8), and gaps inside / between sections.
+                    let zoomRowH: number | undefined;
+                    if (focusDamTileHeight === 'zoom') {
+                      const W = Math.max(1, galleryContainerDims.width - 62); // px-[31px] both sides
+                      const H = Math.max(1, galleryContainerDims.height - 8 - 37); // pb-[8px] + SPACING.cr top
+                      const rowsHeightAt = (imgs: FocusDamImage[], rowH: number): number => {
+                        if (imgs.length === 0) return 0;
+                        let rows = 1;
+                        let rowW = 0;
+                        const gap = 4;
+                        for (const img of imgs) {
+                          const ar = (img.width || 1) / (img.height || 1);
+                          const itemW = ar * rowH;
+                          if (rowW === 0) rowW = itemW;
+                          else if (rowW + gap + itemW <= W) rowW += gap + itemW;
+                          else { rows++; rowW = itemW; }
+                        }
+                        return rows * rowH + (rows - 1) * gap;
+                      };
+                      const groupHeightAt = (imgs: FocusDamImage[], rowH: number): number => {
+                        if (imgs.length === 0) return 0;
+                        const favs = imgs.filter((i) => i.favorited);
+                        const rest = imgs.filter((i) => !i.favorited);
+                        let h = 0;
+                        if (favs.length > 0) h += rowsHeightAt(favs, rowH);
+                        if (rest.length > 0) {
+                          if (h > 0) h += 4; // gap-1 between fav-row and rest-row
+                          h += rowsHeightAt(rest, rowH);
+                        }
+                        return h;
+                      };
+                      const totalAt = (rowH: number): number => {
+                        let total = 0;
+                        let firstSection = true;
+                        for (const bucket of damBuckets) {
+                          if (bucket.images.length === 0 && bucket.folders.length === 0) continue;
+                          if (!firstSection) total += 16; // gap-4 between sections
+                          firstSection = false;
+                          total += 24; // section header + gap-2
+                          for (const folder of bucket.folders) {
+                            const folderImgs = bucket.images.filter((i) => i.folderId === folder.id);
+                            total += 30; // folder row pt-1 + text + pb-[5px]
+                            total += 4;  // gap-1 within folder block
+                            total += folderImgs.length === 0 ? 60 : groupHeightAt(folderImgs, rowH);
+                            total += 8;  // gap-2 between folder blocks (parent flex-col gap-2)
+                          }
+                          const folderIdSet = new Set(bucket.folders.map((f) => f.id));
+                          const rootImgs = bucket.images.filter((i) => !i.folderId || !folderIdSet.has(i.folderId));
+                          if (rootImgs.length > 0) {
+                            if (bucket.folders.length > 0) total += 24; // marginTop spacer
+                            total += groupHeightAt(rootImgs, rowH);
+                          }
+                        }
+                        return total;
+                      };
+                      let lo = 40;
+                      let hi = 360;
+                      // 30 iterations puts sub-pixel precision well below render resolution.
+                      for (let i = 0; i < 30; i++) {
+                        const mid = (lo + hi) / 2;
+                        if (totalAt(mid) <= H) lo = mid;
+                        else hi = mid;
+                      }
+                      zoomRowH = Math.max(40, lo);
+                    }
                     // Multi-select click router. Plain click toggles 1-up;
                     // Cmd/Ctrl-click toggles the image's membership in the
                     // selection set; Shift-click extends from the last anchor
@@ -7545,6 +7676,7 @@ export default function App() {
                     };
                     return (
                       <div
+                        ref={setGalleryContainerEl}
                         className="flex-1 min-h-0 px-[31px] pb-[8px] flex flex-col"
                         // Click on the empty space inside the gallery slot
                         // clears the multi-selection. Image clicks call
@@ -7673,6 +7805,7 @@ export default function App() {
                                                   onImageClick={handleImageClick}
                                                   onDelete={deleteFocusImage}
                                                   onToggleFavorite={toggleFocusImageFavorite}
+                                                  rowHOverride={zoomRowH}
                                                 />
                                               ) : (
                                                 // Empty-folder sheet — same soft tint
@@ -7710,6 +7843,7 @@ export default function App() {
                                             onImageClick={handleImageClick}
                                             onDelete={deleteFocusImage}
                                             onToggleFavorite={toggleFocusImageFavorite}
+                                            rowHOverride={zoomRowH}
                                           />
                                         </div>
                                       ) : (
