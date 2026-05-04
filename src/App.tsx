@@ -7611,7 +7611,13 @@ export default function App() {
                     const damContainers: { key: string; images: FocusDamImage[] }[] = [];
                     for (const bucket of damBuckets) {
                       const folderIdSet = new Set(bucket.folders.map((f) => f.id));
-                      for (const folder of bucket.folders) {
+                      // Mirror the gallery's "hide empty folders under the
+                      // favorites filter" logic so 1-up arrow / wheel nav
+                      // can't land on a container that isn't on screen.
+                      const navFolders = favoritesFilterActive
+                        ? bucket.folders.filter((f) => bucket.images.some((i) => i.folderId === f.id))
+                        : bucket.folders;
+                      for (const folder of navFolders) {
                         const folderImgs = bucket.images.filter((i) => i.folderId === folder.id);
                         damContainers.push({ key: `${bucket.key}::${folder.id}`, images: folderImgs });
                       }
@@ -7855,13 +7861,22 @@ export default function App() {
                                 continuation of the toolbar. */}
                             <div className="flex flex-col gap-4" style={{ paddingTop: SPACING.cr }}>
                               {damBuckets.map((bucket) => {
-                                if (bucket.images.length === 0 && bucket.folders.length === 0) return null;
                                 const folderIdSet = new Set(bucket.folders.map((f) => f.id));
                                 // Root images = anything in the bucket that doesn't
                                 // resolve to an existing folder (handles orphans
                                 // gracefully — deleted folder's images come back to
                                 // root rather than disappearing).
                                 const rootImages = bucket.images.filter((i) => !i.folderId || !folderIdSet.has(i.folderId));
+                                // Under the favorites filter, hide folders that contain
+                                // no favorited images — the "Drop Images Here" sheet
+                                // would otherwise clutter a view that's meant to show
+                                // only the favorited material. Off-filter behaviour is
+                                // unchanged: empty folders still render so they can be
+                                // used as drop targets.
+                                const visibleFolders = favoritesFilterActive
+                                  ? bucket.folders.filter((f) => bucket.images.some((i) => i.folderId === f.id))
+                                  : bucket.folders;
+                                if (rootImages.length === 0 && visibleFolders.length === 0) return null;
                                 return (
                                   <div key={bucket.key} className="flex flex-col gap-2">
                                     {/* Section header — bucket label, mixed-case grey. The
@@ -7876,10 +7891,10 @@ export default function App() {
                                         within the bucket using the same underpinnings as the
                                         list-view sub-task reorder. */}
                                     <SortableContext
-                                      items={bucket.folders.map((f) => `dam-folder:${bucket.key}:${f.id}`)}
+                                      items={visibleFolders.map((f) => `dam-folder:${bucket.key}:${f.id}`)}
                                       strategy={verticalListSortingStrategy}
                                     >
-                                      {bucket.folders.map((folder) => {
+                                      {visibleFolders.map((folder) => {
                                         const folderImgs = bucket.images.filter((i) => i.folderId === folder.id);
                                         return (
                                           <div key={folder.id} className="flex flex-col gap-1">
@@ -7931,7 +7946,7 @@ export default function App() {
                                         a multi-select can land at the bucket root. */}
                                     <FocusDamFolderDropTarget bucketKey={bucket.key} folderId={null}>
                                       {rootImages.length > 0 ? (
-                                        <div style={bucket.folders.length > 0 ? { marginTop: 24 } : undefined}>
+                                        <div style={visibleFolders.length > 0 ? { marginTop: 24 } : undefined}>
                                           <FocusDamGroup
                                             images={rootImages}
                                             tileView={focusDamTileHeight}
