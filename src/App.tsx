@@ -14,6 +14,7 @@ import {
   MeasuringStrategy,
   pointerWithin,
   useDroppable,
+  useDraggable,
 } from '@dnd-kit/core';
 import { restrictToVerticalAxis, restrictToHorizontalAxis, restrictToParentElement } from '@dnd-kit/modifiers';
 import {
@@ -1933,11 +1934,104 @@ type FocusDamImage = { id: string; url?: string; dataUrl?: string; filename: str
 type FocusDamFolder = { id: string; name: string };
 type FocusDamBucket = { key: string; label: string; images: FocusDamImage[]; folders: FocusDamFolder[] };
 
+// FocusDamTile: one image cell, draggable. The whole tile is the drag handle
+// (PointerSensor's distance:8 activation keeps stationary clicks as clicks),
+// so a plain click still routes to onImageClick for 1-up / select toggling.
+// During a drag, the original tile fades to 0.4 — dnd-kit's default visual
+// for the source. The data payload carries the image's source bucket and
+// current folderId so the drop handler can decide between intra-bucket move
+// (just flip folderId) and cross-bucket move (splice + append).
+function FocusDamTile({
+  img,
+  tileView,
+  ownerKey,
+  isSelected,
+  rowH,
+  onImageClick,
+  onDelete,
+  onToggleFavorite,
+}: {
+  img: FocusDamImage;
+  tileView: 'zoom' | 'sm' | 'md' | 'lg';
+  ownerKey: string;
+  isSelected: boolean;
+  rowH: number;
+  onImageClick: (id: string, e: React.MouseEvent) => void;
+  onDelete: (ownerKey: string, id: string) => void;
+  onToggleFavorite: (ownerKey: string, id: string) => void;
+}) {
+  const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
+    id: `dam-image:${img.id}`,
+    data: { type: 'damImage', imageId: img.id, ownerKey, folderId: img.folderId ?? null },
+  });
+  if (tileView === 'lg') {
+    return (
+      <div
+        ref={setNodeRef}
+        className="relative group flex flex-row justify-start"
+        onClick={(e) => onImageClick(img.id, e)}
+        {...attributes}
+        {...listeners}
+        style={{ opacity: isDragging ? 0.4 : 1 }}
+      >
+        <div className={`relative inline-block cursor-zoom-in ${isSelected ? 'ring-2 ring-[#7363FF] ring-offset-0' : ''}`}>
+          <CachedImage src={resolveImageSrc(img)} alt={img.filename} className="block max-w-full max-h-[70vh] w-auto h-auto" />
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onToggleFavorite(ownerKey, img.id); }}
+            className={`absolute top-1 left-1 p-1 bg-black/40 hover:bg-black/70 opacity-0 group-hover:opacity-100 transition-opacity ${img.favorited ? 'text-[#FF7171]' : 'text-white'}`}
+            aria-label={img.favorited ? 'Unfavorite image' : 'Favorite image'}
+          >
+            <Heart size={12} fill={img.favorited ? 'currentColor' : 'none'} />
+          </button>
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); onDelete(ownerKey, img.id); }}
+            className="absolute top-1 right-1 p-1 bg-black/40 opacity-0 group-hover:opacity-100 text-white hover:bg-black/70 transition-opacity"
+            aria-label="Delete image"
+          >
+            <Trash2 size={12} />
+          </button>
+        </div>
+      </div>
+    );
+  }
+  const ar = (img.width || 1) / (img.height || 1);
+  return (
+    <div
+      ref={setNodeRef}
+      onClick={(e) => onImageClick(img.id, e)}
+      {...attributes}
+      {...listeners}
+      className={`relative group bg-[#1f1f1f] overflow-hidden cursor-zoom-in ${isSelected ? 'outline outline-2 outline-[#7363FF]' : ''}`}
+      style={{ height: rowH, flexGrow: ar, flexBasis: ar * rowH, minWidth: Math.min(60, ar * rowH), opacity: isDragging ? 0.4 : 1 }}
+    >
+      <CachedImage src={resolveImageSrc(img)} alt={img.filename} className="block w-full h-full object-cover" />
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); onToggleFavorite(ownerKey, img.id); }}
+        className={`absolute top-1 left-1 p-1 bg-black/40 hover:bg-black/70 opacity-0 group-hover:opacity-100 transition-opacity ${img.favorited ? 'opacity-100 text-[#FF7171]' : 'text-white'}`}
+        aria-label={img.favorited ? 'Unfavorite image' : 'Favorite image'}
+      >
+        <Heart size={12} fill={img.favorited ? 'currentColor' : 'none'} />
+      </button>
+      <button
+        type="button"
+        onClick={(e) => { e.stopPropagation(); onDelete(ownerKey, img.id); }}
+        className="absolute top-1 right-1 p-1 bg-black/40 opacity-0 group-hover:opacity-100 text-white hover:bg-black/70 transition-opacity"
+        aria-label="Delete image"
+      >
+        <Trash2 size={12} />
+      </button>
+    </div>
+  );
+}
+
 // FocusDamGroup: renders ONE flat block of images at the requested tile size
 // (sm / md / lg / zoom). No empty handling, no one-up handling, no folder
-// awareness — just the justified-gallery / column-stack flex layout. The
-// parent (FocusDamGallery) decides which images belong to which block and
-// composes blocks together.
+// awareness — just the justified-gallery / column-stack flex layout. Each tile
+// is a FocusDamTile (draggable). The parent (FocusDamGallery) decides which
+// images belong to which block and composes blocks together.
 function FocusDamGroup({
   images,
   tileView,
@@ -1956,76 +2050,41 @@ function FocusDamGroup({
   onToggleFavorite: (ownerKey: string, id: string) => void;
 }) {
   if (images.length === 0) return null;
-  // Large = one image per row, full column width, with a viewport-height cap.
   if (tileView === 'lg') {
     return (
       <div className="flex flex-col gap-1 pr-1">
-        {images.map((img) => {
-          const sel = selectedImageIds.has(img.id);
-          return (
-            <div key={img.id} className="relative group flex flex-row justify-start" onClick={(e) => onImageClick(img.id, e)}>
-              <div className={`relative inline-block cursor-zoom-in ${sel ? 'ring-2 ring-[#7363FF] ring-offset-0' : ''}`}>
-                <CachedImage src={resolveImageSrc(img)} alt={img.filename} className="block max-w-full max-h-[70vh] w-auto h-auto" />
-                <button
-                  type="button"
-                  onClick={(e) => { e.stopPropagation(); onToggleFavorite(ownerKey, img.id); }}
-                  className={`absolute top-1 left-1 p-1 bg-black/40 hover:bg-black/70 opacity-0 group-hover:opacity-100 transition-opacity ${img.favorited ? 'text-[#FF7171]' : 'text-white'}`}
-                  aria-label={img.favorited ? 'Unfavorite image' : 'Favorite image'}
-                >
-                  <Heart size={12} fill={img.favorited ? 'currentColor' : 'none'} />
-                </button>
-                <button
-                  type="button"
-                  onClick={(e) => { e.stopPropagation(); onDelete(ownerKey, img.id); }}
-                  className="absolute top-1 right-1 p-1 bg-black/40 opacity-0 group-hover:opacity-100 text-white hover:bg-black/70 transition-opacity"
-                  aria-label="Delete image"
-                >
-                  <Trash2 size={12} />
-                </button>
-              </div>
-            </div>
-          );
-        })}
+        {images.map((img) => (
+          <FocusDamTile
+            key={img.id}
+            img={img}
+            tileView="lg"
+            ownerKey={ownerKey}
+            isSelected={selectedImageIds.has(img.id)}
+            rowH={0}
+            onImageClick={onImageClick}
+            onDelete={onDelete}
+            onToggleFavorite={onToggleFavorite}
+          />
+        ))}
       </div>
     );
   }
-  // Sm / Md / Zoom — uniform-height rows, justified-gallery widths. Zoom mode
-  // in a sectioned layout uses the same flow but with the largest row height
-  // (the historical "fit everything in the box" math doesn't apply when blocks
-  // are stacked with their own intrinsic heights).
   const rowH = tileView === 'sm' ? 120 : tileView === 'md' ? 240 : 360;
   return (
     <div className="flex flex-row flex-wrap gap-1 content-start">
-      {images.map((img) => {
-        const ar = (img.width || 1) / (img.height || 1);
-        const sel = selectedImageIds.has(img.id);
-        return (
-          <div
-            key={img.id}
-            onClick={(e) => onImageClick(img.id, e)}
-            className={`relative group bg-[#1f1f1f] overflow-hidden cursor-zoom-in ${sel ? 'outline outline-2 outline-[#7363FF]' : ''}`}
-            style={{ height: rowH, flexGrow: ar, flexBasis: ar * rowH, minWidth: Math.min(60, ar * rowH) }}
-          >
-            <CachedImage src={resolveImageSrc(img)} alt={img.filename} className="block w-full h-full object-cover" />
-            <button
-              type="button"
-              onClick={(e) => { e.stopPropagation(); onToggleFavorite(ownerKey, img.id); }}
-              className={`absolute top-1 left-1 p-1 bg-black/40 hover:bg-black/70 opacity-0 group-hover:opacity-100 transition-opacity ${img.favorited ? 'opacity-100 text-[#FF7171]' : 'text-white'}`}
-              aria-label={img.favorited ? 'Unfavorite image' : 'Favorite image'}
-            >
-              <Heart size={12} fill={img.favorited ? 'currentColor' : 'none'} />
-            </button>
-            <button
-              type="button"
-              onClick={(e) => { e.stopPropagation(); onDelete(ownerKey, img.id); }}
-              className="absolute top-1 right-1 p-1 bg-black/40 opacity-0 group-hover:opacity-100 text-white hover:bg-black/70 transition-opacity"
-              aria-label="Delete image"
-            >
-              <Trash2 size={12} />
-            </button>
-          </div>
-        );
-      })}
+      {images.map((img) => (
+        <FocusDamTile
+          key={img.id}
+          img={img}
+          tileView={tileView}
+          ownerKey={ownerKey}
+          isSelected={selectedImageIds.has(img.id)}
+          rowH={rowH}
+          onImageClick={onImageClick}
+          onDelete={onDelete}
+          onToggleFavorite={onToggleFavorite}
+        />
+      ))}
       {Array.from({ length: 4 }).map((_, i) => (
         <span key={`phantom-${i}`} className="grow-[1000]" aria-hidden />
       ))}
@@ -4997,13 +5056,15 @@ export default function App() {
   }, [setFocusImages]);
   // ── Image folder helpers ────────────────────────────────────────────────────
   // Folders live PER image bucket (WIP / Project / Task), with the array order
-  // doubling as the display order. addFocusFolder appends a new untitled folder
-  // and returns its id so the caller can immediately put it into rename mode.
+  // doubling as the display order. addFocusFolder PREPENDS a new untitled folder
+  // (so the latest one is at the top of the section, matching the gallery's
+  // top-of-collection placement) and returns its id so the caller can put it
+  // into rename mode immediately.
   const addFocusFolder = useCallback((bucketKey: string): string => {
     const id = `folder-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     setFocusImageFolders((prev) => ({
       ...prev,
-      [bucketKey]: [...(prev[bucketKey] || []), { id, name: '' }],
+      [bucketKey]: [{ id, name: '' }, ...(prev[bucketKey] || [])],
     }));
     return id;
   }, [setFocusImageFolders]);
@@ -5136,6 +5197,15 @@ export default function App() {
   // currently in edit mode (renamed via the inline input next to the icon).
   // Setting null exits rename mode. New folders auto-enter rename mode on creation.
   const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
+  // Refs for the multi-select drag handler — handleDragEnd is wrapped in
+  // useCallback and would be recreated on every selection / image change if we
+  // depended on the values directly. Using refs lets the callback read the
+  // latest snapshot without invalidating its identity (which would cascade and
+  // re-bind every drag listener in the tree on every keystroke).
+  const selectedImageIdsRef = useRef(selectedImageIds);
+  useEffect(() => { selectedImageIdsRef.current = selectedImageIds; }, [selectedImageIds]);
+  const focusImagesRef = useRef(focusImages);
+  useEffect(() => { focusImagesRef.current = focusImages; }, [focusImages]);
   // The currently-selected task. Set on single-click of a task row, or when the user opens
   // the edit / quick-edit panel. The Focus mode's Information column dynamically shows the
   // project tied to this task, and rows render a 25%-brighter highlight while selected.
@@ -5477,6 +5547,54 @@ export default function App() {
       clearOverlay();
       return;
     }
+    // DAM image drag-move. The dragged tile carries { type: 'damImage', imageId,
+    // ownerKey, folderId } and the drop target carries { type: 'damFolderDrop',
+    // bucketKey, folderId } (folderId === null for the bucket root). If the
+    // dragged image is part of the active multi-selection AND the selection has
+    // more than one member, the WHOLE selection moves; otherwise just the
+    // dragged image moves.
+    if (active.data.current?.type === 'damImage') {
+      const overData = over?.data.current;
+      if (overData?.type === 'damFolderDrop') {
+        const draggedId = active.data.current.imageId as string;
+        const toBucket = overData.bucketKey as string;
+        const toFolderId = (overData.folderId ?? null) as string | null;
+        const sel = selectedImageIdsRef.current;
+        const idsToMove = sel.has(draggedId) && sel.size > 1 ? Array.from(sel) : [draggedId];
+        // Look up each id's current bucket so we can group cross-bucket moves
+        // by source. The selection set is bucket-agnostic (ids only), so we
+        // walk focusImages once to build an id→bucket map for the moving set.
+        const movingSet = new Set(idsToMove);
+        const idToBucket = new Map<string, string>();
+        const focusImagesNow = focusImagesRef.current;
+        for (const [bucketKey, imgs] of Object.entries(focusImagesNow)) {
+          for (const img of imgs) {
+            if (movingSet.has(img.id)) idToBucket.set(img.id, bucketKey);
+          }
+        }
+        // Group ids by source bucket so we can issue one move call per source.
+        const groups = new Map<string, string[]>();
+        for (const id of idsToMove) {
+          const src = idToBucket.get(id);
+          if (!src) continue;
+          if (!groups.has(src)) groups.set(src, []);
+          groups.get(src)!.push(id);
+        }
+        for (const [src, ids] of groups) {
+          if (src === toBucket) {
+            moveFocusImagesToFolder(toBucket, ids, toFolderId);
+          } else {
+            moveFocusImagesToBucket(src, toBucket, ids, toFolderId);
+          }
+        }
+        // Selection cleared after a successful move so the user starts fresh
+        // for the next operation. The 1-up state is left untouched.
+        setSelectedImageIds(new Set());
+      }
+      resetDragRefs();
+      clearOverlay();
+      return;
+    }
     if (active.data.current?.type === 'projTask') {
       const srcTask = active.data.current.task as Task;
       const overData = over?.data.current;
@@ -5769,7 +5887,7 @@ export default function App() {
       handleCrossSectionMove(a, o);
     }
     setActiveId(null); setActiveTaskIdState(null); setActiveType(null); setActiveCalendarCellId(null); setColumnOffset(0); pendingOffsetRef.current = 0; if (dwellTimerRef.current) { clearTimeout(dwellTimerRef.current); dwellTimerRef.current = null; } if (collapseTimerRef.current) { clearTimeout(collapseTimerRef.current); collapseTimerRef.current = null; } setSourceCollapsed(false);
-  }, [tasks, reorderFocusSubtask, reorderFocusFolder]);
+  }, [tasks, reorderFocusSubtask, reorderFocusFolder, moveFocusImagesToFolder, moveFocusImagesToBucket]);
 
   // Default to first person if unset
   useEffect(() => {
@@ -7323,7 +7441,11 @@ export default function App() {
                           })()
                         ) : (
                           <CustomScroll>
-                            <div className="flex flex-col gap-4">
+                            {/* One-CR space (37px, the project-wide "blank line" rhythm)
+                                between the toggles row above and the first section
+                                header. Without it the section labels read as
+                                continuation of the toolbar. */}
+                            <div className="flex flex-col gap-4" style={{ paddingTop: SPACING.cr }}>
                               {damBuckets.map((bucket) => {
                                 if (bucket.images.length === 0 && bucket.folders.length === 0) return null;
                                 const folderIdSet = new Set(bucket.folders.map((f) => f.id));
@@ -7334,25 +7456,17 @@ export default function App() {
                                 const rootImages = bucket.images.filter((i) => !i.folderId || !folderIdSet.has(i.folderId));
                                 return (
                                   <div key={bucket.key} className="flex flex-col gap-2">
-                                    {/* Section header — bucket label, all caps grey. */}
-                                    <div className="text-[#a8a8a8] text-[11px] uppercase tracking-wider">{bucket.label}</div>
-                                    {/* Root drop target — accepts a multi-select drop into the bucket's root. */}
-                                    <FocusDamFolderDropTarget bucketKey={bucket.key} folderId={null}>
-                                      {rootImages.length > 0 ? (
-                                        <FocusDamGroup
-                                          images={rootImages}
-                                          tileView={focusDamTileHeight}
-                                          ownerKey={bucket.key}
-                                          selectedImageIds={selectedImageIds}
-                                          onImageClick={handleImageClick}
-                                          onDelete={deleteFocusImage}
-                                          onToggleFavorite={toggleFocusImageFavorite}
-                                        />
-                                      ) : (
-                                        <div className="h-1" />
-                                      )}
-                                    </FocusDamFolderDropTarget>
-                                    {/* Folder rows — sortable so the user can reorder them inside their bucket. */}
+                                    {/* Section header — bucket label, mixed-case grey. The
+                                        global font-size:14px !important rule overrides any
+                                        text-[Npx] class, so we lean on color for hierarchy
+                                        instead. */}
+                                    <div className="text-[#a8a8a8]">{bucket.label}</div>
+                                    {/* Folder rows render FIRST inside each section — the
+                                        user's mental model is "folders sit at the top of
+                                        the collection, loose images flow underneath." Folder
+                                        order is dnd-kit-sortable so the user can drag-reorder
+                                        within the bucket using the same underpinnings as the
+                                        list-view sub-task reorder. */}
                                     <SortableContext
                                       items={bucket.folders.map((f) => `dam-folder:${bucket.key}:${f.id}`)}
                                       strategy={verticalListSortingStrategy}
@@ -7382,14 +7496,39 @@ export default function App() {
                                                   onToggleFavorite={toggleFocusImageFavorite}
                                                 />
                                               ) : (
-                                                // Empty folder placeholder — keeps the drop target tall enough to land on.
-                                                <div className="h-6 text-[#5e5e5e] text-[11px] italic pl-6">Drop images here</div>
+                                                // Empty-folder sheet — same soft tint
+                                                // as the No-Images-Yet sheet, so the
+                                                // "drop here" target reads as a
+                                                // proper landing zone instead of a
+                                                // tiny italic line.
+                                                <div className="bg-white/[0.03] flex items-center justify-center min-h-[60px] text-[#656464]">
+                                                  Drop Images Here
+                                                </div>
                                               )}
                                             </FocusDamFolderDropTarget>
                                           </div>
                                         );
                                       })}
                                     </SortableContext>
+                                    {/* Root images render AFTER the folders — loose
+                                        items at the bottom of the section. Same drop
+                                        target wrapping so a multi-select can be
+                                        dropped into the bucket's root. */}
+                                    <FocusDamFolderDropTarget bucketKey={bucket.key} folderId={null}>
+                                      {rootImages.length > 0 ? (
+                                        <FocusDamGroup
+                                          images={rootImages}
+                                          tileView={focusDamTileHeight}
+                                          ownerKey={bucket.key}
+                                          selectedImageIds={selectedImageIds}
+                                          onImageClick={handleImageClick}
+                                          onDelete={deleteFocusImage}
+                                          onToggleFavorite={toggleFocusImageFavorite}
+                                        />
+                                      ) : (
+                                        <div className="h-1" />
+                                      )}
+                                    </FocusDamFolderDropTarget>
                                   </div>
                                 );
                               })}
