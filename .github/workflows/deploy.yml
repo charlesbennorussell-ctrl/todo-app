@@ -1,0 +1,69 @@
+# Deploys the Vite production build to GitHub Pages on every push to master.
+# Pages becomes the single source of truth that BOTH the in-browser users and
+# the desktop apps load from. Push code → ~2 min later, both surfaces reflect
+# the new build (no installer rebuilds, no reinstalls).
+#
+# One-time repo setup (you only do this once):
+#   Settings → Pages → Build and deployment → Source: "GitHub Actions"
+# After that, this workflow runs automatically on every push to master.
+
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+# Permissions Pages deployments require; without these the deploy step 403s.
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Skip duplicate deployments if a new push lands while one's already running.
+concurrency:
+  group: 'pages'
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build
+        run: npm run build
+        env:
+          # GitHub Pages serves this repo at /todo-app/ (subpath, not root).
+          # Vite reads VITE_BASE at build time and prefixes every asset URL
+          # with it so the bundle resolves correctly when served from the
+          # subpath. See vite.config.ts.
+          VITE_BASE: /todo-app/
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
