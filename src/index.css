@@ -72,11 +72,162 @@ html, body, div, p, span, button, input, textarea, select, label, a, li, td, th,
   color: #ffffff;
 }
 
+/* Suppress the chunky default focus ring (Chrome/Edge ship a thick yellow
+   outline) on every focusable element. Keyboard-driven focus still gets a
+   subtle white ring via :focus-visible (below) so accessibility isn't hurt —
+   only mouse / pointer focus is silenced. */
+:focus { outline: none; }
+:focus-visible {
+  outline: 1px solid rgba(255, 255, 255, 0.35);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+/* Inputs / contentEditable already have their own visible affordances
+   (caret, brand-purple selection); skip the ring there entirely. */
+input:focus-visible,
+textarea:focus-visible,
+[contenteditable]:focus-visible {
+  outline: none;
+}
+
 /* Hide the Liveblocks free-tier branding badge (bottom-right corner). The wrapper element is
    injected by Liveblocks at #liveblocks-badge with inline `opacity: 1` — !important is required
    to override its inline style. pointer-events: none also prevents an invisible click target. */
 #liveblocks-badge {
   opacity: 0 !important;
   pointer-events: none !important;
+}
+
+/* --- Claude-style scrollbars --------------------------------------------------
+   Minimal scrollbars across the whole app: NO visible track — just the thumb
+   pill + a small triangle arrow at the top and bottom (and left/right for
+   horizontal scroll). Track + button + corner backgrounds are all transparent,
+   so the only visible chrome is (a) the rounded gray pill thumb and (b) the
+   tiny triangle SVGs at each end.
+   Notes:
+     - WebKit (Chrome / Edge / Safari) supports full styling via ::-webkit-scrollbar-*.
+     - Firefox falls back to `scrollbar-width: thin` + `scrollbar-color: thumb transparent`;
+       it can't render the triangle buttons, but the thumb tone still matches.
+     - The trick to make the thumb look narrower than the track: keep the
+       scrollbar 14px wide (good click target) but give the thumb a transparent
+       4px border + background-clip: content-box. The visible pill is only ~6px
+       wide — same look as the screenshot reference. */
+*::-webkit-scrollbar {
+  width: 14px;
+  height: 14px;
+}
+/* Margin on the track inset's the thumb's travel range so the pill never
+   reaches the very top / bottom of the container — gives a Claude-style
+   breathing room between the triangle arrows and the pill at its extremes. */
+*::-webkit-scrollbar-track {
+  background: transparent;
+  margin: 8px 0;
+}
+*::-webkit-scrollbar-track:horizontal {
+  margin: 0 8px;
+}
+/* Fixed 15px-tall pill (visible area). The thumb's box is 23px so that, after
+   the 4px transparent border on each side (which makes the pill look narrower
+   than the 14px scrollbar lane), the visible content area is exactly 15px.
+   min/max enforces a fixed size — WebKit's default proportional sizing would
+   otherwise grow the thumb with content ratio. */
+*::-webkit-scrollbar-thumb {
+  background-color: #4a4a4a;
+  background-clip: content-box;
+  border: 4px solid transparent;
+  border-radius: 999px;
+  min-height: 23px;
+  max-height: 23px;
+  min-width: 23px;
+  max-width: 23px;
+}
+*::-webkit-scrollbar-thumb:hover {
+  background-color: #6a6a6a;
+}
+*::-webkit-scrollbar-thumb:active {
+  background-color: #8a8a8a;
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+/* Top / bottom (and left / right) triangle buttons. Each side gets exactly one
+   button — the secondary "double-button" slots are hidden. The triangle is a
+   tiny inline SVG so it renders crisp at any DPI without a separate asset.
+   No background — the triangle floats on whatever the container's bg is, so
+   the scrollbar reads as "just thumb + arrows" with no track chrome. */
+*::-webkit-scrollbar-button {
+  display: block;
+  background-color: transparent;
+  background-repeat: no-repeat;
+  background-position: center;
+}
+*::-webkit-scrollbar-button:vertical:start:decrement,
+*::-webkit-scrollbar-button:vertical:end:increment {
+  height: 14px;
+  width: 14px;
+}
+*::-webkit-scrollbar-button:horizontal:start:decrement,
+*::-webkit-scrollbar-button:horizontal:end:increment {
+  height: 14px;
+  width: 14px;
+}
+*::-webkit-scrollbar-button:vertical:start:decrement {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'><polygon points='4,0 8,5 0,5' fill='%23656464'/></svg>");
+}
+*::-webkit-scrollbar-button:vertical:end:increment {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'><polygon points='0,0 8,0 4,5' fill='%23656464'/></svg>");
+}
+*::-webkit-scrollbar-button:horizontal:start:decrement {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='5' height='8' viewBox='0 0 5 8'><polygon points='0,4 5,0 5,8' fill='%23656464'/></svg>");
+}
+*::-webkit-scrollbar-button:horizontal:end:increment {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='5' height='8' viewBox='0 0 5 8'><polygon points='0,0 5,4 0,8' fill='%23656464'/></svg>");
+}
+*::-webkit-scrollbar-button:vertical:start:decrement:hover {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'><polygon points='4,0 8,5 0,5' fill='%23ffffff'/></svg>");
+}
+*::-webkit-scrollbar-button:vertical:end:increment:hover {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='8' height='5' viewBox='0 0 8 5'><polygon points='0,0 8,0 4,5' fill='%23ffffff'/></svg>");
+}
+*::-webkit-scrollbar-button:horizontal:start:decrement:hover {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='5' height='8' viewBox='0 0 5 8'><polygon points='0,4 5,0 5,8' fill='%23ffffff'/></svg>");
+}
+*::-webkit-scrollbar-button:horizontal:end:increment:hover {
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='5' height='8' viewBox='0 0 5 8'><polygon points='0,0 5,4 0,8' fill='%23ffffff'/></svg>");
+}
+/* Hide the redundant "double-button" arrows that some browsers add at the
+   opposite ends. We only want one arrow per side. */
+*::-webkit-scrollbar-button:vertical:start:increment,
+*::-webkit-scrollbar-button:vertical:end:decrement,
+*::-webkit-scrollbar-button:horizontal:start:increment,
+*::-webkit-scrollbar-button:horizontal:end:decrement {
+  display: none;
+}
+/* Firefox: thin scrollbar with a visible thumb on a transparent track. No
+   button styling available — the triangle arrows simply don't appear in
+   Firefox, which is acceptable. */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #4a4a4a transparent;
+}
+
+/* CustomScroll inner element: the JS-managed scrollbar uses a fixed-size
+   pill thumb, so the native scrollbar must be fully hidden on these
+   containers. WebKit gets `display: none`; Firefox gets `scrollbar-width: none`. */
+.custom-scroll-hidden {
+  scrollbar-width: none;
+}
+.custom-scroll-hidden::-webkit-scrollbar {
+  display: none;
+}
+
+/* BriefField: just keeps the field a block container. line-height: 2.2 on
+   the element itself (set inline by the React component) is what gives the
+   caret its taller appearance. We previously tried a ::before pseudo-element
+   to bottom-align text in the line box, but it conflicted with the
+   [data-placeholder]:empty:before rule above and caused the placeholder text
+   to render one character per line. Reverted — taller line-height is plenty. */
+.brief-edit {
+  display: block;
 }
 

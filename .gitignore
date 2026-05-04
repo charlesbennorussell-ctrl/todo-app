@@ -3,3 +3,12 @@ dist
 .env
 .env.local
 .DS_Store
+
+# Editor / tooling local config
+.claude/
+.vscode/
+.idea/
+
+# Tauri build artifacts (recreated on every build)
+src-tauri/target/
+src-tauri/gen/

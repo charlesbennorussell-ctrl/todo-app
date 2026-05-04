@@ -1,7 +1,7 @@
 export type Assignee = string;
 export type SectionId = 'inbox' | 'today' | 'tomorrow' | 'next';
 export type ListId = 'dashboard' | 'work' | 'projects' | 'admin';
-export type AppMode = 'dashboard' | 'projectView' | 'calendar' | 'settings';
+export type AppMode = 'dashboard' | 'projectView' | 'calendar' | 'focus' | 'settings';
 
 export interface Task {
   id: string;
@@ -24,6 +24,10 @@ export interface Task {
   // completedDay is < today's day boundary. Calendar view ignores this and shows all completions.
   // Cleared (set to undefined) when the user un-checks the task.
   completedDay?: string;
+  // Epoch ms when the task was last marked completed. Used by the bucket sort to delay sinking
+  // a freshly-checked task for ~15s — this gives the user a window to undo a misclick before the
+  // row visibly drifts to the bottom of the section.
+  completedAt?: number;
   // Day (todayISO format) the task was last revived from completion or trash. Within 10 minutes
   // of a revive, the task always shows in the list/project view even if it would otherwise be
   // filtered out (gives the user a window to undo a misclick).

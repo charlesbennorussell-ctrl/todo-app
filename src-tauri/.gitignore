@@ -1,0 +1,4 @@
+# Cargo build output (gigabytes of cached deps + the compiled binary).
+target/
+# Tauri-generated native bindings. Recreated on every build.
+gen/

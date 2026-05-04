@@ -1,0 +1,27 @@
+[package]
+name = "ctrl-project"
+version = "0.1.0"
+description = "Ctrl-Project — todo + project planner"
+authors = ["benno"]
+edition = "2021"
+
+# The lib + main split is Tauri 2's recommended layout. lib.rs holds the actual
+# `run()` entry point so the same code path is reachable from both the desktop
+# binary (main.rs) and a future mobile target via tauri::mobile_entry_point.
+# Cargo names use kebab-case but the lib symbol must be a valid Rust ident, so
+# the package is `ctrl-project` and the lib symbol is `ctrl_project_lib`.
+[lib]
+name = "ctrl_project_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+
+[features]
+# Enabled at packaging time; the dev build skips it.
+custom-protocol = ["tauri/custom-protocol"]

@@ -34,6 +34,12 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
             projects: initialProjects,
             clients: initialClients,
             people: initialPeople,
+            // Focus-mode storage is metadata-only. Image binaries live in browser
+            // localStorage to keep each Liveblocks key under the per-value size cap.
+            focusBriefs: {},
+            focusSubtasks: {},
+            focusImages: {},
+            focusReferences: {},
           }}
         >
           <ClientSideSuspense fallback={<Loading />}>

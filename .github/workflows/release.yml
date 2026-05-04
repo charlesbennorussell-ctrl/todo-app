@@ -1,0 +1,92 @@
+# Cross-platform desktop installer build, triggered when you push a tag like
+# `v0.1.0`. Two parallel runners (macOS + Windows) build their respective
+# installers and publish them to a GitHub Release with the same tag name.
+#
+# WORKFLOW for shipping a new desktop version:
+#   1. Bump `version` in src-tauri/tauri.conf.json (and Cargo.toml)
+#   2. Commit + push
+#   3. `git tag v0.1.1 && git push --tags`
+#   4. Wait ~10 minutes — installers appear at:
+#      https://github.com/<you>/<repo>/releases/latest
+#   5. Send your partner that link. They download the .dmg, install, done.
+#
+# CODE updates (no shell change) don't need a new release — push to main,
+# Vercel auto-deploys, the desktop app picks it up on next launch.
+
+name: Release Desktop Apps
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # Also let you run it manually from the Actions tab while iterating.
+  workflow_dispatch:
+
+jobs:
+  build:
+    permissions:
+      contents: write   # needed to create the GitHub Release + upload assets
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Universal binary covers Apple Silicon AND Intel Macs in one .dmg.
+          - platform: 'macos-latest'
+            args: '--target universal-apple-darwin'
+            label: 'macOS (Universal)'
+          - platform: 'windows-latest'
+            args: ''
+            label: 'Windows (x64)'
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          # Mac runner needs both architectures so the universal binary can be
+          # assembled. Windows just uses the runner's default x86_64 target.
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Cache Rust build artifacts
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: './src-tauri -> target'
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      - name: Build + publish installer (${{ matrix.label }})
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.ref_name }}
+          releaseName: 'Ctrl-Project ${{ github.ref_name }}'
+          releaseBody: |
+            ## How to install
+
+            **Mac**: download `Ctrl-Project_*.dmg`, open it, drag Ctrl-Project to
+            Applications. First launch: right-click the app → Open (one-time,
+            since the build isn't Apple-notarized yet).
+
+            **Windows**: download `Ctrl-Project_*_x64-setup.exe` or
+            `Ctrl-Project_*_x64_en-US.msi`. SmartScreen may warn — click
+            "More info" → "Run anyway".
+
+            ## What's inside
+            The desktop app is a thin Tauri shell that loads the live web build.
+            New code pushed to `main` reaches the app on next launch — you don't
+            need to reinstall for code updates, only for shell updates (rare).
+          releaseDraft: false
+          prerelease: false
+          args: ${{ matrix.args }}

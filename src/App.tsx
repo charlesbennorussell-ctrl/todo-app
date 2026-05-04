@@ -1,6 +1,6 @@
 ﻿import { Fragment, memo, useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { Plus, X, List, FolderTree, SlidersHorizontal as SettingsIcon, Folder, Trash2, Calendar as CalendarIcon, ChevronLeft, ChevronRight, ArrowUp } from 'lucide-react';
+import { Plus, X, List, FolderTree, SlidersHorizontal as SettingsIcon, Folder, Trash2, Calendar as CalendarIcon, ChevronLeft, ChevronRight, ArrowUp, LayoutDashboard, Heart, FileText } from 'lucide-react';
 import {
   DndContext,
   KeyboardSensor,
@@ -24,7 +24,19 @@ import {
   useSortable,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { useStorage, useMutation } from '@liveblocks/react/suspense';
+import { useStorage, useMutation, useUndo, useRedo } from '@liveblocks/react/suspense';
+import { uploadFocusImage, deleteFocusImageBlob } from './supabase';
+import { getCachedImageUrl, getCachedImageUrlSync, evictCachedImage } from './imageCache';
+import {
+  buildSnapshot,
+  getSlot,
+  putSlot,
+  downloadSnapshot,
+  readSnapshotFile,
+  DAILY_REFRESH_MS,
+  type BackupSlice,
+  type BackupSnapshot,
+} from './backup';
 import arrowPaths from "./imports/svg-hzx9ujz7s0";
 import {
   Assignee,
@@ -44,6 +56,288 @@ import {
   todayISO,
 } from './data';
 
+
+// --- CustomScroll ------------------------------------------------------------
+// Drop-in replacement for `<div className="flex-1 min-h-0 overflow-y-auto">`.
+// Hides the native scrollbar (which always sizes its thumb proportionally to
+// content) and overlays a fixed-size pill + a triangle arrow at the top and
+// bottom that we manage ourselves. Pill is 15px tall, the bottom triangle is
+// 15px from the bottom of the scroll container (so it lands 15px above the
+// app's bottom bar, since the scroll container's bottom edge is right against
+// the bottom bar). Drag the pill to scroll; click the triangles to scroll
+// step-by-step; wheel / trackpad / arrow keys still drive the underlying
+// container natively, and the pill follows.
+//
+// Layout: outer div is `relative flex-1 min-h-0` (takes space in a flex column
+// just like the overflow div it replaces). Inner div is `absolute inset-0
+// overflow-y-auto` so it fills the outer and scrolls. Pill + triangles are
+// absolutely positioned on the outer's right edge.
+const CUSTOM_SCROLL_THUMB_H = 15;
+const CUSTOM_SCROLL_TOP_PAD = 8;     // space at top above the up triangle
+const CUSTOM_SCROLL_BOTTOM_PAD = 15; // space at bottom below the down triangle (= 15px from bottom bar)
+const CUSTOM_SCROLL_ARROW_BOX = 14;  // clickable area for each triangle button
+const CUSTOM_SCROLL_TRACK_GAP = 2;   // gap between arrow and pill at the extremes
+const CUSTOM_SCROLL_STEP = 200;       // px scrolled per triangle click
+const CUSTOM_SCROLL_WHEEL_MULT = 1.5; // wheel-event amplification (over browser default)
+const CUSTOM_SCROLL_LINE_PX = 40;     // deltaMode=1 (lines) → px conversion
+// Native-scroll architecture (NOT virtual scroll). Earlier we tried a
+// transform-based virtual scroll (Locomotive-style) for buttery feel — but
+// it broke dnd-kit auto-scroll-while-dragging (dnd-kit walks the DOM looking
+// for `overflow: auto/scroll` ancestors; virtual scroll has overflow: hidden,
+// so cards became un-movable near the edges). Native scroll keeps drag-drop
+// working, and the JS-managed thumb (DOM transform writes, no React render
+// per scroll frame) keeps the feel snappy without sacrificing reliability.
+function CustomScroll({
+  children,
+  innerClassName = '',
+}: {
+  children: React.ReactNode;
+  /** Classes for the inner scrolling div (e.g. padding for content). */
+  innerClassName?: string;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const thumbElRef = useRef<HTMLDivElement | null>(null);
+  const [hasOverflow, setHasOverflow] = useState(false);
+  const overflowRef = useRef(false);
+  const dragRef = useRef<{ startY: number; startScrollTop: number; trackH: number; maxScroll: number } | null>(null);
+
+  // Pill travels between just-below-up-arrow and just-above-down-arrow.
+  const computeTrack = (clientH: number) => {
+    const minTop = CUSTOM_SCROLL_TOP_PAD + CUSTOM_SCROLL_ARROW_BOX + CUSTOM_SCROLL_TRACK_GAP;
+    const maxTop = clientH - CUSTOM_SCROLL_BOTTOM_PAD - CUSTOM_SCROLL_ARROW_BOX - CUSTOM_SCROLL_TRACK_GAP - CUSTOM_SCROLL_THUMB_H;
+    return { minTop, trackH: Math.max(0, maxTop - minTop) };
+  };
+
+  // update() — runs on scroll. DOM-direct thumb position write (no React
+  // render per frame). State only flips when overflow itself toggles.
+  const update = useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    const { scrollTop, scrollHeight, clientHeight } = el;
+    const overflow = scrollHeight > clientHeight + 1;
+    if (overflow !== overflowRef.current) {
+      overflowRef.current = overflow;
+      setHasOverflow(overflow);
+    }
+    if (!overflow) return;
+    const thumb = thumbElRef.current;
+    if (!thumb) return;
+    const { minTop, trackH } = computeTrack(clientHeight);
+    const maxScroll = scrollHeight - clientHeight;
+    const ratio = maxScroll > 0 ? scrollTop / maxScroll : 0;
+    const top = minTop + ratio * trackH;
+    thumb.style.transform = `translate3d(0, ${top}px, 0)`;
+  }, []);
+
+  useLayoutEffect(() => { if (hasOverflow) update(); }, [hasOverflow, update]);
+
+  useEffect(() => {
+    update();
+    const el = ref.current;
+    if (!el) return;
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    const mo = new MutationObserver(() => update());
+    mo.observe(el, { childList: true });
+    const onScroll = () => update();
+    el.addEventListener('scroll', onScroll, { passive: true });
+    // Wheel handler — direct scrollTop assignment with multiplier. Native
+    // scroll handles smoothing on the browser side; our amplification just
+    // makes each notch cover more distance. Skip horizontal-dominant deltas
+    // and Shift+wheel (browser uses those for horizontal scroll).
+    const onWheel = (e: WheelEvent) => {
+      if (e.shiftKey) return;
+      if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+      e.preventDefault();
+      let pixelDelta = e.deltaY;
+      if (e.deltaMode === 1) pixelDelta *= CUSTOM_SCROLL_LINE_PX;
+      else if (e.deltaMode === 2) pixelDelta *= el.clientHeight;
+      el.scrollTop += pixelDelta * CUSTOM_SCROLL_WHEEL_MULT;
+    };
+    el.addEventListener('wheel', onWheel, { passive: false });
+    return () => {
+      ro.disconnect();
+      mo.disconnect();
+      el.removeEventListener('scroll', onScroll);
+      el.removeEventListener('wheel', onWheel);
+    };
+  }, [update]);
+
+  const onThumbDown = useCallback((e: React.PointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const el = ref.current;
+    if (!el) return;
+    const { trackH } = computeTrack(el.clientHeight);
+    const maxScroll = el.scrollHeight - el.clientHeight;
+    if (trackH <= 0 || maxScroll <= 0) return;
+    dragRef.current = { startY: e.clientY, startScrollTop: el.scrollTop, trackH, maxScroll };
+    const onMove = (ev: PointerEvent) => {
+      if (!dragRef.current) return;
+      const dy = ev.clientY - dragRef.current.startY;
+      const scrollDelta = (dy / dragRef.current.trackH) * dragRef.current.maxScroll;
+      el.scrollTop = Math.max(0, Math.min(dragRef.current.maxScroll, dragRef.current.startScrollTop + scrollDelta));
+    };
+    const onUp = () => {
+      dragRef.current = null;
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+    };
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+  }, []);
+
+  // Arrow-button click — native CSS smooth scroll. Browser handles the GPU
+  // animation; no JS frame loop, no jank.
+  const stepScroll = useCallback((delta: number) => {
+    const el = ref.current;
+    if (!el) return;
+    el.scrollBy({ top: delta, behavior: 'smooth' });
+  }, []);
+
+  return (
+    <div className="relative flex-1 min-h-0">
+      {/* pr-[14px] reserves a column on the right for the pill. */}
+      <div
+        ref={ref}
+        className={`absolute inset-0 overflow-y-auto custom-scroll-hidden pr-[14px] ${innerClassName}`}
+      >
+        {children}
+      </div>
+      {hasOverflow && (
+        <>
+          {/* Up triangle */}
+          <button
+            type="button"
+            onClick={() => stepScroll(-CUSTOM_SCROLL_STEP)}
+            className="absolute right-0 z-10 flex items-center justify-center text-[#656464] hover:text-white transition-colors"
+            style={{ top: CUSTOM_SCROLL_TOP_PAD, width: CUSTOM_SCROLL_ARROW_BOX, height: CUSTOM_SCROLL_ARROW_BOX }}
+            aria-label="Scroll up"
+          >
+            <svg width="8" height="4" viewBox="0 0 8 4" fill="currentColor">
+              <polygon points="4,0 8,4 0,4" />
+            </svg>
+          </button>
+          {/* Down triangle */}
+          <button
+            type="button"
+            onClick={() => stepScroll(CUSTOM_SCROLL_STEP)}
+            className="absolute right-0 z-10 flex items-center justify-center text-[#656464] hover:text-white transition-colors"
+            style={{ bottom: CUSTOM_SCROLL_BOTTOM_PAD, width: CUSTOM_SCROLL_ARROW_BOX, height: CUSTOM_SCROLL_ARROW_BOX }}
+            aria-label="Scroll down"
+          >
+            <svg width="8" height="4" viewBox="0 0 8 4" fill="currentColor">
+              <polygon points="0,0 8,0 4,4" />
+            </svg>
+          </button>
+          {/* Pill thumb */}
+          <div
+            ref={thumbElRef}
+            className="absolute top-0 right-[4px] w-[6px] rounded-full cursor-pointer transition-colors z-10 bg-[#656464] hover:bg-[#8a8a8a]"
+            style={{ height: CUSTOM_SCROLL_THUMB_H, willChange: 'transform' }}
+            onPointerDown={onThumbDown}
+            aria-hidden
+          />
+        </>
+      )}
+    </div>
+  );
+}
+
+// --- BriefField --------------------------------------------------------------
+// Inline editable text used by the Brief / Notes blocks in Focus mode column 2.
+// SINGLE-MODE design: the field is always contentEditable, and renders text +
+// auto-detected http(s) URLs as real <a> chips. View and edit look IDENTICAL —
+// grey body text, white clickable link chips, taller white caret. Empty value
+// shows the placeholder as a dummy line via the [data-placeholder]:empty CSS.
+//
+// Why DOM-imperative (innerHTML rebuild) instead of JSX: React fights with
+// contentEditable when it re-renders mid-edit (it'd resync the DOM to its
+// virtual tree and clobber the user's typing). Instead we render NOTHING via
+// React and rebuild the DOM ourselves whenever the value prop changes. The
+// guard `el.innerText !== value` prevents overwrites while the user is typing
+// (their typing only updates DOM, not value, so the effect doesn't fire).
+function BriefField({ value, onChange, placeholder }: { value: string; onChange: (v: string) => void; placeholder: string }) {
+  const ref = useRef<HTMLDivElement | null>(null);
+
+  // Build link-parsed DOM into the contentEditable. Splits on http(s) URLs,
+  // wraps matches in white <a> chips that follow the link on click. Anchors
+  // get contenteditable=false so they behave as atomic clickable chips:
+  // backspace deletes the whole link, click opens it, surrounding text stays
+  // freely editable. innerText still extracts the original text on blur.
+  const renderToDom = useCallback((el: HTMLDivElement, text: string) => {
+    while (el.firstChild) el.removeChild(el.firstChild);
+    if (!text) return; // placeholder shown via CSS [data-placeholder]:empty:before
+    const regex = /(https?:\/\/[^\s]+)/g;
+    let lastIndex = 0;
+    let match: RegExpExecArray | null;
+    while ((match = regex.exec(text)) !== null) {
+      if (match.index > lastIndex) {
+        el.appendChild(document.createTextNode(text.slice(lastIndex, match.index)));
+      }
+      const url = match[0];
+      const a = document.createElement('a');
+      a.href = url;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.textContent = url;
+      a.contentEditable = 'false';
+      // Inline color so it survives any cascade weirdness inside contentEditable.
+      a.style.color = '#ffffff';
+      a.style.cursor = 'pointer';
+      a.className = 'hover:underline';
+      el.appendChild(a);
+      lastIndex = match.index + url.length;
+    }
+    if (lastIndex < text.length) {
+      el.appendChild(document.createTextNode(text.slice(lastIndex)));
+    }
+  }, []);
+
+  // Sync the DOM to `value` whenever value changes from outside (mount, prop
+  // update from another collaborator, parent re-render with new value).
+  // Skipped while the user is actively typing — innerText already matches.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    if (el.innerText === value) return;
+    renderToDom(el, value);
+  }, [value, renderToDom]);
+
+  const commit = useCallback(() => {
+    const el = ref.current;
+    if (!el) return;
+    const text = el.innerText ?? '';
+    if (text !== value) onChange(text);
+    // Re-render the DOM so any newly-typed URLs become link chips on blur.
+    renderToDom(el, text);
+  }, [value, onChange, renderToDom]);
+
+  return (
+    <div
+      ref={ref}
+      contentEditable
+      suppressContentEditableWarning
+      data-placeholder={placeholder}
+      onBlur={commit}
+      onKeyDown={(e) => {
+        // Esc reverts to the last-saved value and blurs.
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          if (ref.current) renderToDom(ref.current, value);
+          (e.currentTarget as HTMLDivElement).blur();
+        }
+      }}
+      // Body text grey (#656464), like a task body. caret-color: white so the
+      // cursor pops against the grey/dark background. line-height 2.2 makes
+      // the caret visibly taller; .brief-edit (CSS in index.css) bottoms the
+      // text glyphs in each line box so the caret reads as extending UP from
+      // the baseline. Anchors render in white via inline style in renderToDom.
+      className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] text-[#656464] whitespace-pre-wrap break-words outline-none cursor-text min-h-[21px] brief-edit"
+      style={{ caretColor: 'white', lineHeight: 2.2 }}
+    />
+  );
+}
 
 // View header — appears at the very top of every mode (list / project / calendar / settings).
 // "{viewName} — Monday, April 28th — 12:25pm". Updates the clock once a minute.
@@ -307,14 +601,24 @@ const Displaced = memo(function Displaced({
 });
 
 function SortableTaskItem({
-  task, onToggle, onRename, onDelete, onEdit, onQuickEdit, onAddSibling, onReschedule, onCancelPendingRename, autoFocus = false, isDragOverlay = false, displacementOffset = 0, insertionGap = 0, isAnyDragging = false, collapsed = false, projects = [], clients = [], nonDraggable = false, idPrefix = '', taskOrder = 'ptc', density = 0,
+  task, onToggle, onRename, onDelete, onEdit, onQuickEdit, onAddSibling, onReschedule, onCancelPendingRename, onSelect, isSelected = false, hasFocusContent = false, onOpenFocus, autoFocus = false, isDragOverlay = false, displacementOffset = 0, insertionGap = 0, isAnyDragging = false, collapsed = false, projects = [], clients = [], nonDraggable = false, idPrefix = '', taskOrder = 'ptc', density = 0,
   showIndent = false, hideContext = false,
 }: {
-  task: Task; onToggle: () => void; onRename?: (title: string) => void; onDelete?: () => void; onEdit?: (e?: React.MouseEvent) => void; onQuickEdit?: (e?: React.MouseEvent) => void; onAddSibling?: () => void; onReschedule?: (kind: 'today' | 'tomorrow' | 'nextWeek' | 'shiftBack') => void;
+  task: Task; onToggle: () => void; onRename?: (title: string) => void; onDelete?: () => void; onEdit?: (e?: React.MouseEvent) => void; onQuickEdit?: (e?: React.MouseEvent) => void; onAddSibling?: () => void; onReschedule?: (kind: 'today' | 'tomorrow' | 'nextWeek' | 'shiftBack' | 'shiftForward' | 'sectionForward' | 'sectionBack') => void;
   // Cancel any pending sentence-case-rename timer for this task. Called when the user re-clicks
   // the title (entering edit mode again) within the 2s post-blur window so the in-flight
   // conversion doesn't clobber the title mid-type.
   onCancelPendingRename?: () => void;
+  // Single-click selection — sets the row as the app's "selected" task (drives the Focus
+  // mode's Information panel + the visible highlight on the row). Selection is independent
+  // of dragging: dnd-kit's distance threshold means a stationary click stays a click.
+  onSelect?: () => void;
+  isSelected?: boolean;
+  // True when the task (or its project) has anything in the Focus-mode storage — brief,
+  // notes, sub-tasks, images, references. Drives the small "open in Focus" icon that
+  // appears before the + sibling button.
+  hasFocusContent?: boolean;
+  onOpenFocus?: () => void;
   autoFocus?: boolean; isDragOverlay?: boolean; displacementOffset?: number; insertionGap?: number; isAnyDragging?: boolean; collapsed?: boolean; projects?: Project[]; clients?: Client[]; nonDraggable?: boolean;
   taskOrder?: TaskOrder;
   // Responsive density level (0=full ... 7=tightest). See App's density comment for the cascade.
@@ -420,10 +724,14 @@ function SortableTaskItem({
   const isExpiredMilestone = isScheduled && !!task.deadline && task.deadline < todayISO();
   // Live milestones: vivid purple. Expired milestones (lingering for 24h): faint purple.
   const milestonePurpleClass = isExpiredMilestone ? 'text-[#4f4290]' : 'text-[#8465ff]';
-  // Completed tasks fade to a near-background color across ALL their text â€” no strikethrough,
-  // just visually quieted. #383838 is one step off the #282828 page background.
-  const titleColor = isScheduled ? milestonePurpleClass : task.completed ? 'text-[#383838]' : isNext ? 'text-[#a8a8a8]' : 'text-white';
-  const metaColor = task.completed ? 'text-[#383838]' : isScheduled ? milestonePurpleClass : 'text-[#656464]';
+  // Completed tasks fade to a near-background color across ALL their text — no strikethrough,
+  // just visually quieted. #474747 sits a few steps off the #282828 page background, slightly
+  // brighter than the calendar's #383838 so completed rows in list / project / dashboard read
+  // at arm's length. (Calendar keeps its own #383838 since its tighter card density already
+  // pulls the eye.) Progressively bumped (3d3d3d → 424242 → 474747, ~2% per step) to make
+  // completed rows just legible without breaking the "background-blended" feel.
+  const titleColor = isScheduled ? milestonePurpleClass : task.completed ? 'text-[#474747]' : isNext ? 'text-[#a8a8a8]' : 'text-white';
+  const metaColor = task.completed ? 'text-[#474747]' : isScheduled ? milestonePurpleClass : 'text-[#656464]';
 
   return (
     <Displaced offset={displacementOffset} gap={insertionGap} active={isAnyDragging}>
@@ -444,6 +752,7 @@ function SortableTaskItem({
       // Capture-phase pointerdown anywhere on the row aborts the fade-then-delete timer if
       // the user comes back to the task within the 3s window.
       onPointerDownCapture={fading ? cancelFade : undefined}
+      onClick={onSelect && !isDragOverlay ? () => onSelect() : undefined}
       onMouseEnter={!isDragging && !isDragOverlay ? () => setHovered(true) : undefined}
       onMouseMove={!isDragging && !isDragOverlay && !hovered ? () => setHovered(true) : undefined}
       onMouseLeave={!isDragging && !isDragOverlay ? () => setHovered(false) : undefined}
@@ -453,9 +762,16 @@ function SortableTaskItem({
         // No visible fade for the 15-min "fresh-empty" delete countdown — the row stays full
         // opacity until silent deletion. Only isDragging fades the source while a drag is happening.
         opacity: isDragging ? 0 : 1,
-        // Hover tint: 60ms in / 300ms out, heavy ease in-out. Driven by JS state (smoother
-        // framer interpolation than CSS transitions during fast cursor changes).
-        ...(isDragOverlay ? {} : { backgroundColor: hovered && !isDragging ? "rgba(255, 255, 255, 0.03)" : "rgba(255, 255, 255, 0)" }),
+        // Background priority: drag overlay leaves the bg alone; selected wins over hover with
+        // a 25% brighter wash (0.075 vs the 0.03 hover); hover wins over default; default is
+        // transparent. Same 60ms in / 300ms out animation for all transitions.
+        ...(isDragOverlay ? {} : {
+          backgroundColor: isSelected
+            ? 'rgba(255, 255, 255, 0.075)'
+            : hovered && !isDragging
+              ? 'rgba(255, 255, 255, 0.03)'
+              : 'rgba(255, 255, 255, 0)',
+        }),
       }}
       transition={{
         scale: { duration: 0.18 },
@@ -490,7 +806,11 @@ function SortableTaskItem({
             // already arranges them by user-chosen order — we just suppress the ones the cascade
             // has hidden by passing hasProject/hasClient = false at the right thresholds.
             // hideContext (project view 2): suppress project + client entirely — redundant.
-            const showClient = !hideContext && !!client && density < 4;
+            // showClient gated on a non-empty short — Personal client has short='' and would
+            // otherwise hijack the 'cp' slot (which requires both client.short AND project.name)
+            // and silently eat the project label too. Treating empty-short as "no client" here
+            // makes taskOrderSlots fall through to the lone 'project' slot.
+            const showClient = !hideContext && !!(client && client.short) && density < 4;
             const showProject = !hideContext && !!project && density < 6;
             // Milestones render their meta + title with " > " separators between adjacent slots
             // ("RSL > Launch > PR Launch"). Regular tasks keep gap-based separation. We track
@@ -506,7 +826,12 @@ function SortableTaskItem({
               return <span key={key} className="-mx-[4px] inline-flex items-center"><Arrowhead dim={task.completed} tone="milestone" faint={isExpiredMilestone} /></span>;
             };
             return taskOrderSlots(taskOrder, showProject, showClient).flatMap((slot, i) => {
-              const metaCls = `font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : 'text-[#656464]'}`;
+              // Use metaColor (which already swaps to milestone-purple when isScheduled)
+              // for ALL meta slots — earlier this path only applied it to the bare client
+              // slot, leaving project + combined "cp" slots stuck on the default grey even
+              // for milestone rows. That made e.g. "NwLvng > Website > Meet About" render
+              // half-grey / half-purple on a milestone with both a client and a project.
+              const metaCls = `font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap ${metaColor}`;
               // Progressive truncation: project name truncates first (density >= 1).
               const projectTruncate = density >= 1 ? 'truncate min-w-0 max-w-[120px]' : '';
               if (slot === 'project' && project && project.name) {
@@ -517,14 +842,16 @@ function SortableTaskItem({
               if (slot === 'client' && client && client.short) {
                 const sep = sepIfMilestone(`sep-c-${i}`);
                 prevHadContent = true;
-                return [sep, <p key={`c-${i}`} className={`font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap ${metaColor}`}>{client.short}</p>].filter(Boolean) as React.ReactNode[];
+                return [sep, <p key={`c-${i}`} className={metaCls}>{client.short}</p>].filter(Boolean) as React.ReactNode[];
               }
               if (slot === 'cp' && client && client.short && project && project.name) {
                 const sep = sepIfMilestone(`sep-cp-${i}`);
                 prevHadContent = true;
                 return [sep, (
                   <p key={`cp-${i}`} className={`${metaCls} ${projectTruncate}`}>
-                    {client.short}<Arrowhead dim={task.completed} />{project.name}
+                    {/* Arrowhead between client and project also picks up the milestone
+                        purple when this row is a milestone, matching the surrounding text. */}
+                    {client.short}<Arrowhead dim={task.completed} tone={isScheduled ? 'milestone' : 'default'} faint={isExpiredMilestone} />{project.name}
                   </p>
                 )].filter(Boolean) as React.ReactNode[];
               }
@@ -671,16 +998,20 @@ function SortableTaskItem({
             return null;
             });
           })()}
-          {/* Trailing hit-zone — a 7px (~1 char) transparent strip immediately AFTER the title.
+          {/* Trailing hit-zone — a slim 4px transparent strip immediately AFTER the title.
               Captures clicks just past the title's last character and forwards them to the
               title span, dispatching a synthetic pointerdown so the existing caret-placement
               handler fires and lands the caret at the end. Lives outside the title span (so it
               isn't part of the contentEditable's text) but inside the same flex row, claiming
-              real layout space — that's why DOM-order hit testing actually picks it up. */}
+              real layout space — that's why DOM-order hit testing actually picks it up.
+              Width matches the inner gap-[4px] between meta slots so the visual gap to the
+              first assignee badge reads as the same beat used everywhere else in the row.
+              Click target is `self-stretch` (full row height = 37px) so this remains an easy
+              target despite being narrow horizontally. */}
           {onRename && (
             <span
               aria-hidden
-              className="cursor-text shrink-0 self-stretch w-[7px]"
+              className="cursor-text shrink-0 self-stretch w-[4px]"
               onPointerDown={(e) => {
                 if (editing) return;
                 e.stopPropagation();
@@ -701,40 +1032,94 @@ function SortableTaskItem({
         </div>
         {/* Assignees hide at density >= 5. */}
         {density < 5 && task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} faint={isExpiredMilestone} />)}
-        {task.deadline && (
-          <>
-            {!isScheduled && <DeadlineArrow dim={task.completed} small={density >= 3} />}
-            {/* Late deadlines render in #FF7171. Both Late AND Today dates are clickable:
-                - double-click → reschedule to tomorrow
-                - alt-click   → reschedule to next week
-                Future / undated dates have no click affordance. */}
-            {(() => {
-              const late = isLateDeadline(task.deadline);
-              // Every dated task is clickable when onReschedule is wired (was: only late+today).
-              // Future tasks now respond to shift+double-click (move date earlier) and double-click
-              // (push to tomorrow) so the user can advance any deadline without opening the editor.
-              const clickable = !!onReschedule;
-              const cls = `font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : isScheduled ? milestonePurpleClass : late ? 'text-[#FF7171]' : isNext ? 'text-[#a8a8a8]' : 'text-white'} ${clickable ? 'cursor-pointer' : ''}`;
-              return (
-                <p
-                  className={cls}
-                  onClick={clickable ? (e) => { if (e.altKey) { e.stopPropagation(); onReschedule!('nextWeek'); } } : undefined}
-                  onDoubleClick={clickable ? (e) => {
-                    e.stopPropagation();
-                    // shift+double-click → move date one day EARLIER (tomorrow → today, etc.)
-                    if (e.shiftKey) { onReschedule!('shiftBack'); return; }
-                    // overdue tasks get promoted to today (was: tomorrow); on-time / future tasks
-                    // get pushed to tomorrow (the legacy "snooze one day" behavior).
-                    if (late) onReschedule!('today');
-                    else onReschedule!('tomorrow');
-                  } : undefined}
-                  title={clickable ? 'Double-click → ' + (late ? 'today' : 'tomorrow') + ' • Shift+double-click → one day earlier • Alt+click → next week' : undefined}
-                >
-                  {density >= 2 ? formatDeadlineShort(task.deadline) : formatDeadline(task.deadline)}
-                </p>
-              );
-            })()}
-          </>
+        {(() => {
+          // Three render cases:
+          //   1. Has a real deadline → DeadlineArrow + formatted date (existing behavior)
+          //   2. No deadline, NOT a milestone, AND landed in Today or Tomorrow →
+          //      grey "today" / "tomorrow" word with NO arrow. Acts as an implicit
+          //      deadline label so the user can see at a glance which of the
+          //      undated tasks belong to which day-band.
+          //   3. Anything else → render nothing (e.g. an undated Next-section task).
+          // All three cases share the same click affordance:
+          //   double-click → push one day forward (today → tomorrow; tomorrow → next)
+          //   shift+double-click → push one day backward
+          //   alt-click → next week
+          // Calling onReschedule on an undated task stamps a real deadline + moves
+          // its section accordingly, so the implicit label "becomes" a real one.
+          const hasDeadline = !!task.deadline;
+          const isSectionFallback = !hasDeadline && !isScheduled && (task.section === 'today' || task.section === 'tomorrow');
+          if (!hasDeadline && !isSectionFallback) return null;
+          const late = hasDeadline ? isLateDeadline(task.deadline) : false;
+          const clickable = !!onReschedule;
+          // Color rules (in priority order):
+          //   completed → #474747 (faded body color)
+          //   no-deadline section fallback → #656464 (muted grey)
+          //   milestone → milestone purple
+          //   late → red
+          //   next-section → dim grey-white
+          //   default → white
+          const colorCls = task.completed ? 'text-[#474747]'
+            : isSectionFallback ? 'text-[#656464]'
+            : isScheduled ? milestonePurpleClass
+            : late ? 'text-[#FF7171]'
+            : isNext ? 'text-[#a8a8a8]'
+            : 'text-white';
+          const cls = `font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] whitespace-nowrap ${colorCls} ${clickable ? 'cursor-pointer' : ''}`;
+          return (
+            <>
+              {hasDeadline && !isScheduled && <DeadlineArrow dim={task.completed} small={density >= 3} />}
+              <p
+                className={cls}
+                onClick={clickable ? (e) => { if (e.altKey) { e.stopPropagation(); onReschedule!('nextWeek'); } } : undefined}
+                onDoubleClick={clickable ? (e) => {
+                  e.stopPropagation();
+                  // TWO different behaviors depending on whether the task is dated:
+                  //
+                  //   Dated task → push the DEADLINE one day forward / back. Repeated
+                  //     double-clicks march the date along; section auto-tracks the
+                  //     new date. Late tasks first catch up to today, then march.
+                  //
+                  //   Undated task → walk the SECTION forward / back (today → tomorrow
+                  //     → next, or the reverse). Never auto-promotes the task into a
+                  //     dated task — the user has to add a deadline explicitly.
+                  //     Clamps at the ends of the sequence.
+                  if (isSectionFallback) {
+                    if (e.shiftKey) onReschedule!('sectionBack');
+                    else onReschedule!('sectionForward');
+                    return;
+                  }
+                  if (e.shiftKey) { onReschedule!('shiftBack'); return; }
+                  if (late) onReschedule!('today');
+                  else onReschedule!('shiftForward');
+                } : undefined}
+                title={clickable ? (isSectionFallback
+                  ? 'Double-click → push to next section • Shift+double-click → previous section'
+                  : 'Double-click → push one day later • Shift+double-click → one day earlier • Alt+click → next week') : undefined}
+              >
+                {hasDeadline
+                  ? (density >= 2 ? formatDeadlineShort(task.deadline) : formatDeadline(task.deadline))
+                  : (task.section === 'today' ? 'Today' : 'Tomorrow')}
+              </p>
+            </>
+          );
+        })()}
+        {/* "Has Focus content" indicator. Shows when the task (or its parent project) has any
+            brief / notes / sub-tasks / reference images attached. Always visible (not hover-
+            reveal) so the eye can scan the column for "what has stuff" at a glance. Click jumps
+            into Focus mode with this task selected, so its content opens up immediately.
+            -mt-[2px] lifts the icon 2px so it sits with the title cap-height rather than the
+            row centerline — visually quieter alongside the other inline meta items. */}
+        {!isDragOverlay && hasFocusContent && onOpenFocus && (
+          <button
+            type="button"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => { e.stopPropagation(); (e.currentTarget as HTMLButtonElement).blur(); onOpenFocus(); }}
+            className="p-1 -mt-[2px] text-[#5e5e5e] hover:text-white transition-colors"
+            aria-label="Open in Focus view"
+            title="Open in Focus"
+          >
+            <FileText size={12} />
+          </button>
         )}
         {/* + sits inline right after the task info (assignees / deadline) so it always hugs the content.
             We blur() the button immediately so its focus state doesn't compete with the new task's
@@ -769,12 +1154,11 @@ function SortableTaskItem({
 }
 
 function SectionHeader({ title, onAdd }: { title: string; onAdd?: () => void }) {
-  // "Today" is the highlighted section across the app, so its header reads white.
-  // Other section headers (Inbox, Next, Milestones, etc.) stay muted grey.
-  const color = title === 'Today' ? 'text-white' : 'text-[#656464]';
+  // All section headers (Today, Inbox, Next, Milestones, …) render in the muted
+  // grey-text tone — they're navigational labels, not highlighted state.
   return (
     <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px]">
-      <p className={`font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic ${color} text-[14px] whitespace-nowrap`}>{title}</p>
+      <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[#656464] text-[14px] whitespace-nowrap">{title}</p>
       {onAdd && <AddPlus onClick={onAdd} />}
     </div>
   );
@@ -793,19 +1177,24 @@ function SectionDroppable({ id, children }: { id: string; children: React.ReactN
 function BottomBar({ mode, onSetMode, onAdd }: { mode: AppMode; onSetMode: (m: AppMode) => void; onAdd: () => void }) {
   const iconClass = (active: boolean) => `p-2 rounded-full transition-colors ${active ? 'text-white' : 'text-[#656464] hover:text-white'}`;
   return (
-    <div className="fixed bottom-0 left-0 right-0 h-[109px] bg-[#232323] grid grid-cols-3 items-center px-14 z-40">
-      {/* Left column: three view icons. */}
-      <div className="flex flex-row gap-10 items-center justify-self-start">
+    <div className="fixed bottom-0 left-0 right-0 h-[76px] bg-[#232323] flex flex-row items-center justify-between pl-[17px] pr-[35px] z-40">
+      {/* Left cluster: four view icons followed by the + add-task button. The 17px left
+          gutter makes the Dashboard icon's geometric center (17 + p-2 padding + half of
+          the 22px icon = 36) line up with the task-row checkbox center above (31px row
+          padding + half of the 12px checkbox = 37) — within a sub-pixel of vertical
+          alignment with the leftmost column's checkboxes. Settings stays at the standard
+          35px right gutter. */}
+      <div className="flex flex-row gap-10 items-center">
+        <button onClick={() => onSetMode('focus')} className={iconClass(mode === 'focus')}><LayoutDashboard size={22} /></button>
         <button onClick={() => onSetMode('dashboard')} className={iconClass(mode === 'dashboard')}><List size={22} /></button>
         <button onClick={() => onSetMode('projectView')} className={iconClass(mode === 'projectView')}><FolderTree size={22} /></button>
         <button onClick={() => onSetMode('calendar')} className={iconClass(mode === 'calendar')}><CalendarIcon size={22} /></button>
+        <motion.button onClick={onAdd} whileHover={{ scale: 1.06 }} whileTap={{ scale: 0.94 }} className="size-[27px] rounded-full bg-[#7363FF] flex items-center justify-center shadow-lg">
+          <Plus size={16} color="#232323" strokeWidth={2.5} />
+        </motion.button>
       </div>
-      {/* Center column: + add-task button, dead-centered in the bottom bar. */}
-      <motion.button onClick={onAdd} whileHover={{ scale: 1.06 }} whileTap={{ scale: 0.94 }} className="size-[27px] rounded-full bg-[#7363FF] flex items-center justify-center shadow-lg justify-self-center">
-        <Plus size={16} color="#232323" strokeWidth={2.5} />
-      </motion.button>
-      {/* Right column: settings (3-sliders icon). */}
-      <button onClick={() => onSetMode('settings')} className={`${iconClass(mode === 'settings')} justify-self-end`}><SettingsIcon size={22} /></button>
+      {/* Settings — pinned to the right edge with the same 35px gutter. */}
+      <button onClick={() => onSetMode('settings')} className={iconClass(mode === 'settings')}><SettingsIcon size={22} /></button>
     </div>
   );
 }
@@ -1013,11 +1402,26 @@ function AddModal({
                 <select value={list} onChange={(e) => setList(e.target.value as ListId)} className="flex-1 bg-[#1f1f1f] rounded-md px-3 py-2 text-white text-[14px] outline-none">
                   {LISTS.map((l) => <option key={l} value={l}>{LIST_TITLES[l]}</option>)}
                 </select>
-                <select value={section} onChange={(e) => setSection(e.target.value as SectionId)} className="flex-1 bg-[#1f1f1f] rounded-md px-3 py-2 text-white text-[14px] outline-none">
-                  <option value="inbox">Inbox</option>
-                  <option value="today">Today</option>
-                  <option value="next">Next</option>
-                </select>
+              </div>
+              {/* Section toggle — Today / Tomorrow / Next as inline pills (Inbox stays a less-
+                  prominent option since most new tasks land in one of the three time buckets).
+                  Active pill uses the brand purple, idle pills are muted. */}
+              <div className="flex gap-2">
+                {([
+                  ['today', 'Today'],
+                  ['tomorrow', 'Tomorrow'],
+                  ['next', 'Next'],
+                  ['inbox', 'Inbox'],
+                ] as const).map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setSection(key)}
+                    className={`flex-1 px-3 py-2 text-[14px] rounded-md transition-colors ${section === key ? 'bg-[#7363FF] text-white' : 'bg-[#1f1f1f] text-[#888] hover:text-white'}`}
+                  >
+                    {label}
+                  </button>
+                ))}
               </div>
               <div>
                 <div className="text-[#888] text-[12px] mb-1">Assignees</div>
@@ -1125,6 +1529,516 @@ function TrashConfirmModal({
             className={`px-4 py-2 rounded-md text-[14px] ${armed ? 'bg-[#FF7171] text-white hover:bg-[#ff5555]' : 'bg-[#3a3a3a] text-[#666] cursor-not-allowed'}`}
           >
             Delete
+          </button>
+        </div>
+      </motion.div>
+    </motion.div>
+  );
+}
+
+function SortableSubtaskRow({
+  sub,
+  storageKey,
+  isAnyDragging,
+  newId,
+  onToggle,
+  onRename,
+  onDiscardIfEmpty,
+  onAddAfter,
+  onDelete,
+}: {
+  sub: { id: string; title: string; completed: boolean };
+  storageKey: string;
+  isAnyDragging: boolean;
+  newId: string | null;
+  onToggle: () => void;
+  onRename: (v: string) => void;
+  onDiscardIfEmpty: () => void;
+  onAddAfter: () => void;
+  onDelete: () => void;
+}) {
+  // dnd-kit sortable on each subtask row. id is namespaced so it can't collide with
+  // task / project sortable ids elsewhere in the app, and `data` carries the type +
+  // storage key the App's handleDragEnd checks for.
+  const sortableId = `subtask:${storageKey}:${sub.id}`;
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: sortableId,
+    data: { type: 'subtask', key: storageKey, subId: sub.id },
+  });
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition: isAnyDragging ? `transform ${MOTION.base}ms ${MOTION.easeOut}` : 'none',
+    opacity: isDragging ? 0.4 : 1,
+  };
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      {...attributes}
+      {...listeners}
+      className="group relative h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px] hover:bg-white/[0.03] cursor-grab active:cursor-grabbing"
+    >
+      <div onPointerDown={(e) => e.stopPropagation()}>
+        <TaskCheckbox completed={sub.completed} onToggle={onToggle} />
+      </div>
+      <EditableText
+        value={sub.title}
+        onChange={onRename}
+        autoFocus={sub.id === newId}
+        onDiscardIfEmpty={onDiscardIfEmpty}
+        onEnter={onAddAfter}
+        placeholder="New Sub-Task"
+        className={`font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap ${sub.completed ? 'text-[#474747]' : 'text-white'}`}
+      />
+      {/* Hover-reveal "+" → spawn a new sub-task immediately after this one. Lives inline
+          alongside the row so it sits in tab-order with the title. */}
+      <button
+        type="button"
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => { e.stopPropagation(); onAddAfter(); }}
+        className="p-1 opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity"
+        aria-label="Add sub-task below"
+      >
+        <Plus size={12} />
+      </button>
+      <button
+        type="button"
+        onPointerDown={(e) => e.stopPropagation()}
+        onClick={(e) => { e.stopPropagation(); onDelete(); }}
+        className="ml-auto -mr-[22px] p-1 opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity"
+        aria-label="Delete sub-task"
+      >
+        <Trash2 size={14} />
+      </button>
+    </div>
+  );
+}
+
+// CachedImage — renders an <img> backed by the IndexedDB cache. On the first view of a given
+// URL we kick off a background fetch + cache write, then swap the src to the resulting object
+// URL. Subsequent views (within the same session) start with the object URL on the very first
+// paint via the synchronous in-memory lookup, so there's no flicker. `decoding="async"` keeps
+// large WebP decodes off the main thread, which fixes the scroll-stutter from rendering a
+// dozen images at once.
+function CachedImage({
+  src, alt, className, style, loading,
+}: {
+  src: string;
+  alt?: string;
+  className?: string;
+  style?: React.CSSProperties;
+  loading?: 'lazy' | 'eager';
+}) {
+  const initial = getCachedImageUrlSync(src) ?? src;
+  const [resolved, setResolved] = useState<string>(initial);
+  useEffect(() => {
+    let cancelled = false;
+    setResolved(getCachedImageUrlSync(src) ?? src);
+    if (src && src.startsWith('http')) {
+      getCachedImageUrl(src).then((u) => {
+        if (!cancelled && u !== src) setResolved(u);
+      });
+    }
+    return () => { cancelled = true; };
+  }, [src]);
+  return (
+    <img
+      src={resolved}
+      alt={alt ?? ''}
+      className={className}
+      style={style}
+      loading={loading ?? 'lazy'}
+      decoding="async"
+    />
+  );
+}
+
+function FocusDamViewer({
+  images,
+  tileView,
+  oneUpImageId,
+  onOneUpToggle,
+  onDelete,
+  onToggleFavorite,
+}: {
+  images: { id: string; dataUrl: string; filename: string; width: number; height: number; favorited?: boolean; ownerKey: string | null }[];
+  tileView: 'zoom' | 'sm' | 'md' | 'lg';
+  oneUpImageId: string | null;
+  onOneUpToggle: (id: string) => void;
+  onDelete: (ownerKey: string, id: string) => void;
+  onToggleFavorite: (ownerKey: string, id: string) => void;
+}) {
+  // Track the container's actual width AND height so the zoom-fit math knows the
+  // exact box it has to fill. useLayoutEffect measures synchronously BEFORE the
+  // browser paints, so the first paint already has correct dimensions — no
+  // "starts tiny then resizes" flash on mount or mode change. Dependencies
+  // include tileView + oneUpImageId because the ref attaches to a different
+  // div in each branch (each return statement renders its own container div).
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const [dims, setDims] = useState({ width: 0, height: 0 });
+  useLayoutEffect(() => {
+    if (!containerRef.current) return;
+    const el = containerRef.current;
+    const update = () => setDims({ width: el.clientWidth, height: el.clientHeight });
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [tileView, oneUpImageId]);
+  if (images.length === 0) {
+    return <div className="text-[#656464] text-[14px]">No images yet — drag images onto a drop zone in the Information column.</div>;
+  }
+  // 1-up inline view — when an image is single-clicked, it expands to fill the column. Click
+  // again (or hit Esc, handled by App's keydown effect) to collapse back to the active grid /
+  // tile view. Stays inline; no fullscreen lightbox modal.
+  if (oneUpImageId) {
+    const img = images.find((i) => i.id === oneUpImageId);
+    if (img) {
+      return (
+        <div ref={containerRef} className="w-full">
+          <div className="relative group inline-block cursor-zoom-out" onClick={() => onOneUpToggle(img.id)}>
+            <CachedImage
+              src={resolveImageSrc(img)}
+              alt={img.filename}
+              className="block max-w-full max-h-[80vh] w-auto h-auto"
+              loading="eager"
+            />
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); if (img.ownerKey) onToggleFavorite(img.ownerKey, img.id); }}
+              className={`absolute top-1 left-1 p-1 bg-black/40 hover:bg-black/70 opacity-0 group-hover:opacity-100 transition-opacity ${img.favorited ? 'text-[#FF7171]' : 'text-white'}`}
+              aria-label={img.favorited ? 'Unfavorite image' : 'Favorite image'}
+            >
+              <Heart size={12} fill={img.favorited ? 'currentColor' : 'none'} />
+            </button>
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); if (img.ownerKey) onDelete(img.ownerKey, img.id); }}
+              className="absolute top-1 right-1 p-1 bg-black/40 opacity-0 group-hover:opacity-100 text-white hover:bg-black/70 transition-opacity"
+              aria-label="Delete image"
+            >
+              <Trash2 size={12} />
+            </button>
+          </div>
+        </div>
+      );
+    }
+  }
+  const ZOOM_GAP = 4;
+  // Tile (justified-gallery / mosaic) layout. Each tile gets flex-grow + flex-basis tied to
+  // its aspect ratio so rows are uniform-height and aspect-preserving.
+  if (tileView === 'zoom') {
+    // Fit-all mode. Find the LARGEST rowH such that the actual flex-wrap
+    // layout fits inside the container's box (w × h). Closed-form formulas
+    // (rowH = sqrt(w·h/ΣAR)) ignore inter-row gaps AND the discrete jumps
+    // that happen when an image wraps to a new row, so they over- or
+    // under-shoot. A simple iterative refit oscillates between two valid
+    // row counts (e.g. "2 rows of tall imgs" vs "3 rows of short imgs"),
+    // landing on whichever side the iteration ended on.
+    //
+    // Binary search is bulletproof: total-height-as-a-function-of-rowH is
+    // (mostly) monotonic increasing — bigger images → wider items → fewer
+    // per row → more rows → more total height. We search for the max rowH
+    // that still satisfies (rows · rowH + (rows - 1) · gap) ≤ h.
+    const w = dims.width || 1;
+    const h = dims.height || 1;
+    // simulateRows: how many rows does a given rowH produce, given flex-wrap
+    // semantics? An item starts a new row when adding it (plus the inter-
+    // item gap) would push the row past container width.
+    const simulateRows = (rowH: number): number => {
+      let rows = 1;
+      let rowW = 0;
+      for (const img of images) {
+        const ar = (img.width || 1) / (img.height || 1);
+        const imgW = ar * rowH;
+        if (rowW === 0) rowW = imgW;
+        else if (rowW + ZOOM_GAP + imgW <= w) rowW += ZOOM_GAP + imgW;
+        else { rows++; rowW = imgW; }
+      }
+      return rows;
+    };
+    // Binary search for the maximum rowH that fits. 30 iterations on a
+    // [20, h] range gives sub-pixel precision (h / 2^30 « 1px).
+    let lo = 20;
+    let hi = h;
+    for (let i = 0; i < 30; i++) {
+      const mid = (lo + hi) / 2;
+      const rows = simulateRows(mid);
+      const totalH = rows * mid + Math.max(0, rows - 1) * ZOOM_GAP;
+      if (totalH <= h) lo = mid;
+      else hi = mid;
+    }
+    const rowH = Math.max(20, lo);
+    return (
+      <div
+        ref={containerRef}
+        className="flex flex-row flex-wrap content-start h-full overflow-hidden"
+        style={{ gap: `${ZOOM_GAP}px` }}
+      >
+        {images.map((img) => {
+          const ar = (img.width || 1) / (img.height || 1);
+          return (
+            <Fragment key={img.id}>
+              <div
+                onClick={() => onOneUpToggle(img.id)}
+                className="relative group bg-[#1f1f1f] overflow-hidden cursor-zoom-in"
+                style={{ height: rowH, flexGrow: ar, flexBasis: ar * rowH, minWidth: Math.min(40, ar * rowH) }}
+              >
+                <CachedImage
+                  src={resolveImageSrc(img)}
+                  alt={img.filename}
+                  className="block w-full h-full object-cover"
+                />
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); if (img.ownerKey) onToggleFavorite(img.ownerKey, img.id); }}
+                  className={`absolute top-1 left-1 p-1 bg-black/40 transition-opacity ${img.favorited ? 'opacity-100 text-[#FF7171]' : 'opacity-0 group-hover:opacity-100 text-white hover:bg-black/70'}`}
+                  aria-label={img.favorited ? 'Unfavorite image' : 'Favorite image'}
+                >
+                  <Heart size={12} fill={img.favorited ? 'currentColor' : 'none'} />
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); if (img.ownerKey) onDelete(img.ownerKey, img.id); }}
+                  className="absolute top-1 right-1 p-1 bg-black/40 opacity-0 group-hover:opacity-100 text-white hover:bg-black/70 transition-opacity"
+                  aria-label="Delete image"
+                >
+                  <Trash2 size={12} />
+                </button>
+              </div>
+            </Fragment>
+          );
+        })}
+        {Array.from({ length: 4 }).map((_, i) => (
+          <span key={`phantom-${i}`} className="grow-[1000]" aria-hidden />
+        ))}
+      </div>
+    );
+  }
+  // Large = one image per row, full column width, with a viewport-height cap so super-tall
+  // skinny portraits don't blow up the row. Each image scales to fill the column width up
+  // to its natural size, and clamps at 70vh in height — wider images letterbox sideways.
+  if (tileView === 'lg') {
+    return (
+      <div ref={containerRef} className="flex flex-col gap-1 pr-1">
+        {images.map((img) => (
+          <Fragment key={img.id}>
+            <div className="relative group flex flex-row justify-start" onClick={() => onOneUpToggle(img.id)}>
+              {/* Inner wrapper sits at image-rendered-size so the heart / trash buttons hug
+                  the actual image (not the centering container's full width). */}
+              <div className="relative inline-block cursor-zoom-in">
+                <CachedImage
+                  src={resolveImageSrc(img)}
+                  alt={img.filename}
+                  className="block max-w-full max-h-[70vh] w-auto h-auto"
+                />
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); if (img.ownerKey) onToggleFavorite(img.ownerKey, img.id); }}
+                  className={`absolute top-1 left-1 p-1 bg-black/40 hover:bg-black/70 opacity-0 group-hover:opacity-100 transition-opacity ${img.favorited ? 'text-[#FF7171]' : 'text-white'}`}
+                  aria-label={img.favorited ? 'Unfavorite image' : 'Favorite image'}
+                >
+                  <Heart size={12} fill={img.favorited ? 'currentColor' : 'none'} />
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); if (img.ownerKey) onDelete(img.ownerKey, img.id); }}
+                  className="absolute top-1 right-1 p-1 bg-black/40 opacity-0 group-hover:opacity-100 text-white hover:bg-black/70 transition-opacity"
+                  aria-label="Delete image"
+                >
+                  <Trash2 size={12} />
+                </button>
+              </div>
+            </div>
+          </Fragment>
+        ))}
+      </div>
+    );
+  }
+  // Small / Medium — uniform-height rows, justified-gallery widths.
+  // No max-height / overflow here: the parent CustomScroll wrapper owns the
+  // scroll. Container is `h-full` so the wrapping rows can flow downward and
+  // the CustomScroll's pill takes over once they overflow.
+  const rowH = tileView === 'sm' ? 120 : 240;
+  return (
+    <div ref={containerRef} className="flex flex-row flex-wrap gap-1 content-start">
+      {images.map((img) => {
+        const ar = (img.width || 1) / (img.height || 1);
+        return (
+          <Fragment key={img.id}>
+            <div
+              onClick={() => onOneUpToggle(img.id)}
+              className="relative group bg-[#1f1f1f] overflow-hidden cursor-zoom-in"
+              style={{ height: rowH, flexGrow: ar, flexBasis: ar * rowH, minWidth: Math.min(60, ar * rowH) }}
+            >
+              <CachedImage
+                src={resolveImageSrc(img)}
+                alt={img.filename}
+                className="block w-full h-full object-cover"
+              />
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); if (img.ownerKey) onToggleFavorite(img.ownerKey, img.id); }}
+                className={`absolute top-1 left-1 p-1 bg-black/40 hover:bg-black/70 opacity-0 group-hover:opacity-100 transition-opacity ${img.favorited ? 'text-[#FF7171]' : 'text-white'}`}
+                aria-label={img.favorited ? 'Unfavorite image' : 'Favorite image'}
+              >
+                <Heart size={12} fill={img.favorited ? 'currentColor' : 'none'} />
+              </button>
+              <button
+                type="button"
+                onClick={(e) => { e.stopPropagation(); if (img.ownerKey) onDelete(img.ownerKey, img.id); }}
+                className="absolute top-1 right-1 p-1 bg-black/40 opacity-0 group-hover:opacity-100 text-white hover:bg-black/70 transition-opacity"
+                aria-label="Delete image"
+              >
+                <Trash2 size={12} />
+              </button>
+            </div>
+          </Fragment>
+        );
+      })}
+      {Array.from({ length: 4 }).map((_, i) => (
+        <span key={`phantom-${i}`} className="grow-[1000]" aria-hidden />
+      ))}
+    </div>
+  );
+}
+
+// Project-block drop target for project view. Wraps the header + task list so dragging a
+// task onto either lands the task as a child of this project. Inline highlight on hover lets
+// the user see the drop target before releasing. The actual reparent happens in handleDragEnd
+// via the data.type === 'proj2Project' branch.
+function Proj2ProjectDropZone({ projectId, listId, children }: { projectId: string; listId: ListId; children: React.ReactNode }) {
+  const { setNodeRef, isOver } = useDroppable({
+    id: `proj2-project:${listId}:${projectId}`,
+    data: { type: 'proj2Project', projectId, listId },
+  });
+  return (
+    <div ref={setNodeRef} className={isOver ? 'bg-white/[0.04] rounded-md transition-colors' : 'transition-colors'}>
+      {children}
+    </div>
+  );
+}
+
+function FocusDropZone({ label, sublabel, onDropFiles }: { label: string; sublabel: string; onDropFiles: (files: FileList) => void }) {
+  // Native HTML5 drag-and-drop for image files. We track `over` so the dashed border
+  // brightens while a drag is hovering. preventDefault on dragOver is the magic that
+  // lets the drop event fire — without it the browser navigates to the dropped file.
+  const [over, setOver] = useState(false);
+  return (
+    <label
+      onDragOver={(e) => { e.preventDefault(); if (!over) setOver(true); }}
+      onDragEnter={(e) => { e.preventDefault(); setOver(true); }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setOver(false);
+        if (e.dataTransfer.files?.length) onDropFiles(e.dataTransfer.files);
+      }}
+      className={`flex-1 flex flex-col items-center justify-center min-h-[80px] rounded-md border border-dashed cursor-pointer transition-colors ${over ? 'border-[#7363FF] bg-[#7363FF]/[0.08]' : 'border-[#3a3a3a] bg-[#1f1f1f] hover:border-[#5e5e5e]'}`}
+    >
+      <input
+        type="file"
+        accept="image/*"
+        multiple
+        className="hidden"
+        onChange={(e) => { if (e.target.files?.length) onDropFiles(e.target.files); e.currentTarget.value = ''; }}
+      />
+      <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[13px] text-white">{label}</p>
+      <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[11px] text-[#656464]">{sublabel}</p>
+    </label>
+  );
+}
+
+function ResourceDeleteModal({
+  resource,
+  taskCount,
+  otherResources,
+  onConfirm,
+  onClose,
+}: {
+  resource: { id: string; name: string; short: string };
+  taskCount: number;
+  otherResources: { id: string; name: string; short: string }[];
+  onConfirm: (reassignToShort: string | null) => void;
+  onClose: () => void;
+}) {
+  // Two-step flow: pick reassignment target (or skip), then type DELETE to arm the red button.
+  // Default behavior is "no reassignment" — selecting a target is opt-in.
+  const [reassignTo, setReassignTo] = useState<string | null>(null);
+  const [typed, setTyped] = useState('');
+  const armed = typed.trim().toUpperCase() === 'DELETE';
+  const reassignTarget = reassignTo ? otherResources.find((r) => r.short === reassignTo) : null;
+  return (
+    <motion.div
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60"
+      onClick={onClose}
+    >
+      <motion.div
+        initial={{ scale: 0.95, y: 10 }}
+        animate={{ scale: 1, y: 0 }}
+        exit={{ scale: 0.95, y: 10 }}
+        transition={{ type: 'spring', stiffness: 400, damping: 28 }}
+        onClick={(e) => e.stopPropagation()}
+        className="bg-[#2a2a2a] rounded-2xl border border-[#3a3a3a] w-[480px] p-6 shadow-2xl"
+      >
+        <div className="flex items-center gap-2 mb-3">
+          <Trash2 size={16} className="text-[#FF7171]" />
+          <p className="text-white text-[14px]">Delete resource "{resource.name}"?</p>
+        </div>
+        <p className="text-[#888] text-[13px] mb-4">
+          {taskCount > 0
+            ? <>{resource.name} is assigned to <span className="text-white">{taskCount}</span> {taskCount === 1 ? 'task' : 'tasks'}. Reassign them to another resource, or leave them unassigned.</>
+            : <>{resource.name} isn't assigned to any tasks.</>}
+        </p>
+        {taskCount > 0 && otherResources.length > 0 && (
+          <div className="mb-4">
+            <p className="text-[#888] text-[12px] mb-2 uppercase tracking-wider">Reassign tasks to</p>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => setReassignTo(null)}
+                className={`px-3 py-1.5 rounded-md text-[13px] transition-colors ${reassignTo === null ? 'bg-[#3a3a3a] text-white ring-1 ring-[#7363FF]' : 'bg-[#1f1f1f] text-[#888] hover:text-white'}`}
+              >
+                Leave unassigned
+              </button>
+              {otherResources.map((r) => (
+                <button
+                  key={r.id}
+                  type="button"
+                  onClick={() => setReassignTo(r.short)}
+                  className={`px-3 py-1.5 rounded-md text-[13px] transition-colors ${reassignTo === r.short ? 'bg-[#3a3a3a] text-white ring-1 ring-[#7363FF]' : 'bg-[#1f1f1f] text-[#888] hover:text-white'}`}
+                >
+                  {r.name || r.short}{r.short ? <span className="text-[#666] ml-1">({r.short})</span> : null}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        <p className="text-[#888] text-[13px] mb-2">
+          Type <span className="text-white font-bold">DELETE</span> to confirm.
+        </p>
+        <input
+          autoFocus
+          value={typed}
+          onChange={(e) => setTyped(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && armed) onConfirm(reassignTo);
+            if (e.key === 'Escape') onClose();
+          }}
+          placeholder="DELETE"
+          className="w-full bg-[#1f1f1f] rounded-md px-3 py-2 text-white text-[14px] outline-none focus:ring-1 focus:ring-[#FF7171] mb-4 tracking-wider"
+        />
+        <div className="flex gap-2 justify-end">
+          <button onClick={onClose} className="px-4 py-2 rounded-md text-[14px] text-[#888] hover:text-white">Cancel</button>
+          <button
+            disabled={!armed}
+            onClick={() => onConfirm(reassignTo)}
+            className={`px-4 py-2 rounded-md text-[14px] ${armed ? 'bg-[#FF7171] text-white hover:bg-[#ff5555]' : 'bg-[#3a3a3a] text-[#666] cursor-not-allowed'}`}
+          >
+            {reassignTarget ? `Reassign & Delete` : 'Delete'}
           </button>
         </div>
       </motion.div>
@@ -1598,7 +2512,7 @@ function ProjectViewMode({
   };
 
   return (
-    <div className="pt-[106px] pb-[140px] flex gap-0">
+    <div className="pt-[106px] pb-[106px] flex gap-0">
       <div className="flex-1 min-w-[280px]">
         <Header title="Resources" onAdd={onAddPerson} />
         {people.map((p) => (
@@ -1636,10 +2550,12 @@ function CalendarDayDroppable({ id, children, isEmpty, className = '' }: { id: s
 
 function CalendarColumnDroppable({ date, children }: { date: string; children: React.ReactNode }) {
   const { setNodeRef } = useDroppable({ id: `col:${date}`, data: { type: 'column', date } });
+  // h-full + flex-col + min-h-0 + overflow-hidden so each column can host its own
+  // independently-scrolling content area (the caller provides the inner structure:
+  // a shrink-0 day-name row plus a flex-1 overflow-y-auto wrapper for the bands).
   return (
-    <div ref={setNodeRef} className="min-w-[200px] border-r border-[#333333] last:border-r-0 flex flex-col">
+    <div ref={setNodeRef} className="min-w-[200px] border-r border-[#333333] last:border-r-0 flex flex-col h-full min-h-0 overflow-hidden">
       {children}
-      <div className="flex-1 min-h-[100px]" />
     </div>
   );
 }
@@ -1689,12 +2605,15 @@ function CalendarCardBody({ task, projects, clients, taskOrder = 'ptc' }: { task
   );
 }
 
-function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onDelete, onEdit, onQuickEdit, onAddSibling, isAnyDragging, dimmed, displacementOffset = 0, insertionGap = 0, taskOrder = 'ptc' }: {
+function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onDelete, onEdit, onQuickEdit, onAddSibling, isAnyDragging, dimmed, categoryDimmed, displacementOffset = 0, insertionGap = 0, taskOrder = 'ptc' }: {
   task: Task; cellId: string; projects: Project[]; clients: Client[];
   onToggle: () => void; onRename: (title: string) => void; onDelete: () => void; onEdit: () => void;
   onQuickEdit?: () => void;
   onAddSibling?: () => void;
   isAnyDragging: boolean; dimmed?: boolean;
+  // Cards in OTHER bands than the active drag's source category get muted so the drag's
+  // landing options stay visually loud. Same flavor as the completed-task gray, just brighter.
+  categoryDimmed?: boolean;
   // Same displacement system the list view uses: cards under the dragged item shift to make room.
   displacementOffset?: number; insertionGap?: number;
   taskOrder?: TaskOrder;
@@ -1707,8 +2626,13 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
   const isScheduled = task.type === 'scheduled';
   const isNext = task.section === 'next' || task.section === 'tomorrow';
   const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID;
-  const titleColor = task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : isNext ? 'text-[#a8a8a8]' : 'text-white';
-  const metaColor = isScheduled ? 'text-[#8465ff]' : 'text-[#656464]';
+  // Category-dim color: 5% brighter than the completed-task #383838 (rgb 56 → 69 = #454545).
+  // Wins over every other state — when the user is dragging across categories, ALL non-source
+  // cards drop to this single muted gray regardless of whether they're scheduled, completed,
+  // next, or normal.
+  const DIM = 'text-[#454545]';
+  const titleColor = categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : isNext ? 'text-[#a8a8a8]' : 'text-white';
+  const metaColor = categoryDimmed ? DIM : isScheduled ? 'text-[#8465ff]' : 'text-[#656464]';
   // Source-collapse: outer wrapper uses max-height (CSS can't transition from auto, but it CAN
   // transition from a fixed max-height to 0) + marginBottom so the column reflows when this card
   // becomes the active drag.
@@ -1722,30 +2646,38 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
     <motion.div
       ref={setNodeRef}
       style={style}
-      className={`relative mx-[6px] mb-[4px] group h-[55px] ${task.completed ? '' : 'bg-white/[0.03]'} ${dimmed ? 'opacity-60' : ''}`}
+      className={`relative mx-[6px] mb-[4px] group h-[55px] bg-white/[0.03] ${dimmed ? 'opacity-60' : ''}`}
       animate={{ opacity: isDragging ? 0 : 1 }}
       transition={{ opacity: { duration: 0.12, ease: 'easeOut' } }}
     >
-      <div onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} onContextMenu={(e) => { if (onQuickEdit) { e.preventDefault(); e.stopPropagation(); onQuickEdit(); } }} {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing pl-[10px] pr-[10px] py-[6px] flex flex-row items-start gap-[10px] overflow-hidden">
-        {!isScheduled && (
-          <div onPointerDown={(e) => e.stopPropagation()} className="shrink-0 flex items-center justify-center pt-[3px]">
-            <TaskCheckbox completed={task.completed} onToggle={onToggle} />
-          </div>
-        )}
-        <div className="flex-1 min-w-0 flex flex-col gap-[2px]">
-          {/* Calendar cards always render Title on line 1, all other meta on line 2 — taskOrder
-              setting doesn't apply here. Line 1: title only. Line 2: client › project,
-              assignees, deadline, + button. */}
-          <div className="flex flex-row items-center gap-[4px]">
+      <div onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} onContextMenu={(e) => { if (onQuickEdit) { e.preventDefault(); e.stopPropagation(); onQuickEdit(); } }} {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing px-[10px] py-[6px] flex flex-col justify-center gap-[2px] overflow-hidden h-full">
+        {/* Calendar cards always render Title on line 1, all other meta on line 2 — taskOrder
+            setting doesn't apply here. Line 1: checkbox + title. Line 2: client › project,
+            assignees, deadline, + button. Checkbox is INLINE with the title so it stays aligned
+            with the title cap-height when the whole content block is vertically centered. */}
+        <div className="flex flex-row items-center gap-[10px]">
+          {!isScheduled && (
+            <div onPointerDown={(e) => e.stopPropagation()} className="shrink-0 flex items-center justify-center">
+              <TaskCheckbox completed={task.completed} onToggle={onToggle} />
+            </div>
+          )}
+          <div className="flex flex-row items-center gap-[4px] min-w-0">
             <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleColor}`}>{task.title}</span>
           </div>
-          <div className="flex flex-row items-center gap-[6px]">
-            {/* When completed, all line-2 meta drops to the same faint #383838 — visually quieted to match the title. */}
-            {client && project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : 'text-[#656464]'}`}>{client.short}<Arrowhead dim={task.completed} />{project.name}</p>}
-            {client && !project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : metaColor}`}>{client.short}</p>}
-            {!client && project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : 'text-[#656464]'}`}>{project.name}</p>}
-            {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} />)}
-            {task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : isLateDeadline(task.deadline) ? 'text-[#FF7171]' : 'text-[#656464]'}`}>{formatDeadline(task.deadline)}</p>}
+        </div>
+        {/* Meta row indents past the checkbox + gap so it lines up under the title text, not under
+            the checkbox. 22px = checkbox width (12) + title-row gap (10). When there's no checkbox
+            (isScheduled milestones in this branch), the indent collapses to 0. */}
+          <div className={`flex flex-row items-center gap-[6px] ${!isScheduled ? 'pl-[22px]' : ''}`}>
+            {/* When completed, all line-2 meta drops to the same faint #383838 — visually quieted to match the title.
+                Only render the client/project paragraph when there's actual non-empty text to show; otherwise an
+                empty <p> sits at the start of the row and the gap-[6px] pushes the next item (e.g. an assignee
+                circle) 6px to the right, making it look indented. */}
+            {client?.short && project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : 'text-[#656464]'}`}>{client.short}<Arrowhead dim={task.completed || categoryDimmed} />{project.name}</p>}
+            {client?.short && !project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : metaColor}`}>{client.short}</p>}
+            {!client?.short && project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : 'text-[#656464]'}`}>{project.name}</p>}
+            {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed || categoryDimmed} />)}
+            {task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : isLateDeadline(task.deadline) ? 'text-[#FF7171]' : 'text-[#656464]'}`}>{formatDeadline(task.deadline)}</p>}
             {/* + button hugs the inline task info on the second row. Trash stays pinned at top-right via absolute. */}
             {onAddSibling && (
               <button
@@ -1759,7 +2691,6 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
               </button>
             )}
           </div>
-        </div>
       </div>
       <button
         type="button"
@@ -1924,7 +2855,7 @@ function WeekCalendarMode({
       .sort((a, b) => (a.deadline! < b.deadline! ? -1 : a.deadline! > b.deadline! ? 1 : a.title.localeCompare(b.title)));
   }, [tasks, lastVisibleIso]);
 
-  const MilestoneCard = ({ task, showDate }: { task: Task; showDate: boolean }) => {
+  const MilestoneCard = ({ task, showDate, categoryDimmed = false }: { task: Task; showDate: boolean; categoryDimmed?: boolean }) => {
     const project = task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
     const resolvedClientId = task.clientId ?? project?.clientId;
     const client = resolvedClientId ? clients.find((c) => c.id === resolvedClientId) : undefined;
@@ -1935,25 +2866,44 @@ function WeekCalendarMode({
     // today) render in faint purple text — they linger on the calendar permanently as a record.
     const isExpired = !!task.deadline && task.deadline < todayISO();
     const milestonePurpleClass = isExpired ? 'text-[#4f4290]' : 'text-[#8465ff]';
-    const titleClass = task.completed ? 'text-[#383838]' : milestonePurpleClass;
-    // Card bg: tinted faint purple ONLY on live milestones. Expired and completed milestones
-    // drop the box — the faint text alone reads as "no longer active". Inline style because
-    // Tailwind arbitrary opacity on hex colors wasn't reliably generating the CSS.
-    const cardBgStyle: React.CSSProperties | undefined = (task.completed || isExpired) ? undefined : { backgroundColor: 'rgba(132, 101, 255, 0.10)' };
+    // Category-dim wins over completed and milestone-purple alike — same #454545 used on
+    // CalendarCard so a cross-category drag mutes everything to a single tone.
+    const DIM = 'text-[#454545]';
+    const titleClass = categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : milestonePurpleClass;
+    // Card bg: tinted faint purple on every milestone — live, expired, and completed all keep
+    // the box so the slot reads visually consistent across columns. Faint text alone leaves
+    // the slot looking taller than its neighbours and creates perceived vertical drift.
+    // Inline style because Tailwind arbitrary opacity on hex colors wasn't reliably generating
+    // the CSS.
+    const cardBgStyle: React.CSSProperties = { backgroundColor: 'rgba(132, 101, 255, 0.10)' };
     return (
-      <div onDoubleClick={(e) => { e.stopPropagation(); onEditTask(task); }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onQuickEditTask?.(task); }} style={cardBgStyle} className="relative mx-[6px] mb-[4px] cursor-pointer h-[55px]">
-        <div className="px-[10px] py-[6px] flex flex-col gap-[2px]">
+      <div onDoubleClick={(e) => { e.stopPropagation(); onEditTask(task); }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onQuickEditTask?.(task); }} style={cardBgStyle} className="relative mx-[6px] mb-[4px] group cursor-pointer h-[55px]">
+        <div className="px-[10px] py-[6px] flex flex-col justify-center gap-[2px] h-full">
           <div className="flex flex-row items-center gap-[4px]">
             <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleClass}`}>{task.title}</span>
           </div>
           {/* Line 2 always reserves height so milestones with no client / project / assignees
               don't render shorter than their siblings. min-h-[15px] matches the 11.5px text line. */}
           <div className="flex flex-row items-center gap-[6px] min-h-[15px]">
-            {client && project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${titleClass}`}>{client.short}<Arrowhead dim={task.completed} tone="milestone" faint={isExpired} />{project.name}</p>}
-            {client && !project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${titleClass}`}>{client.short}</p>}
-            {!client && project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${titleClass}`}>{project.name}</p>}
-            {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone="scheduled" hollow={isPersonal} dim={task.completed} faint={isExpired} />)}
+            {/* Only render the client/project paragraph when there's actual non-empty text to show; otherwise
+                an empty <p> sits at the start of the row and gap-[6px] pushes the next item (e.g. the assignee
+                circle) 6px to the right, making it look indented. */}
+            {client?.short && project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${titleClass}`}>{client.short}<Arrowhead dim={task.completed || categoryDimmed} tone="milestone" faint={isExpired} />{project.name}</p>}
+            {client?.short && !project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${titleClass}`}>{client.short}</p>}
+            {!client?.short && project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${titleClass}`}>{project.name}</p>}
+            {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone="scheduled" hollow={isPersonal} dim={task.completed || categoryDimmed} faint={isExpired} />)}
             {showDate && task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${titleClass}`}>{formatDeadline(task.deadline)}</p>}
+            {/* + button hugs the inline meta — same hover-reveal treatment as CalendarCard so the
+                user can spawn a sibling task in this milestone's project without opening the panel. */}
+            <button
+              type="button"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => { e.stopPropagation(); onAddSiblingTask(task); }}
+              className="p-[2px] opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity"
+              aria-label="Add task in same project"
+            >
+              <Plus size={12} />
+            </button>
           </div>
         </div>
       </div>
@@ -1972,12 +2922,19 @@ function WeekCalendarMode({
   };
 
   return (
-    <div className="pb-[140px] min-w-[1400px]" style={{ paddingTop: SPACING.topMargin }}>
-      <TopHeader viewName="Calendar" />
+    // h-full + flex-col + overflow-hidden = the calendar fills its parent and never overflows
+    // the page. Children are: TopHeader (shrink-0), week-range bar (shrink-0), then the grid
+    // (flex-1 min-h-0). Within the grid each day-column has a shrink-0 day-name row and a
+    // flex-1 overflow-y-auto body — every column scrolls independently while the day names,
+    // week-range bar, and TopHeader stay pinned at the top.
+    <div className="h-full flex flex-col" style={{ paddingTop: SPACING.topMargin, paddingBottom: 76 }}>
+      <div className="shrink-0">
+        <TopHeader viewName="Calendar" />
+      </div>
       {/* Week-range navigator — same px-[35px] as TopHeader so it lines up vertically. h-[37px]
           matches the standard header row. DOUBLE carriage-return below so the day-name row
           gets the same paragraph-break gap that column titles in List + Project use. */}
-      <div className="flex items-center gap-3 px-[35px] h-[37px]" style={{ marginBottom: SPACING.dcr }}>
+      <div className="shrink-0 flex items-center gap-3 px-[35px] h-[37px]" style={{ marginBottom: SPACING.dcr }}>
         <button onClick={() => setWeekOffset((o) => o - 1)} className="p-1 text-[#656464] hover:text-white transition-colors"><ChevronLeft size={20} /></button>
         <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">{formatRange()}</p>
         <button onClick={() => setWeekOffset((o) => o + 1)} className="p-1 text-[#656464] hover:text-white transition-colors"><ChevronRight size={20} /></button>
@@ -1986,18 +2943,24 @@ function WeekCalendarMode({
         )}
       </div>
       {/* Grid wrapper padding = 35 (TopHeader inset) - 16 (column header's own px-16) so the
-          first column's day-name lines up at 35px from the page edge — matching TopHeader. */}
-      <div className="grid grid-cols-7 gap-0 px-[19px]">
+          first column's day-name lines up at 35px from the page edge — matching TopHeader.
+          flex-1 min-h-0 lets children control their own scroll; overflow-x-auto preserves
+          horizontal scroll for narrow viewports (the inner grid keeps min-w-[1400px]). */}
+      <div className="flex-1 min-h-0 overflow-x-auto">
+      <div className="grid grid-cols-7 gap-0 px-[19px] h-full min-w-[1400px]">
         {days.map((d, i) => {
           const iso = dateToISO(d);
           const isToday = iso === todayIso;
           return (
             <CalendarColumnDroppable key={iso} date={iso}>
-              <div className={`h-[37px] flex items-center gap-2 px-[16px] mb-[37px] ${isToday ? 'text-[#8465ff]' : (d.getDay() === 0 || d.getDay() === 6 ? 'text-[#656464]' : 'text-white')}`}>
+              <div className={`shrink-0 h-[37px] flex items-center gap-2 px-[16px] mb-[37px] ${isToday ? 'text-[#8465ff]' : (d.getDay() === 0 || d.getDay() === 6 ? 'text-[#656464]' : 'text-white')}`}>
                 <p className="font-['NB_International:Regular',sans-serif]">{dayNameShort(d)}</p>
                 <p className={bodyFont}>{d.getDate()}</p>
                 {isToday && <p className={bodyFont}>(Today)</p>}
               </div>
+              {/* Independent per-column scroll. Coming-Up + per-band stacks live here.
+                  CustomScroll supplies the fixed-size pill thumb (the native scrollbar is hidden). */}
+              <CustomScroll>
               {/* The last visible column gets the overflow stack of milestones whose deadlines
                   fall beyond the window — labelled "Coming Up" so it reads as a separate look-ahead
                   group rather than as part of day 7's content. */}
@@ -2037,16 +3000,16 @@ function WeekCalendarMode({
                 const oIdx = overTask ? bucket.findIndex((t) => t.id === overTask.id) : -1;
                 const activeInBucket = aIdx >= 0;
                 const overInBucket = oIdx >= 0;
+                // Cross-category dim: when a drag is active and the dragged card lives in a
+                // different list than this band, every card in this band renders muted (#454545)
+                // so the source category and matching drop targets stay visually loud.
+                const categoryDimmed = !!activeTask && activeTask.list !== listId;
                 return (
                   <CalendarDayDroppable key={listId} id={`cal:${iso}:${listId}`} isEmpty={bucket.length === 0 && dayMilestones.length === 0} className="pb-[37px] last:pb-0">
                     <div className="h-[20px] px-[16px] flex items-center mb-[6px]">
                       <p className={`${bodyFont} text-[#5e5e5e]`}>{label}</p>
                     </div>
-                    {dayMilestones.length > 0 && (
-                      <div className="mb-[4px]">
-                        {dayMilestones.map((t) => <MilestoneCard key={`m-${t.id}`} task={t} showDate={false} />)}
-                      </div>
-                    )}
+                    {dayMilestones.length > 0 && dayMilestones.map((t) => <MilestoneCard key={`m-${t.id}`} task={t} showDate={false} categoryDimmed={categoryDimmed} />)}
                     <SortableContext items={items} strategy={verticalListSortingStrategy}>
                         {bucket.map((t, index) => {
                           let displacementOffset = 0;
@@ -2080,6 +3043,7 @@ function WeekCalendarMode({
                               onAddSibling={() => onAddSiblingTask(t)}
                               isAnyDragging={isAnyDragging}
                               dimmed={isPast}
+                              categoryDimmed={categoryDimmed}
                               projects={projects}
                               clients={clients}
                               displacementOffset={displacementOffset}
@@ -2092,15 +3056,130 @@ function WeekCalendarMode({
                   </CalendarDayDroppable>
                 );
               })}
+              </CustomScroll>
             </CalendarColumnDroppable>
           );
         })}
+      </div>
       </div>
     </div>
   );
 }
 
-function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePersonShort, onDeletePerson, currentUserShort, onSetCurrentUser, taskOrder, onSetTaskOrder, tomorrowEnabled, onSetTomorrowEnabled, caseMode, onSetCaseMode, trashedTasks, completedTasks, projects, clients, onUntrashTask, onPurgeTask, onToggleTask }: {
+// --- BackupSection -----------------------------------------------------------
+// Settings sub-block for the Local Backup feature. TWO named slots only:
+// "live" (refreshed every 5 min, mirror of now) and "daily" (refreshed only
+// when its existing value is older than 24h, your "yesterday" rollback). No
+// accumulating history. Plus manual Download / Restore-from-file actions for
+// permanent off-machine copies.
+function BackupSection({
+  liveBackupAt,
+  dailyBackupAt,
+  onDownload,
+  onRestoreFromFile,
+  onRestoreFromSlot,
+}: {
+  liveBackupAt: number | null;
+  dailyBackupAt: number | null;
+  onDownload: () => void | Promise<void>;
+  onRestoreFromFile: (file: File) => Promise<string>;
+  onRestoreFromSlot: (slot: 'live' | 'daily') => Promise<string>;
+}) {
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [status, setStatus] = useState<string>('');
+  const formatRelative = (ms: number): string => {
+    const diff = Date.now() - ms;
+    if (diff < 60_000) return 'just now';
+    const m = Math.round(diff / 60_000);
+    if (m < 60) return `${m}m ago`;
+    const h = Math.round(m / 60);
+    if (h < 24) return `${h}h ago`;
+    const d = Math.round(h / 24);
+    return `${d}d ago`;
+  };
+  const onFilePicked = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = ''; // reset so re-picking the same file fires change
+    if (!file) return;
+    try {
+      const msg = await onRestoreFromFile(file);
+      setStatus(msg);
+    } catch (err) {
+      setStatus(`Restore failed: ${(err as Error).message}`);
+    }
+  };
+  const slotRow = (
+    label: string,
+    sublabel: string,
+    at: number | null,
+    slot: 'live' | 'daily',
+  ) => (
+    <div className="flex flex-row items-center gap-3 text-[13px]">
+      <div className="flex flex-col">
+        <span className="text-white">{label}</span>
+        <span className="text-[#656464] text-[12px]">{sublabel}</span>
+      </div>
+      <div className="ml-auto flex flex-row items-center gap-3">
+        <span className="text-[#656464]">
+          {at
+            ? <>Last refresh: <span className="text-white">{formatRelative(at)}</span></>
+            : <>—</>}
+        </span>
+        <button
+          type="button"
+          disabled={!at}
+          onClick={async () => {
+            try {
+              const msg = await onRestoreFromSlot(slot);
+              setStatus(msg);
+            } catch (err) {
+              setStatus(`Restore failed: ${(err as Error).message}`);
+            }
+          }}
+          className={`px-3 py-1 rounded-md transition-colors ${at ? 'bg-[#1f1f1f] hover:bg-[#262626] text-white' : 'bg-[#1f1f1f] text-[#656464] cursor-not-allowed'}`}
+        >
+          Restore
+        </button>
+      </div>
+    </div>
+  );
+  return (
+    <div className="flex flex-col gap-3">
+      {/* Two-slot summary: the redundant live mirror + the 24-hour rolling copy. */}
+      <div className="flex flex-col gap-2">
+        {slotRow('Live mirror', 'Refreshed every 5 minutes', liveBackupAt, 'live')}
+        {slotRow('24-hour rolling copy', 'Refreshed only when older than 24 hours', dailyBackupAt, 'daily')}
+      </div>
+      {/* Manual download / restore-from-file for off-machine copies. */}
+      <div className="flex flex-row gap-3 items-center text-[13px]">
+        <button
+          type="button"
+          onClick={async () => { await onDownload(); setStatus('Backup downloaded.'); }}
+          className="px-3 py-1 rounded-md bg-[#1f1f1f] hover:bg-[#262626] text-white transition-colors"
+        >
+          Download backup
+        </button>
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          className="px-3 py-1 rounded-md bg-[#1f1f1f] hover:bg-[#262626] text-white transition-colors"
+        >
+          Restore from file
+        </button>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="application/json,.json"
+          onChange={onFilePicked}
+          className="hidden"
+        />
+      </div>
+      {status && <p className="text-[#8465ff] text-[13px]">{status}</p>}
+    </div>
+  );
+}
+
+function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePersonShort, onDeletePerson, currentUserShort, onSetCurrentUser, taskOrder, onSetTaskOrder, tomorrowEnabled, onSetTomorrowEnabled, caseMode, onSetCaseMode, trashedTasks, completedTasks, projects, clients, onUntrashTask, onPurgeTask, onToggleTask, liveBackupAt, dailyBackupAt, onDownloadBackup, onRestoreFromFile, onRestoreFromSlot }: {
   people: Person[]; newId: string | null;
   onAddPerson: () => void;
   onRenamePerson: (id: string, name: string) => void;
@@ -2121,10 +3200,15 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
   onUntrashTask: (id: string) => void;
   onPurgeTask: (id: string) => void;
   onToggleTask: (id: string) => void;
+  liveBackupAt: number | null;
+  dailyBackupAt: number | null;
+  onDownloadBackup: () => void | Promise<void>;
+  onRestoreFromFile: (file: File) => Promise<string>;
+  onRestoreFromSlot: (slot: 'live' | 'daily') => Promise<string>;
 }) {
   const bodyFont = "font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap";
   return (
-    <div className="pb-[140px]" style={{ paddingTop: SPACING.topMargin }}>
+    <div className="pb-[106px]" style={{ paddingTop: SPACING.topMargin }}>
       <TopHeader viewName="Settings" />
       <div className="flex gap-0">
       <div className="flex-1 min-w-[280px]">
@@ -2188,6 +3272,25 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
         <div className="px-[31px] mb-[37px] flex flex-row gap-4">
           <button type="button" onClick={() => onSetCaseMode('off')} className={`text-[13px] transition-colors ${caseMode === 'off' ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>Off</button>
           <button type="button" onClick={() => onSetCaseMode('title')} className={`text-[13px] transition-colors ${caseMode === 'title' ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>On</button>
+        </div>
+        {/* --- Local Backup --------------------------------------------------
+            Auto-snapshot every 5 min into IndexedDB (rolling 20). The download
+            button writes the current state to disk as JSON; restore reads a
+            JSON file (or picks one of the IDB-stored snapshots) and overwrites
+            the room with it. Supabase image blobs are NOT in the JSON — only
+            their URLs — so a full disaster recovery means: keep this JSON +
+            don't wipe the Supabase bucket. */}
+        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-0">
+          <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Local Backup</p>
+        </div>
+        <div className="px-[31px] mb-[37px] flex flex-col gap-2">
+          <BackupSection
+            liveBackupAt={liveBackupAt}
+            dailyBackupAt={dailyBackupAt}
+            onDownload={onDownloadBackup}
+            onRestoreFromFile={onRestoreFromFile}
+            onRestoreFromSlot={onRestoreFromSlot}
+          />
         </div>
         <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[37px]">
           <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">People</p>
@@ -2308,7 +3411,7 @@ function SortableProjectRow({ project, listId, onRename, onDelete, onAddTask, au
         </svg>
       </motion.div>
       <Folder size={12} className="text-[#656464] shrink-0" />
-      <EditableText value={project.name} onChange={(v) => onRename(project.id, v)} className={`${bodyFont} text-white`} autoFocus={autoFocus} placeholder="New Project" />
+      <EditableText value={project.name} onChange={(v) => onRename(project.id, v)} className={`${bodyFont} text-[#656464]`} autoFocus={autoFocus} placeholder="New Project" />
       <div className="ml-auto -mr-[22px] flex items-center gap-1">
         <button
           type="button"
@@ -2347,8 +3450,8 @@ function ProjectTaskRow({ task, listId, onToggle, onRename, onDelete, onEdit, on
   const bodyFont = "font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap";
   const isScheduled = task.type === 'scheduled';
   const isNext = task.section === 'next' || task.section === 'tomorrow';
-  const titleColor = isScheduled ? 'text-[#8465ff]' : task.completed ? 'text-[#383838]' : isNext ? 'text-[#a8a8a8]' : 'text-white';
-  const metaColor = task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : 'text-[#656464]';
+  const titleColor = isScheduled ? 'text-[#8465ff]' : task.completed ? 'text-[#474747]' : isNext ? 'text-[#a8a8a8]' : 'text-white';
+  const metaColor = task.completed ? 'text-[#474747]' : isScheduled ? 'text-[#8465ff]' : 'text-[#656464]';
   const project = showContext && task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
   // Prefer the task's explicit clientId, fall back to the project's owning client.
   const resolvedClientId = showContext ? (task.clientId ?? project?.clientId) : undefined;
@@ -2394,7 +3497,7 @@ function ProjectTaskRow({ task, listId, onToggle, onRename, onDelete, onEdit, on
             const showProject = !!project && density < 6;
             const projectTruncate = density >= 1 ? 'truncate min-w-0 max-w-[120px]' : '';
             return taskOrderSlots(taskOrder, showProject, showClient).map((slot, i) => {
-              const metaCls = `${bodyFont} ${task.completed ? 'text-[#383838]' : 'text-[#656464]'}`;
+              const metaCls = `${bodyFont} ${task.completed ? 'text-[#474747]' : 'text-[#656464]'}`;
               if (slot === 'project' && project) return <p key={`p-${i}`} className={`${metaCls} ${projectTruncate}`}>{project.name}</p>;
               if (slot === 'client' && client) return <p key={`c-${i}`} className={`${bodyFont} ${metaColor}`}>{client.short}</p>;
               if (slot === 'cp' && client && project) return <p key={`cp-${i}`} className={`${metaCls} ${projectTruncate}`}>{client.short}<Arrowhead dim={task.completed} />{project.name}</p>;
@@ -2407,7 +3510,7 @@ function ProjectTaskRow({ task, listId, onToggle, onRename, onDelete, onEdit, on
         {task.deadline && (
           <>
             {!isScheduled && <DeadlineArrow dim={task.completed} small={density >= 3} />}
-            <p className={`font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : isLateDeadline(task.deadline) ? 'text-[#FF7171]' : isNext ? 'text-[#a8a8a8]' : 'text-white'}`}>
+            <p className={`font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] whitespace-nowrap ${task.completed ? 'text-[#474747]' : isScheduled ? 'text-[#8465ff]' : isLateDeadline(task.deadline) ? 'text-[#FF7171]' : isNext ? 'text-[#a8a8a8]' : 'text-white'}`}>
               {density >= 2 ? formatDeadlineShort(task.deadline) : formatDeadline(task.deadline)}
             </p>
           </>
@@ -2452,6 +3555,54 @@ function useStorageList<K extends StorageKey, T>(key: K) {
   }, []);
   return [value, setter] as const;
 }
+
+// Record<string, T> persisted in Liveblocks Storage. Same setter shape as useStorageList:
+// pass a new Record OR an updater function. Used for focus-mode briefs / subtasks / images /
+// references where the keys are dynamic (project ids + task ids) rather than a fixed list.
+// Image binaries live in Supabase Storage (see src/supabase.ts) — Liveblocks holds only
+// metadata + the hosted URL. URLs are tiny (~80 bytes) so they fit comfortably inside the
+// Record-backed focusImages key, and uploads sync across collaborators automatically since
+// every client just hands the URL back to <img>. Legacy dataUrl + localStorage paths are
+// kept for rooms that pre-date the migration so old images still display.
+const FOCUS_IMG_PREFIX = 'focus-img-';
+function getImageDataLocal(id: string): string | null {
+  try { return localStorage.getItem(FOCUS_IMG_PREFIX + id); }
+  catch { return null; }
+}
+function removeImageDataLocal(id: string) {
+  try { localStorage.removeItem(FOCUS_IMG_PREFIX + id); } catch { /* noop */ }
+}
+function resolveImageSrc(img: { id: string; url?: string; dataUrl?: string }): string {
+  // Priority: hosted URL (Supabase) → legacy localStorage → legacy Liveblocks dataUrl.
+  return img.url || getImageDataLocal(img.id) || img.dataUrl || '';
+}
+
+type StorageRecordKey = 'focusBriefs' | 'focusSubtasks' | 'focusImages' | 'focusReferences';
+function useStorageRecord<K extends StorageRecordKey, T>(key: K) {
+  const value = useStorage((root) => (root as any)[key]) as Record<string, T> | null;
+  const setter = useMutation(({ storage }, updater: Record<string, T> | ((prev: Record<string, T>) => Record<string, T>)) => {
+    const current = (storage.get(key as any) as Record<string, T>) ?? {};
+    const next = typeof updater === 'function' ? (updater as (p: Record<string, T>) => Record<string, T>)(current) : updater;
+    // Wipe-protection: if `current` had content and `next` is empty {}, refuse the write —
+    // that's almost always an updater that read stale state during a reload race or HMR
+    // remount, and accepting it would silently delete every persisted entry. The legitimate
+    // empty case (deleting the very last entry) still works because then `current` is also
+    // already at one entry, and the updater returns `{ key: [] }`, not `{}`.
+    const currentSize = Object.keys(current).length;
+    const nextSize = Object.keys(next).length;
+    if (currentSize > 0 && nextSize === 0) {
+      console.warn(`[useStorageRecord] Refusing to wipe '${key}' (had ${currentSize} entries, updater returned empty)`);
+      return;
+    }
+    storage.set(key as any, next as any);
+  }, []);
+  return [value ?? ({} as Record<string, T>), setter] as const;
+}
+
+// useFocusImagesV2 removed — Option B (LiveMap-backed image storage) ran into write-time
+// conflicts with rooms that pre-dated the schema change. Falling back to Option A
+// (Liveblocks holds metadata, browser localStorage holds the data URLs) until we sort
+// out the lazy-init path on existing rooms.
 
 // ─── TaskQuickEdit ────────────────────────────────────────────────────────────
 // Right-side panel that opens on double-click (edit mode: stays open) or right-click
@@ -2603,14 +3754,14 @@ function TaskQuickEdit({
             // Auto-enter edit mode for freshly created tasks so the cursor is already blinking
             // inside the empty title alongside the gray "New Task" placeholder.
             autoFocus={task.id === newId}
-            className={`font-['Untitled_Sans',sans-serif] text-[14px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : 'text-white'}`}
+            className={`font-['Untitled_Sans',sans-serif] text-[14px] whitespace-nowrap ${task.completed ? 'text-[#474747]' : 'text-white'}`}
           />
-          {client && <span className={`font-['Untitled_Sans',sans-serif] text-[14px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : 'text-[#656464]'}`}>{client.short}</span>}
+          {client && <span className={`font-['Untitled_Sans',sans-serif] text-[14px] whitespace-nowrap ${task.completed ? 'text-[#474747]' : 'text-[#656464]'}`}>{client.short}</span>}
           {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isMilestone ? 'scheduled' : 'todo'} dim={task.completed} />)}
           {task.deadline && (
             <>
               {!isMilestone && <DeadlineArrow dim={task.completed} />}
-              <span className={`font-['NB_International:Regular',sans-serif] text-[14.333px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : 'text-white'}`}>{formatDeadline(task.deadline)}</span>
+              <span className={`font-['NB_International:Regular',sans-serif] text-[14.333px] whitespace-nowrap ${task.completed ? 'text-[#474747]' : 'text-white'}`}>{formatDeadline(task.deadline)}</span>
             </>
           )}
         </div>
@@ -2620,6 +3771,13 @@ function TaskQuickEdit({
         <div className="px-[31px] flex flex-row gap-4 items-center mt-[37px]">
           <PillType active={!isMilestone} onClick={() => apply({ type: 'todo' })}>Task</PillType>
           <PillType active={isMilestone} onClick={() => apply({ type: 'scheduled' })}>Milestone</PillType>
+        </div>
+
+        {/* Section: Today / Tomorrow / Next — pinpoints where this task lands in its column. */}
+        <div className="px-[31px] flex flex-row gap-4 items-center">
+          <Pill active={task.section === 'today'} onClick={() => apply({ section: 'today' })}>Today</Pill>
+          <Pill active={task.section === 'tomorrow'} onClick={() => apply({ section: 'tomorrow' })}>Tomorrow</Pill>
+          <Pill active={task.section === 'next'} onClick={() => apply({ section: 'next' })}>Next</Pill>
         </div>
 
         {/* List: Work / Projects / Admin */}
@@ -2757,6 +3915,36 @@ export default function App() {
   const [projects, setProjects] = useStorageList<'projects', Project>('projects');
   const [clients, setClients] = useStorageList<'clients', Client>('clients');
   const [people, setPeople] = useStorageList<'people', Person>('people');
+  // sortTick: bumped by toggleTask after the 15-second completion grace window elapses, to force
+  // tasksByKey to re-evaluate and move newly-aged completed tasks to the bottom of their section.
+  // Lives outside Liveblocks (it's a UI-timing concern, not synced state).
+  const [sortTick, setSortTick] = useState(0);
+  // Periodic tick (every 60s) so time-based filters / sorts re-evaluate without
+  // a user interaction. Drives the 30-minute "hide completed task" filter and
+  // any other "did the wall clock cross a threshold" check that depends on
+  // wall-clock time — without this, a completed task would stay visible until
+  // the next render, even after its 30-minute window expired.
+  useEffect(() => {
+    const id = window.setInterval(() => setSortTick((n) => n + 1), 60_000);
+    return () => window.clearInterval(id);
+  }, []);
+  // Backup slot timestamps (epoch ms). Surfaced in Settings so the user can
+  // see when each slot was last refreshed. Two slots only:
+  //   • live  — refreshed every 5 minutes; mirrors current state
+  //   • daily — refreshed only when its existing snapshot is older than 24h;
+  //             always between 0 and 24 hours old, your "yesterday" rollback
+  // No accumulating history. Each refresh OVERWRITES its slot in place.
+  const [liveBackupAt, setLiveBackupAt] = useState<number | null>(null);
+  const [dailyBackupAt, setDailyBackupAt] = useState<number | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    Promise.all([getSlot('live'), getSlot('daily')]).then(([live, daily]) => {
+      if (cancelled) return;
+      if (live) setLiveBackupAt(live.takenAtMs);
+      if (daily) setDailyBackupAt(daily.takenAtMs);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
   // Hoisted up-front because several useCallbacks below reference currentUserShort in their dep arrays
   // (e.g. to seed new tasks with the current user as assignee).
   const [currentUserShort, setCurrentUserShortState] = useState<string>(() => {
@@ -2848,8 +4036,20 @@ export default function App() {
     const r = col.getBoundingClientRect();
     return { x: r.left, width: r.width };
   };
-  const openEdit = useCallback((t: Task, e?: { currentTarget?: EventTarget | null }) => { setEditingTask(t); setEditMode('edit'); setEditAnchor(captureAnchorFromEvent(e)); }, []);
-  const openQuick = useCallback((t: Task, e?: { currentTarget?: EventTarget | null }) => { setEditingTask(t); setEditMode('quick'); setEditAnchor(captureAnchorFromEvent(e)); }, []);
+  const openEdit = useCallback((t: Task, e?: { currentTarget?: EventTarget | null }) => { setEditingTask(t); setSelectedTaskId(t.id); setEditMode('edit'); setEditAnchor(captureAnchorFromEvent(e)); }, []);
+  const openQuick = useCallback((t: Task, e?: { currentTarget?: EventTarget | null }) => { setEditingTask(t); setSelectedTaskId(t.id); setEditMode('quick'); setEditAnchor(captureAnchorFromEvent(e)); }, []);
+  // Single-click selection — Information panel and any "where am I?" affordances key off this.
+  // Editing also sets it (above), so opening the quick-edit / full panel drags the selection
+  // along with the user. Selection persists across panel close so the focus column doesn't
+  // suddenly snap back when the user dismisses the editor.
+  const selectTask = useCallback((id: string) => setSelectedTaskId(id), []);
+  // Click handler for the FileText icon — selects the task AND switches to Focus mode so its
+  // content opens in column 2/3. setSelectedTaskId / setMode are stable refs from useState
+  // so empty deps is fine even though their declarations are further down the file.
+  const openTaskInFocus = useCallback((id: string) => {
+    setSelectedTaskId(id);
+    setMode('focus');
+  }, []);
   // Bottom + button: create a blank task and immediately open the edit panel for it, anchored
   // to the Work column (since new tasks default to list='work'). Title starts empty — the panel's
   // EditableText shows "New Task" as a gray placeholder which disappears on first keystroke.
@@ -2956,13 +4156,21 @@ export default function App() {
     setTasks((prev) => prev.map((t) => {
       if (t.id !== id) return t;
       const nextCompleted = !t.completed;
-      // Stamp completedDay (today's boundary) when checking; clear it + stamp revivedAt when
-      // un-checking. completedDay drives the "completed clears at 4 AM" filter; revivedAt keeps
-      // recently-uncompleted tasks visible in the Settings → Completed column for 10 min so a
-      // misclick can be undone there.
-      if (nextCompleted) return { ...t, completed: true, completedDay: todayISO(), revivedAt: undefined };
-      return { ...t, completed: false, completedDay: undefined, revivedAt: Date.now() };
+      // Stamp completedDay (today's boundary) + completedAt (epoch ms) when checking; clear both
+      // + stamp revivedAt when un-checking. completedDay drives the "completed clears at 4 AM"
+      // filter; completedAt drives the 15-second sink delay (the bucket sort treats a task as
+      // "still in place" until 15s after it was checked, giving the user time to undo without
+      // the row visibly jumping to the bottom).
+      if (nextCompleted) return { ...t, completed: true, completedDay: todayISO(), completedAt: Date.now(), revivedAt: undefined };
+      return { ...t, completed: false, completedDay: undefined, completedAt: undefined, revivedAt: Date.now() };
     }));
+    // Force a re-render ~15.1s after a check so the just-completed task gets re-sorted to the
+    // bottom of its section once the grace window elapses. Bumps a counter that the sort memo
+    // depends on; no-op if the user un-completes inside the window (the sort just re-evaluates
+    // and finds nothing to move).
+    window.setTimeout(() => {
+      setSortTick((n) => n + 1);
+    }, 15100);
   }, []);
 
   const deleteTask = useCallback((id: string) => {
@@ -3169,16 +4377,30 @@ export default function App() {
   //   'tomorrow' → deadline = tomorrow + section = 'tomorrow'
   //   'nextWeek' → deadline = today + 7 days + section = 'next'
   //   'shiftBack'→ deadline = current deadline - 1 day (tomorrow → today, today → yesterday…)
-  const rescheduleTaskTo = useCallback((id: string, kind: 'today' | 'tomorrow' | 'nextWeek' | 'shiftBack') => {
+  const rescheduleTaskTo = useCallback((id: string, kind: 'today' | 'tomorrow' | 'nextWeek' | 'shiftBack' | 'shiftForward' | 'sectionForward' | 'sectionBack') => {
     setTasks((prev) => prev.map((t) => {
       if (t.id !== id) return t;
+      // SECTION-ONLY shifts. For undated tasks the user wants to march them
+      // through today → tomorrow → next without auto-promoting them into a
+      // dated task. (A task only becomes a "deadline task" when the user
+      // explicitly adds one.) Walks the section sequence in either direction
+      // and clamps at the ends.
+      if (kind === 'sectionForward' || kind === 'sectionBack') {
+        const seq: SectionId[] = ['today', 'tomorrow', 'next'];
+        const idx = seq.indexOf(t.section);
+        if (idx < 0) return t;
+        const nextIdx = idx + (kind === 'sectionForward' ? 1 : -1);
+        if (nextIdx < 0 || nextIdx >= seq.length) return t; // clamped
+        return { ...t, section: seq[nextIdx] };
+      }
       const today = new Date(); today.setHours(0, 0, 0, 0);
       let target: Date;
-      if (kind === 'shiftBack') {
-        // Shift the existing deadline back by one day. If no deadline yet, treat as starting from today.
+      if (kind === 'shiftBack' || kind === 'shiftForward') {
+        // Shift the existing deadline by ±1 day. If no deadline yet, anchor to
+        // today so shiftForward goes to tomorrow and shiftBack goes to yesterday.
         const start = t.deadline ? new Date(t.deadline + 'T00:00:00') : new Date(today);
         target = new Date(start);
-        target.setDate(start.getDate() - 1);
+        target.setDate(start.getDate() + (kind === 'shiftForward' ? 1 : -1));
       } else {
         target = new Date(today);
         if (kind === 'tomorrow') target.setDate(today.getDate() + 1);
@@ -3212,6 +4434,373 @@ export default function App() {
   // Pending destructive-confirm: when set, the TrashConfirmModal renders. The user must type
   // "TRASH" in the modal before the actual delete fires.
   const [pendingTrash, setPendingTrash] = useState<{ kind: 'project' | 'client'; id: string; name: string } | null>(null);
+  // Resource (person) deletes go through a richer two-step flow: optionally reassign their tasks
+  // to another resource, then type DELETE to confirm. People are referenced by short across all
+  // task assignees, so a careless click can wipe attribution from dozens of tasks.
+  const [pendingResourceDelete, setPendingResourceDelete] = useState<{ id: string; name: string; short: string } | null>(null);
+  // Focus-mode (project dashboard) state — persisted through Liveblocks Storage so dropped
+  // images, briefs, sub-tasks, and references survive reloads and sync across collaborators.
+  // Each map is keyed by either a project id (for shared project-level data) or a task id
+  // (for task-specific data) — see the projectKey / taskKey resolution inside the focus mode
+  // JSX for the routing logic. With nothing selected, both keys are null and the Information
+  // panel renders an empty placeholder (no dummy fallback project).
+  const [focusBriefs, setFocusBriefs] = useStorageRecord<'focusBriefs', string>('focusBriefs');
+  const [focusSubtasks, setFocusSubtasks] = useStorageRecord<'focusSubtasks', { id: string; title: string; completed: boolean }[]>('focusSubtasks');
+  const [focusReferences, setFocusReferences] = useStorageRecord<'focusReferences', { label: string; url: string }[]>('focusReferences');
+  const [focusNewSubtaskId, setFocusNewSubtaskId] = useState<string | null>(null);
+  // Reference images: Liveblocks holds metadata + hosted URL only (~80 bytes per image).
+  // The actual binary lives in Supabase Storage. URLs sync across collaborators for free —
+  // any client can render the image directly from its Supabase URL.
+  const [focusImages, setFocusImages] = useStorageRecord<'focusImages', { id: string; url?: string; dataUrl?: string; filename: string; width: number; height: number; favorited?: boolean }[]>('focusImages');
+  // "Has any Focus-mode content" lookup — returns true if the task itself OR its project
+  // has a brief / notes / sub-tasks / images / references stashed against it. Drives the
+  // inline FileText icon on every task row. Project-level content IS inherited so users
+  // can see at a glance which tasks belong to projects with reference material —
+  // previously-suspect "Rivington 123 attached to random tasks" turned out to be orphan
+  // storage entries (deleted task ids); the cleanup effect above now drops those, so
+  // inheritance is safe again.
+  const taskHasFocusContent = useCallback((task: Task): boolean => {
+    const tid = task.id;
+    const pid = task.projectId;
+    if (focusBriefs[tid]?.trim()) return true;
+    if (pid && focusBriefs[pid]?.trim()) return true;
+    if ((focusSubtasks[tid] || []).length > 0) return true;
+    if (pid && (focusSubtasks[pid] || []).length > 0) return true;
+    if ((focusImages[tid] || []).length > 0) return true;
+    if (pid && (focusImages[pid] || []).length > 0) return true;
+    if ((focusReferences[tid] || []).length > 0) return true;
+    if (pid && (focusReferences[pid] || []).length > 0) return true;
+    return false;
+  }, [focusBriefs, focusSubtasks, focusImages, focusReferences]);
+  // Direct-write mutation that bypasses useStorageRecord's "refuse to wipe" guard.
+  // The guard exists to protect against stale-state updaters during reload races, but
+  // for an explicit user-requested purge we WANT the records emptied. This writes the
+  // empty objects straight to Liveblocks storage with no checks.
+  const purgeAllFocusStorage = useMutation(({ storage }) => {
+    storage.set('focusBriefs' as never, {} as never);
+    storage.set('focusSubtasks' as never, {} as never);
+    storage.set('focusImages' as never, {} as never);
+    storage.set('focusReferences' as never, {} as never);
+  }, []);
+  // Restore the entire app state from a backup snapshot. Writes every record
+  // straight to Liveblocks Storage in a single mutation, bypassing the
+  // useStorageRecord wipe-guard. Caller must confirm with the user — this is
+  // destructive: every existing task / project / etc. is replaced.
+  const restoreFromSnapshot = useMutation(({ storage }, slice: BackupSlice) => {
+    storage.set('tasks' as never, (slice.tasks ?? []) as never);
+    storage.set('projects' as never, (slice.projects ?? []) as never);
+    storage.set('clients' as never, (slice.clients ?? []) as never);
+    storage.set('people' as never, (slice.people ?? []) as never);
+    storage.set('focusBriefs' as never, (slice.focusBriefs ?? {}) as never);
+    storage.set('focusSubtasks' as never, (slice.focusSubtasks ?? {}) as never);
+    storage.set('focusImages' as never, (slice.focusImages ?? {}) as never);
+    storage.set('focusReferences' as never, (slice.focusReferences ?? {}) as never);
+  }, []);
+  // ONE-TIME FULL PURGE of all focus-mode storage. Briefs/notes, sub-tasks, images, and
+  // references are wiped — every key in every record. Triggered the first time any
+  // browser sees the marker `focus-purge-v2`; localStorage stamps the same key after
+  // the purge so this never runs twice on the same browser. Subsequent sessions just
+  // see clean storage.
+  //
+  // For images we ALSO fire-and-forget Supabase blob deletions so the underlying WebP
+  // blobs go too — full clean slate, server-side included. Failures are swallowed:
+  // Liveblocks metadata is the source of truth, and orphan blobs are harmless if any
+  // single delete fails.
+  const purgeRanRef = useRef(false);
+  useEffect(() => {
+    if (purgeRanRef.current) return;
+    if (typeof window === 'undefined') return;
+    // v2 marker — v1 was the previous attempt that silently failed because the
+    // hook's wipe-guard rejected our setter calls. Bumping the marker forces the
+    // purge to re-run on every browser even if v1 was already stamped.
+    const PURGE_MARKER = 'focus-purge-v2';
+    if (localStorage.getItem(PURGE_MARKER)) return;
+    // Wait until the room has actually hydrated. If tasks AND projects AND focus
+    // storage are ALL empty, we may be looking at a pre-load snapshot — defer.
+    const anyFocusData = Object.keys(focusBriefs).length + Object.keys(focusSubtasks).length
+      + Object.keys(focusImages).length + Object.keys(focusReferences).length;
+    if (anyFocusData === 0 && tasks.length === 0 && projects.length === 0) return;
+    purgeRanRef.current = true;
+    const briefCount = Object.keys(focusBriefs).length;
+    const subtaskCount = Object.keys(focusSubtasks).length;
+    const imageKeyCount = Object.keys(focusImages).length;
+    const imageRowCount = Object.values(focusImages).reduce((n, arr) => n + (arr?.length || 0), 0);
+    const referenceCount = Object.keys(focusReferences).length;
+    console.log('[focus-purge] Wiping ALL focus content:', {
+      briefs: briefCount,
+      subtasks: subtaskCount,
+      imageKeys: imageKeyCount,
+      imageRows: imageRowCount,
+      references: referenceCount,
+    });
+    // Fire blob deletes for every image we know about (best effort).
+    for (const arr of Object.values(focusImages)) {
+      if (!arr) continue;
+      for (const img of arr) {
+        deleteFocusImageBlob(img.id).catch(() => {});
+      }
+    }
+    purgeAllFocusStorage();
+    localStorage.setItem(PURGE_MARKER, new Date().toISOString());
+    console.log('[focus-purge] Done. Clean slate.');
+  }, [tasks, projects, focusBriefs, focusSubtasks, focusImages, focusReferences, purgeAllFocusStorage]);
+  // --- Local backup hooks ---------------------------------------------------
+  // Builds the current backup slice from live state. Used by the auto-snapshot
+  // interval and the manual Download Backup button. Declared HERE (after the
+  // focus storage hooks it depends on) to avoid a TDZ error.
+  const buildCurrentSlice = useCallback((): BackupSlice => ({
+    tasks, projects, clients, people,
+    focusBriefs, focusSubtasks, focusImages, focusReferences,
+  }), [tasks, projects, clients, people, focusBriefs, focusSubtasks, focusImages, focusReferences]);
+  // Auto-snapshot tick — runs every 5 minutes while the app is open.
+  //   1. Always overwrite the LIVE slot with current state (mirror of "now")
+  //   2. If the DAILY slot is missing OR older than 24 hours, refresh it too
+  // Skipped entirely when storage hasn't hydrated (room is empty in every
+  // record), so we don't write a "blank slate" over a perfectly good daily.
+  // Uses a ref for the slice-builder so the interval doesn't need to be
+  // re-created every time data changes.
+  const sliceRef = useRef(buildCurrentSlice);
+  useEffect(() => { sliceRef.current = buildCurrentSlice; }, [buildCurrentSlice]);
+  useEffect(() => {
+    const tick = async () => {
+      const slice = sliceRef.current();
+      const total = slice.tasks.length + slice.projects.length + slice.clients.length + slice.people.length;
+      if (total === 0) return; // skip pre-hydration / empty-room snapshots
+      // 1. Live mirror — overwrite every tick.
+      const snapshot = buildSnapshot(slice, 'live');
+      try {
+        await putSlot('live', snapshot);
+        setLiveBackupAt(snapshot.takenAtMs);
+      } catch (e) {
+        console.warn('[backup] putSlot live failed', e);
+      }
+      // 2. Daily — refresh only if the existing one is older than 24h (or missing).
+      try {
+        const existing = await getSlot('daily');
+        const stale = !existing || (Date.now() - existing.takenAtMs) > DAILY_REFRESH_MS;
+        if (stale) {
+          const dailySnap = buildSnapshot(slice, 'daily');
+          await putSlot('daily', dailySnap);
+          setDailyBackupAt(dailySnap.takenAtMs);
+        }
+      } catch (e) {
+        console.warn('[backup] putSlot daily failed', e);
+      }
+    };
+    // Baseline snapshot ~10s after mount so even a quick close-the-tab session
+    // ends with a fresh live backup written.
+    const initial = window.setTimeout(() => { void tick(); }, 10_000);
+    const id = window.setInterval(() => { void tick(); }, 5 * 60 * 1000);
+    return () => { window.clearTimeout(initial); window.clearInterval(id); };
+  }, []);
+  // Manual download — builds a snapshot from current state and triggers a
+  // browser download. Stash this somewhere safe for off-machine recovery.
+  const downloadBackup = useCallback(async () => {
+    const snapshot = buildSnapshot(buildCurrentSlice());
+    downloadSnapshot(snapshot);
+  }, [buildCurrentSlice]);
+  // Helper: confirm-and-restore from a snapshot's data slice.
+  const confirmAndRestore = useCallback((snapshot: BackupSnapshot, label: string): string => {
+    const counts = {
+      tasks: snapshot.data.tasks.length,
+      projects: snapshot.data.projects.length,
+      clients: snapshot.data.clients.length,
+      people: snapshot.data.people.length,
+      focusBriefs: Object.keys(snapshot.data.focusBriefs).length,
+      focusSubtasks: Object.keys(snapshot.data.focusSubtasks).length,
+      focusImages: Object.keys(snapshot.data.focusImages).length,
+      focusReferences: Object.keys(snapshot.data.focusReferences).length,
+    };
+    const ok = window.confirm(
+      `Restore ${label}?\n\n` +
+      `Snapshot taken: ${new Date(snapshot.takenAtMs).toLocaleString()}\n\n` +
+      `This REPLACES every task, project, client, person, brief, sub-task, image, and reference in the current room.\n\n` +
+      `Snapshot contains:\n` +
+      `  • ${counts.tasks} tasks  • ${counts.projects} projects  • ${counts.clients} clients  • ${counts.people} people\n` +
+      `  • ${counts.focusBriefs} briefs  • ${counts.focusSubtasks} sub-task buckets  • ${counts.focusImages} image buckets  • ${counts.focusReferences} reference buckets`
+    );
+    if (!ok) return 'Cancelled.';
+    restoreFromSnapshot(snapshot.data);
+    return `Restored ${label} (taken ${new Date(snapshot.takenAtMs).toLocaleString()}).`;
+  }, [restoreFromSnapshot]);
+  // Restore from an uploaded JSON file.
+  const restoreFromFile = useCallback(async (file: File): Promise<string> => {
+    const snapshot = await readSnapshotFile(file);
+    return confirmAndRestore(snapshot, `from ${file.name}`);
+  }, [confirmAndRestore]);
+  // Restore from one of the two named slots in IndexedDB.
+  const restoreFromSlot = useCallback(async (slot: 'live' | 'daily'): Promise<string> => {
+    const snapshot = await getSlot(slot);
+    if (!snapshot) return `No ${slot} backup available yet.`;
+    return confirmAndRestore(snapshot, slot === 'live' ? 'live mirror' : '24-hour rolling backup');
+  }, [confirmAndRestore]);
+  // DAM viewer settings. Tile (justified-gallery / mosaic) is the only layout — uniform row
+  // height with aspect-preserving widths. Sub-toggle picks between Zoom All (fit-all height
+  // computed from image count) and three fixed row heights (sm / md / lg).
+  const [focusDamTileHeight, setFocusDamTileHeight] = useState<'zoom' | 'sm' | 'md' | 'lg'>('md');
+  // Scale-and-compress helper. Reads the dropped File, draws it into a canvas at max-side
+  // 1920px (longest edge), encodes to WebP at 0.85 quality. Smaller images keep their
+  // native dimensions — we only downscale when the longest side > 1920. Now that blobs
+  // live in Supabase Storage (and Liveblocks only persists the URL + metadata), the old
+  // 1MB-per-key Liveblocks constraint that previously forced 1200/0.75 no longer applies,
+  // so we get noticeably crisper references for the cost of a slightly larger blob.
+  const scaleAndCompressImage = useCallback(async (file: File) => {
+    const objUrl = URL.createObjectURL(file);
+    const img = await new Promise<HTMLImageElement>((res, rej) => {
+      const i = new Image();
+      i.onload = () => res(i);
+      i.onerror = rej;
+      i.src = objUrl;
+    });
+    const MAX_SIDE = 1920;
+    const longSide = Math.max(img.naturalWidth, img.naturalHeight);
+    const scale = longSide > MAX_SIDE ? MAX_SIDE / longSide : 1;
+    const w = Math.round(img.naturalWidth * scale);
+    const h = Math.round(img.naturalHeight * scale);
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d')!;
+    ctx.drawImage(img, 0, 0, w, h);
+    URL.revokeObjectURL(objUrl);
+    const blob: Blob = await new Promise((res, rej) => canvas.toBlob((b) => b ? res(b) : rej(new Error('toBlob failed')), 'image/webp', 0.85));
+    return { blob, width: w, height: h };
+  }, []);
+  const addFocusImages = useCallback(async (key: string, files: FileList | File[]) => {
+    const list = Array.from(files).filter((f) => f.type.startsWith('image/'));
+    if (list.length === 0) return;
+    // Process + upload all in parallel. Each one: scale → WebP blob → Supabase upload →
+    // metadata-with-URL row. Anything that fails the upload throws here so the user sees
+    // it in the dev console; the metadata for that image is skipped (no orphan row).
+    const processed = await Promise.all(list.map(async (file) => {
+      const { blob, width, height } = await scaleAndCompressImage(file);
+      const id = `img-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      let url = '';
+      try {
+        url = await uploadFocusImage(id, blob);
+      } catch (e) {
+        console.error('[focusImages] Supabase upload failed', e);
+        throw e;
+      }
+      return { id, url, filename: file.name, width, height };
+    }));
+    setFocusImages((prev) => ({ ...prev, [key]: [...(prev[key] || []), ...processed] }));
+  }, [scaleAndCompressImage, setFocusImages]);
+  const deleteFocusImage = useCallback((key: string, id: string) => {
+    removeImageDataLocal(id);
+    // Evict from the IDB cache too so the local object URL gets revoked and the IDB row freed.
+    const target = (focusImages[key] || []).find((img) => img.id === id);
+    if (target?.url) evictCachedImage(target.url);
+    // Fire-and-forget the Supabase delete — Liveblocks metadata is the source of truth, and
+    // an orphan blob is harmless if the delete fails.
+    deleteFocusImageBlob(id).catch((e) => console.warn('[focusImages] Supabase delete failed', e));
+    setFocusImages((prev) => ({ ...prev, [key]: (prev[key] || []).filter((img) => img.id !== id) }));
+  }, [focusImages, setFocusImages]);
+  // Toggle the heart on a reference image. Favorited images bubble to the front of their
+  // bucket — the viewer also stable-sorts so unfavorited items keep their relative order.
+  const toggleFocusImageFavorite = useCallback((key: string, id: string) => {
+    setFocusImages((prev) => {
+      const arr = prev[key] || [];
+      const idx = arr.findIndex((img) => img.id === id);
+      if (idx < 0) return prev;
+      const target = arr[idx];
+      const updated = { ...target, favorited: !target.favorited };
+      const others = arr.filter((img) => img.id !== id);
+      const firstUnfavedIdx = others.findIndex((img) => !img.favorited);
+      const insertAt = updated.favorited ? 0 : (firstUnfavedIdx < 0 ? others.length : firstUnfavedIdx);
+      const next = [...others.slice(0, insertAt), updated, ...others.slice(insertAt)];
+      return { ...prev, [key]: next };
+    });
+  }, [setFocusImages]);
+  const addFocusSubtask = useCallback((key: string, afterId?: string) => {
+    const id = `sub-${Date.now()}`;
+    setFocusSubtasks((prev) => {
+      const arr = prev[key] || [];
+      if (afterId) {
+        const i = arr.findIndex((s) => s.id === afterId);
+        if (i >= 0) {
+          const next = [...arr.slice(0, i + 1), { id, title: '', completed: false }, ...arr.slice(i + 1)];
+          return { ...prev, [key]: next };
+        }
+      }
+      return { ...prev, [key]: [...arr, { id, title: '', completed: false }] };
+    });
+    setFocusNewSubtaskId(id);
+  }, []);
+  const renameFocusSubtask = useCallback((key: string, id: string, title: string) => {
+    setFocusSubtasks((prev) => ({ ...prev, [key]: (prev[key] || []).map((s) => s.id === id ? { ...s, title } : s) }));
+  }, []);
+  const toggleFocusSubtask = useCallback((key: string, id: string) => {
+    setFocusSubtasks((prev) => ({ ...prev, [key]: (prev[key] || []).map((s) => s.id === id ? { ...s, completed: !s.completed } : s) }));
+  }, []);
+  const deleteFocusSubtask = useCallback((key: string, id: string) => {
+    setFocusSubtasks((prev) => ({ ...prev, [key]: (prev[key] || []).filter((s) => s.id !== id) }));
+  }, []);
+  // Native HTML5 drag-reorder for sub-tasks. Each row has a small grab handle (only the handle
+  // is draggable, so checkbox + title stay clickable / typeable). On drop we move the dragged
+  // sub-task's index to the target's index — same shape as a list-view manual reorder.
+  const reorderFocusSubtask = useCallback((key: string, fromId: string, toId: string) => {
+    if (fromId === toId) return;
+    setFocusSubtasks((prev) => {
+      const arr = [...(prev[key] || [])];
+      const fromIdx = arr.findIndex((s) => s.id === fromId);
+      const toIdx = arr.findIndex((s) => s.id === toId);
+      if (fromIdx < 0 || toIdx < 0) return prev;
+      const [moved] = arr.splice(fromIdx, 1);
+      arr.splice(toIdx, 0, moved);
+      return { ...prev, [key]: arr };
+    });
+  }, []);
+  // 1-up inline view — when set, the DAM grid collapses to a single full-size image. Single-
+  // click on any thumbnail enters 1-up; single-click on the 1-up image exits back to whatever
+  // grid/tile view was active. Stays inline (no fullscreen lightbox modal).
+  const [focusOneUpImageId, setFocusOneUpImageId] = useState<string | null>(null);
+  // The currently-selected task. Set on single-click of a task row, or when the user opens
+  // the edit / quick-edit panel. The Focus mode's Information column dynamically shows the
+  // project tied to this task, and rows render a 25%-brighter highlight while selected.
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  // Liveblocks history hooks — Cmd/Ctrl+Z undoes the last storage mutation, Cmd/Ctrl+Shift+Z (or
+  // Ctrl+Y on Windows) redoes. Skip when the user is editing text so the browser's native input
+  // undo handles in-progress typing.
+  const undo = useUndo();
+  const redo = useRedo();
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      // Escape exits 1-up view if active.
+      if (focusOneUpImageId && e.key === 'Escape') { e.preventDefault(); setFocusOneUpImageId(null); return; }
+      const t = e.target as HTMLElement | null;
+      const inEditable = !!(t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable));
+      const isMod = e.ctrlKey || e.metaKey;
+      // Cmd/Ctrl-Z / Y — undo / redo, skip when typing.
+      if (isMod && !inEditable) {
+        const k = e.key.toLowerCase();
+        if (k === 'z' && !e.shiftKey) { e.preventDefault(); undo(); return; }
+        if ((k === 'z' && e.shiftKey) || k === 'y') { e.preventDefault(); redo(); return; }
+      }
+      // Arrow nav between task rows. Strict guards so this only intercepts
+      // arrows when there's an EXISTING selection — otherwise the user's
+      // arrow keys remain free for normal browser behavior (form fields,
+      // contentEditable, etc.). Tab is intentionally NOT intercepted —
+      // standard focus traversal needs to keep working app-wide.
+      if (inEditable) return;
+      if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+      // Only navigate when there's already a selected task — otherwise let
+      // arrow keys do their default thing (page scroll, focus, etc.).
+      if (!selectedTaskId) return;
+      const rows = Array.from(document.querySelectorAll('[data-task-row]')) as HTMLElement[];
+      if (rows.length === 0) return;
+      const currentIdx = rows.findIndex((el) => el.getAttribute('data-task-row') === selectedTaskId);
+      if (currentIdx < 0) return;
+      const isDown = e.key === 'ArrowDown';
+      let nextIdx = isDown ? currentIdx + 1 : currentIdx - 1;
+      if (nextIdx < 0 || nextIdx >= rows.length) return;
+      e.preventDefault();
+      const nextId = rows[nextIdx].getAttribute('data-task-row');
+      if (nextId) setSelectedTaskId(nextId);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [undo, redo, focusOneUpImageId, selectedTaskId]);
   const addBlankClient = useCallback(() => {
     const id = `c-${Date.now()}`;
     setClients((prev) => [...prev, { id, name: '', short: '' }]);
@@ -3241,10 +4830,27 @@ export default function App() {
   // Add a blank task as a sibling of an existing one: same list/section/project, inserted right after it.
   const addSiblingTask = useCallback((sibling: Task) => {
     const id = `task-${Date.now()}`;
+    // If the sibling is a milestone (type === 'scheduled'), spawn another milestone — not a
+    // regular todo. The user clicked + on a milestone row, so they want to author another
+    // milestone in the same project, not demote the action into a sibling task.
+    const isMilestoneSibling = sibling.type === 'scheduled';
     setTasks((prev) => {
       const bucket = prev.filter((t) => t.list === sibling.list && t.section === sibling.section).sort((a, b) => a.order - b.order);
       const idx = bucket.findIndex((t) => t.id === sibling.id);
-      const newTask: Task = { id, title: '', type: 'todo', assignees: currentUserShort ? [currentUserShort] : [], completed: false, list: sibling.list, section: sibling.section, order: 0, projectId: sibling.projectId };
+      const newTask: Task = {
+        id,
+        title: '',
+        type: isMilestoneSibling ? 'scheduled' : 'todo',
+        assignees: currentUserShort ? [currentUserShort] : [],
+        completed: false,
+        list: sibling.list,
+        section: sibling.section,
+        order: 0,
+        projectId: sibling.projectId,
+        // Carry the clientId too so a sibling milestone inherits the parent's client (regular
+        // tasks normally derive client via project, but milestones often have only clientId).
+        clientId: sibling.clientId,
+      };
       const insertAt = idx >= 0 ? idx + 1 : bucket.length;
       const reordered = [...bucket.slice(0, insertAt), newTask, ...bucket.slice(insertAt)].map((t, i) => ({ ...t, order: i }));
       const untouched = prev.filter((t) => !(t.list === sibling.list && t.section === sibling.section));
@@ -3318,6 +4924,33 @@ export default function App() {
       return prev.filter((p) => p.id !== id);
     });
   }, [setTasks]);
+  // Open the two-step delete-confirm flow for a resource. If the person is unnamed/no-short and
+  // has no assignments, fall through to a direct delete — confirm UI for an empty stub feels noisy.
+  const requestDeleteResource = useCallback((id: string) => {
+    const p = people.find((x) => x.id === id);
+    if (!p) return;
+    if (!p.short) { deletePerson(id); return; }
+    setPendingResourceDelete({ id: p.id, name: p.name || '(unnamed)', short: p.short });
+  }, [people, deletePerson]);
+  // Finalize the delete. If reassignToShort is set, every task that had the deleted resource's
+  // short gets the replacement appended (deduped) before the original is stripped. If null, the
+  // short is just removed (existing deletePerson behavior).
+  const confirmDeleteResource = useCallback((reassignToShort: string | null) => {
+    setPendingResourceDelete((target) => {
+      if (!target) return null;
+      const removedShort = target.short;
+      if (removedShort) {
+        setTasks((prev) => prev.map((t) => {
+          if (!t.assignees.includes(removedShort)) return t;
+          const without = t.assignees.filter((a) => a !== removedShort);
+          if (reassignToShort && !without.includes(reassignToShort)) without.push(reassignToShort);
+          return { ...t, assignees: without };
+        }));
+      }
+      setPeople((prev) => prev.filter((p) => p.id !== target.id));
+      return null;
+    });
+  }, [setTasks, setPeople]);
 
   const handleDragStart = useCallback((e: DragStartEvent) => {
     const type = e.active.data.current?.type;
@@ -3433,6 +5066,21 @@ export default function App() {
       if (collapseTimerRef.current) { clearTimeout(collapseTimerRef.current); collapseTimerRef.current = null; }
       setSourceCollapsed(false);
     };
+    // Sub-task drag-reorder. Same dnd-kit sortable plumbing as the rest of the app —
+    // active.data carries { type: 'subtask', key, subId } and over carries the same on the
+    // drop target. Handles intra-list reorder only (sub-tasks don't move across keys).
+    if (active.data.current?.type === 'subtask') {
+      const fromId = active.data.current.subId as string;
+      const key = active.data.current.key as string;
+      const overData = over?.data.current;
+      if (overData?.type === 'subtask' && overData.key === key) {
+        const toId = overData.subId as string;
+        if (fromId && toId && fromId !== toId) reorderFocusSubtask(key, fromId, toId);
+      }
+      resetDragRefs();
+      clearOverlay();
+      return;
+    }
     if (active.data.current?.type === 'projTask') {
       const srcTask = active.data.current.task as Task;
       const overData = over?.data.current;
@@ -3547,6 +5195,25 @@ export default function App() {
     const activeTaskId = (active.data.current?.task as Task | undefined)?.id ?? String(active.id);
     const overTaskId = (over.data.current?.task as Task | undefined)?.id ?? String(over.id);
     const overIdStr = String(over.id);
+    // Project view 2: drop on a project block (header OR empty area OR existing task). The
+    // task gets reparented to that project — projectId is set, and list flips to the
+    // project's pinned list (or the column's list if unpinned). Header drops handled here;
+    // existing-task drops fall through to the regular reorder path AND get reparented via
+    // the prefix check below.
+    const overData = over.data.current;
+    if (overData?.type === 'proj2Project') {
+      const targetProjectId = overData.projectId as string;
+      const targetListId = overData.listId as ListId;
+      const targetProject = projects.find((p) => p.id === targetProjectId);
+      const targetList: ListId = targetProject?.list ?? targetListId;
+      setTasks((prev) => prev.map((t) => (t.id === activeTaskId ? { ...t, projectId: targetProjectId, list: targetList, section: t.section || 'today' } : t)));
+      setActiveId(null); setActiveTaskIdState(null); setActiveType(null); setActiveCalendarCellId(null);
+      setColumnOffset(0); pendingOffsetRef.current = 0;
+      if (dwellTimerRef.current) { clearTimeout(dwellTimerRef.current); dwellTimerRef.current = null; }
+      if (collapseTimerRef.current) { clearTimeout(collapseTimerRef.current); collapseTimerRef.current = null; }
+      setSourceCollapsed(false);
+      return;
+    }
     if (overIdStr.startsWith('cal:')) {
       const [, targetDate, targetListRaw] = overIdStr.split(':');
       const droppedList = targetListRaw as ListId;
@@ -3670,6 +5337,23 @@ export default function App() {
     if (activePrefix.startsWith('dash:') && activePrefix !== overPrefix) {
       setActiveId(null); setActiveTaskIdState(null); setActiveType(null); setActiveCalendarCellId(null); setColumnOffset(0); pendingOffsetRef.current = 0; if (dwellTimerRef.current) { clearTimeout(dwellTimerRef.current); dwellTimerRef.current = null; } if (collapseTimerRef.current) { clearTimeout(collapseTimerRef.current); collapseTimerRef.current = null; } setSourceCollapsed(false); return;
     }
+    // Project view 2: when dropping a task onto another task that lives in a project bucket
+    // (over.id has the `proj2:${listId}:${projectId}:` prefix), also reparent the dragged
+    // task into that bucket's project. Fires regardless of whether the source task already
+    // had the same project — covers the "reorder within project" case too.
+    if (overPrefix.startsWith('proj2:')) {
+      const parts = overPrefix.slice('proj2:'.length).split(':');
+      // parts: [listId, projectIdOrLiteral, ...]
+      const proj2ListId = parts[0] as ListId;
+      const proj2Token = parts[1];
+      let proj2ProjectId: string | undefined;
+      if (proj2Token && proj2Token !== 'none' && proj2Token !== 'client') proj2ProjectId = proj2Token;
+      const targetProject = proj2ProjectId ? projects.find((p) => p.id === proj2ProjectId) : undefined;
+      const targetList: ListId = targetProject?.list ?? proj2ListId;
+      if (a.projectId !== proj2ProjectId || a.list !== targetList) {
+        setTasks((prev) => prev.map((t) => (t.id === a.id ? { ...t, projectId: proj2ProjectId, list: targetList } : t)));
+      }
+    }
     if (a.list === o.list && a.section === o.section) {
       setTasks((prev) => {
         // Calendar drags share list+section across multiple days (every section='next' Work
@@ -3689,7 +5373,7 @@ export default function App() {
       handleCrossSectionMove(a, o);
     }
     setActiveId(null); setActiveTaskIdState(null); setActiveType(null); setActiveCalendarCellId(null); setColumnOffset(0); pendingOffsetRef.current = 0; if (dwellTimerRef.current) { clearTimeout(dwellTimerRef.current); dwellTimerRef.current = null; } if (collapseTimerRef.current) { clearTimeout(collapseTimerRef.current); collapseTimerRef.current = null; } setSourceCollapsed(false);
-  }, [tasks]);
+  }, [tasks, reorderFocusSubtask]);
 
   // Default to first person if unset
   useEffect(() => {
@@ -3858,6 +5542,12 @@ export default function App() {
   //     via calendarTasks below; here they fall off list/project view after a day)
   // Recently revived tasks (revivedAt within 10 min) are always shown regardless of completedDay.
   const REVIVE_WINDOW_MS = 10 * 60 * 1000;
+  // Completed tasks linger in list / project / dashboard for COMPLETED_LINGER_MS after the
+  // user checks them off, then disappear. Calendar view ignores this and keeps every
+  // historical completion visible (via calendarTasks below). Tied to completedAt (epoch
+  // ms) — the same timestamp the 15-second sink delay uses. Falls back to the previous
+  // 4-AM-rollover behavior for legacy tasks that have completedDay but no completedAt.
+  const COMPLETED_LINGER_MS = 30 * 60 * 1000;
   const visibleTasks = useMemo(() => {
     const today = todayISO();
     const now = Date.now();
@@ -3866,16 +5556,27 @@ export default function App() {
     return tasks.filter((t) => {
       if (t.trashed) return false;
       if (t.clientId === PERSONAL_CLIENT_ID && !t.assignees.includes(currentUserShort)) return false;
-      if (t.completed && t.completedDay && t.completedDay < today) {
-        // Hide unless within the post-revive grace window (handles re-completion after revival).
-        if (!t.revivedAt || now - t.revivedAt > REVIVE_WINDOW_MS) return false;
+      if (t.completed) {
+        // Recently revived tasks ALWAYS stay visible inside the revive window — gives
+        // the user a 10-min grace to re-check after an accidental un-check.
+        const justRevived = !!t.revivedAt && (now - t.revivedAt) < REVIVE_WINDOW_MS;
+        if (!justRevived) {
+          // Modern: hide once 30 minutes have elapsed since check-off.
+          if (t.completedAt && (now - t.completedAt) > COMPLETED_LINGER_MS) return false;
+          // Legacy fallback: tasks completed before completedAt was added still use the
+          // 4-AM rollover (completedDay < today → hide).
+          if (!t.completedAt && t.completedDay && t.completedDay < today) return false;
+        }
       }
       // Expired milestone: show for 24 hours after the deadline (linger), then hide.
       // Calendar still shows them via calendarTasks below.
       if (t.type === 'scheduled' && t.deadline && t.deadline < yesterday) return false;
       return true;
     });
-  }, [tasks, currentUserShort]);
+    // sortTick included so the periodic 60-second tick (declared below) re-evaluates
+    // this filter and lifts completed tasks out once their 30-minute window expires.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tasks, currentUserShort, sortTick]);
 
   // Calendar view bypasses the completedDay filter — historical completions stay visible there.
   const calendarTasks = useMemo(
@@ -3925,19 +5626,35 @@ export default function App() {
         (m[k] ||= []).push(t);
       }
     }
+    // 15-second grace window: a task that was JUST checked off keeps its current
+    // position so the user has time to undo a misclick without the row visibly
+    // sliding away. After the window elapses, toggleTask's setTimeout bumps
+    // sortTick which re-runs this memo and the task drops to the bottom.
+    const COMPLETED_GRACE_MS = 15000;
+    const now = Date.now();
+    const isSunkCompleted = (t: Task) =>
+      t.completed && (!t.completedAt || now - t.completedAt >= COMPLETED_GRACE_MS);
     for (const k of Object.keys(m)) {
       if (k.endsWith(':milestones')) {
-        // Sort milestones by deadline ascending; undated last; ties broken by title.
+        // Completed milestones sink to the bottom (after grace) of the milestones bucket.
+        // Among the rest: deadline ascending, undated last, ties broken by title.
         m[k].sort((a, b) => {
+          const aSunk = isSunkCompleted(a);
+          const bSunk = isSunkCompleted(b);
+          if (aSunk !== bSunk) return aSunk ? 1 : -1;
           const ad = a.deadline || '\uffff';
           const bd = b.deadline || '\uffff';
           if (ad !== bd) return ad < bd ? -1 : 1;
           return a.title.localeCompare(b.title);
         });
       } else {
-        // Sort by deadline ascending when dates are present; undated tasks fall to the bottom
-        // and keep their existing manual order. Ties between two dated tasks fall back to order.
+        // Completed tasks (past grace window) sink to the bottom of their section.
+        // Among the rest (and within freshly-checked tasks): deadline ascending,
+        // undated tasks below dated, manual order as the final tiebreaker.
         m[k].sort((a, b) => {
+          const aSunk = isSunkCompleted(a);
+          const bSunk = isSunkCompleted(b);
+          if (aSunk !== bSunk) return aSunk ? 1 : -1;
           const ad = a.deadline;
           const bd = b.deadline;
           if (ad && bd) return ad === bd ? a.order - b.order : ad < bd ? -1 : 1;
@@ -3947,33 +5664,51 @@ export default function App() {
         });
       }
     }
-    // Dashboard = aggregated view of work+projects+admin filtered to current user
-    const dashBuckets = ['milestones', 'inbox', 'today', 'next'] as const;
+    // Dashboard = aggregated view of work+projects+admin scoped to the current
+    // user. A task counts as the user's if they're explicitly an assignee OR
+    // if no one is assigned (unassigned tasks default to "everyone's" — they
+    // were previously hidden from dashboard, which made dragging an unassigned
+    // task into the dashboard's Tomorrow column appear to do nothing because
+    // the assignee filter then rejected it from the aggregate).
+    const dashBuckets = ['milestones', 'inbox', 'today', 'tomorrow', 'next'] as const;
     for (const s of dashBuckets) {
       const agg: Task[] = [];
       for (const l of ['work', 'projects', 'admin'] as ListId[]) {
         for (const t of (m[`${l}:${s}`] || [])) {
-          if (t.assignees.includes(currentUserShort)) agg.push(t);
+          if (t.assignees.length === 0 || t.assignees.includes(currentUserShort)) agg.push(t);
         }
       }
       if (s === 'milestones') {
         agg.sort((a, b) => {
+          const aSunk = isSunkCompleted(a);
+          const bSunk = isSunkCompleted(b);
+          if (aSunk !== bSunk) return aSunk ? 1 : -1;
           const ad = a.deadline || '\uffff';
           const bd = b.deadline || '\uffff';
           if (ad !== bd) return ad < bd ? -1 : 1;
           return a.title.localeCompare(b.title);
         });
+      } else {
+        // Dashboard aggregates carry over per-list bucket order, but post-grace
+        // completed tasks still sink to the bottom of the aggregate.
+        agg.sort((a, b) => {
+          const aSunk = isSunkCompleted(a);
+          const bSunk = isSunkCompleted(b);
+          return aSunk === bSunk ? 0 : (aSunk ? 1 : -1);
+        });
       }
       m[`dashboard:${s}`] = agg;
     }
-    // Per-list dashboard sub-sections under Today: each list's today tasks for the current user.
-    // Order preserved from the underlying today bucket.
+    // Per-list dashboard sub-sections under Today: each list's today tasks for the
+    // current user (or unassigned — same rule as the aggregate above). Order
+    // preserved from the underlying today bucket.
     for (const l of ['work', 'projects', 'admin'] as ListId[]) {
-      const agg = (m[`${l}:today`] || []).filter((t) => t.assignees.includes(currentUserShort));
+      const agg = (m[`${l}:today`] || []).filter((t) => t.assignees.length === 0 || t.assignees.includes(currentUserShort));
       m[`dashboard:list:${l}`] = agg;
     }
     return m;
-  }, [visibleTasks, currentUserShort, effectiveListFor]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleTasks, currentUserShort, effectiveListFor, sortTick]);
 
   const activeTask = activeTaskId ? tasks.find((t) => t.id === activeTaskId) : null;
   // overId may carry a sortable prefix (e.g. "dash:work:taskId"). Strip it so we can resolve the
@@ -4044,7 +5779,7 @@ export default function App() {
         {list.map((task, index) => {
           const { displacementOffset, insertionGap } = getAnimationProps(task, index, list, idPrefix);
           return (
-            <SortableTaskItem key={`${idPrefix}${task.id}`} task={task} idPrefix={idPrefix} onToggle={() => toggleTask(task.id)} onRename={(title) => renameTask(task.id, title)} onDelete={() => deleteTask(task.id)} onEdit={(e) => openEdit(task, e)} onQuickEdit={(e) => openQuick(task, e)} onAddSibling={() => addSiblingTask(task)} onReschedule={(kind) => rescheduleTaskTo(task.id, kind)} onCancelPendingRename={() => cancelSentenceCaseTask(task.id)} autoFocus={task.id === newId} displacementOffset={displacementOffset} insertionGap={insertionGap} isAnyDragging={!!activeTask} collapsed={sourceCollapsed && `${idPrefix}${task.id}` === activeId} projects={projects} clients={clients} taskOrder={taskOrder} density={density} />
+            <SortableTaskItem key={`${idPrefix}${task.id}`} task={task} idPrefix={idPrefix} onToggle={() => toggleTask(task.id)} onRename={(title) => renameTask(task.id, title)} onDelete={() => deleteTask(task.id)} onEdit={(e) => openEdit(task, e)} onQuickEdit={(e) => openQuick(task, e)} onAddSibling={() => addSiblingTask(task)} onReschedule={(kind) => rescheduleTaskTo(task.id, kind)} onCancelPendingRename={() => cancelSentenceCaseTask(task.id)} onSelect={() => selectTask(task.id)} isSelected={selectedTaskId === task.id} hasFocusContent={taskHasFocusContent(task)} onOpenFocus={() => openTaskInFocus(task.id)} autoFocus={task.id === newId} displacementOffset={displacementOffset} insertionGap={insertionGap} isAnyDragging={!!activeTask} collapsed={sourceCollapsed && `${idPrefix}${task.id}` === activeId} projects={projects} clients={clients} taskOrder={taskOrder} density={density} />
           );
         })}
       </AnimatePresence>
@@ -4054,6 +5789,8 @@ export default function App() {
   // Milestones are read-only in the column: not draggable, sorted by deadline. Still rendered through
   // SortableTaskItem (with nonDraggable) so visuals stay identical to other rows. Inherits the
   // user's taskOrder + density just like regular tasks so the meta-slot order matches.
+  // onAddSibling is wired so the hover-reveal + button on the milestone row spawns a sibling task
+  // in the milestone's project — matches the affordance on every other view.
   const renderMilestoneBucket = (list: Task[]) => (
     <>
       {list.map((task) => (
@@ -4064,6 +5801,12 @@ export default function App() {
           onRename={(title) => renameTask(task.id, title)}
           onDelete={() => deleteTask(task.id)}
           onEdit={() => openEdit(task)}
+          onQuickEdit={(e) => openQuick(task, e)}
+          onAddSibling={() => addSiblingTask(task)}
+          onSelect={() => selectTask(task.id)}
+          isSelected={selectedTaskId === task.id}
+          hasFocusContent={taskHasFocusContent(task)}
+          onOpenFocus={() => openTaskInFocus(task.id)}
           isAnyDragging={!!activeTask}
           projects={projects}
           clients={clients}
@@ -4084,8 +5827,8 @@ export default function App() {
         const isScheduled = task.type === 'scheduled';
         const isNext = task.section === 'next' || task.section === 'tomorrow';
         const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID;
-        const titleColor = isScheduled ? 'text-[#8465ff]' : task.completed ? 'text-[#383838]' : isNext ? 'text-[#a8a8a8]' : 'text-white';
-        const metaColor = task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : 'text-[#656464]';
+        const titleColor = isScheduled ? 'text-[#8465ff]' : task.completed ? 'text-[#474747]' : isNext ? 'text-[#a8a8a8]' : 'text-white';
+        const metaColor = task.completed ? 'text-[#474747]' : isScheduled ? 'text-[#8465ff]' : 'text-[#656464]';
         return (
           <div key={`dash-${task.id}`} onDoubleClick={() => openEdit(task)} onContextMenu={(e) => { e.preventDefault(); openQuick(task); }} className="h-[37px] box-border flex flex-row gap-2 items-center px-[31px] w-full group hover:bg-white/[0.03]">
             {!isScheduled && <TaskCheckbox completed={task.completed} onToggle={() => toggleTask(task.id)} />}
@@ -4095,7 +5838,7 @@ export default function App() {
               {(() => {
                 const showClient = !!client;
                 const showProject = !!project;
-                const metaCls = `font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : 'text-[#656464]'}`;
+                const metaCls = `font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap ${task.completed ? 'text-[#474747]' : 'text-[#656464]'}`;
                 return taskOrderSlots(taskOrder, showProject, showClient).map((slot, i) => {
                   if (slot === 'project' && project) return <p key={`p-${i}`} className={metaCls}>{project.name}</p>;
                   if (slot === 'client' && client) return <p key={`c-${i}`} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap ${metaColor}`}>{client.short}</p>;
@@ -4109,7 +5852,7 @@ export default function App() {
             {task.deadline && (
               <>
                 {!isScheduled && <DeadlineArrow dim={task.completed} />}
-                <p className={`font-['NB_International:Regular',sans-serif] text-[14.333px] whitespace-nowrap ${task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : isLateDeadline(task.deadline) ? 'text-[#FF7171]' : isNext ? 'text-[#a8a8a8]' : 'text-white'}`}>{formatDeadline(task.deadline)}</p>
+                <p className={`font-['NB_International:Regular',sans-serif] text-[14.333px] whitespace-nowrap ${task.completed ? 'text-[#474747]' : isScheduled ? 'text-[#8465ff]' : isLateDeadline(task.deadline) ? 'text-[#FF7171]' : isNext ? 'text-[#a8a8a8]' : 'text-white'}`}>{formatDeadline(task.deadline)}</p>
               </>
             )}
             <button
@@ -4137,21 +5880,33 @@ export default function App() {
     // Milestones only surface in per-list columns; the dashboard omits them so they aren't duplicated.
     const milestones = listId === 'dashboard' ? [] : (tasksByKey[`${listId}:milestones`] || []);
     return (
-      <div key={listId} className="flex-1 min-w-[280px]">
+      // Three-tier layout: column title (sticky), milestones (sticky-below-title), then a
+      // flex-1 scroller that contains the rest. The whole column is min-h-0 so flex parent's
+      // overflow:hidden actually clips it instead of letting it grow forever.
+      <div key={listId} className="flex-1 min-w-[280px] flex flex-col min-h-0 overflow-hidden">
         {/* Column title — 37px-tall flex container with a DOUBLE carriage-return below so the
-            column header has a clear paragraph break before its first section. */}
-        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]" style={{ marginBottom: SPACING.dcr }}>
-          <p className={`font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] ${listId === 'dashboard' ? 'text-[#8465ff]' : 'text-white'}`}>
+            column header has a clear paragraph break before its first section. shrink-0 so
+            the title never gets squeezed by the scrolling content. */}
+        <div className="shrink-0 group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]" style={{ marginBottom: SPACING.dcr }}>
+          <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">
             {LIST_TITLES[listId]}
             {listId === 'dashboard' && (
-              <span> ({people.find((p) => p.short === currentUserShort)?.name || currentUserShort})</span>
+              <> — {people.find((p) => p.short === currentUserShort)?.name || currentUserShort}</>
             )}
           </p>
         </div>
-        {milestones.length > 0 && wrap('milestones', milestoneBucket(milestones))}
+        {/* Milestones — also pinned (shrink-0) so they stay visible when the rest scrolls. */}
+        {milestones.length > 0 && (
+          <div className="shrink-0">{wrap('milestones', milestoneBucket(milestones))}</div>
+        )}
+        {/* Independent per-column scroll. Inbox + Today/Tomorrow/Next sections live here.
+            CustomScroll supplies the fixed-size pill thumb (the native scrollbar is hidden). */}
+        <CustomScroll>
         {(tasksByKey[`${listId}:inbox`] || []).length > 0 && wrap('inbox', bucket(tasksByKey[`${listId}:inbox`] || []))}
         {listId === 'dashboard' ? (
-          // Categorize the dashboard's Today items by list. Inbox + Next are intentionally hidden here.
+          // Dashboard column: TODAY is split per list (admin/work/projects), NEXT is the same
+          // aggregate the per-list columns show — surfacing Next here gives the user a
+          // quick scan of what's coming without leaving the Dashboard column.
           <>
             <SectionHeader title="Today" />
             {(['admin', 'work', 'projects'] as ListId[]).map((l) => {
@@ -4167,6 +5922,20 @@ export default function App() {
                 </Fragment>
               );
             })}
+            {tomorrowEnabled && (tasksByKey['dashboard:tomorrow'] || []).length > 0 && (
+              <>
+                <Spacer />
+                <SectionHeader title="Tomorrow" />
+                {bucket(tasksByKey['dashboard:tomorrow'] || [], 'dash:tomorrow:')}
+              </>
+            )}
+            {(tasksByKey['dashboard:next'] || []).length > 0 && (
+              <>
+                <Spacer />
+                <SectionHeader title="Next" />
+                {bucket(tasksByKey['dashboard:next'] || [], 'dash:next:')}
+              </>
+            )}
           </>
         ) : (
           // Headers live INSIDE their section's droppable so dropping ON the "Today" / "Next"
@@ -4198,6 +5967,7 @@ export default function App() {
             ))}
           </>
         )}
+        </CustomScroll>
       </div>
     );
   };
@@ -4235,6 +6005,10 @@ export default function App() {
                 onAddSibling={() => addSiblingTask(task)}
                 onReschedule={(kind) => rescheduleTaskTo(task.id, kind)}
                 onCancelPendingRename={() => cancelSentenceCaseTask(task.id)}
+                onSelect={() => selectTask(task.id)}
+                isSelected={selectedTaskId === task.id}
+                hasFocusContent={taskHasFocusContent(task)}
+                onOpenFocus={() => openTaskInFocus(task.id)}
                 autoFocus={task.id === newId}
                 displacementOffset={displacementOffset}
                 insertionGap={insertionGap}
@@ -4253,25 +6027,67 @@ export default function App() {
       </SortableContext>
     );
     // Gather all tasks visible in this list (across all sections — Project View 2 doesn't carve
-    // by today/tomorrow/next, it carves by client > project).
+    // by today/tomorrow/next, it carves by client > project). Milestones (type === 'scheduled')
+    // are included too so they live UNDER their project header in project view, not as a separate
+    // top-of-column bucket like in list view.
     const allTasks = (tasksByKey[`${listId}:today`] || [])
       .concat(tasksByKey[`${listId}:tomorrow`] || [])
       .concat(tasksByKey[`${listId}:next`] || [])
-      .concat(tasksByKey[`${listId}:inbox`] || []);
-    // Map projectId → tasks (non-projected tasks go to orphans)
+      .concat(tasksByKey[`${listId}:inbox`] || [])
+      .concat(tasksByKey[`${listId}:milestones`] || []);
+    // Map projectId → tasks (non-projected tasks go to orphans). Milestones often don't have
+    // an explicit projectId but ARE conceptually a project's milestone (e.g. an "RSL Launch"
+    // milestone belongs in the "Launch" project under the RSL client). Resolve them by matching
+    // title to a project name under the same client — purely a render-time inference, the
+    // underlying task data is untouched.
     const tasksByProject = new Map<string, Task[]>();
+    // Tasks that have a clientId but no project (and no inferred project match) — they live
+    // under their client header without a project subgroup, so e.g. a Zakynthos milestone with
+    // no project still appears in project view as "Zakynthos → milestone" instead of falling to
+    // the column orphan strip at the very top.
+    const tasksByClient = new Map<string, Task[]>();
     const orphans: Task[] = [];
     for (const t of allTasks) {
-      if (t.projectId && projects.find((p) => p.id === t.projectId)) {
-        const arr = tasksByProject.get(t.projectId) || [];
+      let resolvedProjectId = t.projectId;
+      if (!resolvedProjectId && t.type === 'scheduled' && t.clientId && t.title) {
+        const norm = t.title.trim().toLowerCase();
+        const matched = projects.find(
+          (p) => p.clientId === t.clientId && p.name && p.name.trim().toLowerCase() === norm,
+        );
+        if (matched) resolvedProjectId = matched.id;
+      }
+      if (resolvedProjectId && projects.find((p) => p.id === resolvedProjectId)) {
+        const arr = tasksByProject.get(resolvedProjectId) || [];
         arr.push(t);
-        tasksByProject.set(t.projectId, arr);
+        tasksByProject.set(resolvedProjectId, arr);
+      } else if (t.clientId && clients.find((c) => c.id === t.clientId)) {
+        const arr = tasksByClient.get(t.clientId) || [];
+        arr.push(t);
+        tasksByClient.set(t.clientId, arr);
       } else {
         orphans.push(t);
       }
     }
+    // Pin milestones to the top of each project's bucket so they read as the project's
+    // headline goal, with the day-to-day tasks underneath.
+    for (const pid of Array.from(tasksByProject.keys())) {
+      const arr = tasksByProject.get(pid)!;
+      const milestones = arr.filter((t) => t.type === 'scheduled');
+      if (milestones.length === 0) continue;
+      const others = arr.filter((t) => t.type !== 'scheduled');
+      tasksByProject.set(pid, [...milestones, ...others]);
+    }
+    // Same milestone-on-top rule for client-level orphans (no project under them).
+    for (const cid of Array.from(tasksByClient.keys())) {
+      const arr = tasksByClient.get(cid)!;
+      const milestones = arr.filter((t) => t.type === 'scheduled');
+      if (milestones.length === 0) continue;
+      const others = arr.filter((t) => t.type !== 'scheduled');
+      tasksByClient.set(cid, [...milestones, ...others]);
+    }
     // Build the client > projects hierarchy. A client appears in this column if any of its
-    // projects has tasks here OR is pinned to this list.
+    // projects has tasks here, OR it's pinned to this list, OR it has client-level tasks
+    // (e.g. a milestone tied to the client without a concrete project).
     const clientBlocks = proj2SortedClients
       .map((c) => {
         const clientProjects = projects
@@ -4281,14 +6097,16 @@ export default function App() {
             // Unpinned project: show in 'projects' list as default home, plus anywhere it has tasks here
             return listId === 'projects' || tasksByProject.has(p.id);
           });
-        return { client: c, projects: clientProjects };
+        const clientLevelTasks = tasksByClient.get(c.id) || [];
+        return { client: c, projects: clientProjects, clientLevelTasks };
       })
-      .filter((b) => b.projects.length > 0);
+      .filter((b) => b.projects.length > 0 || b.clientLevelTasks.length > 0);
     return (
-      <div key={listId} className="flex-1 min-w-[280px]">
+      <div key={listId} className="flex-1 min-w-[280px] flex flex-col min-h-0 overflow-hidden">
         {/* Column header with the cascading add menu (HeaderAddMenu). DOUBLE carriage-return
-            below for a paragraph break before the first client / project block. */}
-        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]" style={{ marginBottom: SPACING.dcr }}>
+            below for a paragraph break before the first client / project block. shrink-0 so
+            it stays pinned at the top of the column when the rest scrolls. */}
+        <div className="shrink-0 group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]" style={{ marginBottom: SPACING.dcr }}>
           <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">
             {LIST_TITLES[listId]}
           </p>
@@ -4299,12 +6117,15 @@ export default function App() {
             onAddBlankTask={() => addBlankTaskInList(listId)}
           />
         </div>
+        {/* Independent per-column scroll. Orphans + client/project blocks live here.
+            CustomScroll supplies the fixed-size pill thumb (the native scrollbar is hidden). */}
+        <CustomScroll>
         {orphans.length > 0 && (
           <div className="mb-[37px]">
             {renderProjectBucket(orphans, `proj2:${listId}:none:`, false)}
           </div>
         )}
-        {clientBlocks.map(({ client: c, projects: clientProjects }, ci) => (
+        {clientBlocks.map(({ client: c, projects: clientProjects, clientLevelTasks }, ci) => (
           <div key={c.id}>
             {ci > 0 && <Spacer />}
             {/* Client subheader — editable client name + AddPlus to spawn a new project under
@@ -4326,10 +6147,14 @@ export default function App() {
                 </div>
               )}
             </div>
+            {/* Client-level tasks (no project) sit directly under the client header — typically
+                milestones tied to a client without a specific project. Indented like project
+                tasks for visual continuity. */}
+            {clientLevelTasks.length > 0 && renderProjectBucket(clientLevelTasks, `proj2:${listId}:client:${c.id}:`, true)}
             {clientProjects.map((p) => {
               const projTasks = tasksByProject.get(p.id) || [];
               return (
-                <div key={p.id}>
+                <Proj2ProjectDropZone key={p.id} projectId={p.id} listId={listId}>
                   {/* Project header — folder icon + EDITABLE project name + AddPlus to spawn
                       a new task under this project. The name uses EditableText so the user can
                       click-to-rename, with placeholder + autoFocus on freshly-created projects.
@@ -4343,19 +6168,28 @@ export default function App() {
                       autoFocus={p.id === newId}
                       placeholder="New Project"
                       onDiscardIfEmpty={() => deleteProject(p.id)}
-                      className={`${proj2BodyFont} text-white`}
+                      className={`${proj2BodyFont} text-[#656464]`}
                     />
                     <AddPlus onClick={() => addTaskToProject(p.id, listId)} />
                     <div className="ml-auto">
                       <TrashBtn onClick={() => setPendingTrash({ kind: 'project', id: p.id, name: p.name || 'Untitled' })} />
                     </div>
                   </div>
-                  {projTasks.length > 0 && renderProjectBucket(projTasks, `proj2:${listId}:${p.id}:`, true)}
-                </div>
+                  {/* Empty-project drop slot. When a project has no tasks, the header alone
+                      can be a tiny target — the slot adds a 37px landing zone so users have
+                      something to aim at directly under the header. The Proj2ProjectDropZone
+                      wraps both, so dropping anywhere on this block reparents the dragged task. */}
+                  {projTasks.length === 0 ? (
+                    <div className="h-[37px] w-full" aria-hidden />
+                  ) : (
+                    renderProjectBucket(projTasks, `proj2:${listId}:${p.id}:`, true)
+                  )}
+                </Proj2ProjectDropZone>
               );
             })}
           </div>
         ))}
+        </CustomScroll>
       </div>
     );
   };
@@ -4445,11 +6279,15 @@ export default function App() {
       // back to source list) so the card visually moves freely while the data stays clean.
       modifiers={activeType === 'task' || activeType === 'projTask' ? [restrictToVerticalAxis] : []}
     >
-      <div className="relative min-h-screen bg-[#282828] overflow-x-auto">
+      <div className="relative h-screen bg-[#282828] overflow-hidden">
         {mode === 'dashboard' && (
-          <div className="pb-[140px]" style={{ paddingTop: SPACING.topMargin }}>
-            <TopHeader viewName="List" />
-            <div className="flex gap-0">
+          <div className="h-full flex flex-col" style={{ paddingTop: SPACING.topMargin, paddingBottom: 76 }}>
+            <div className="shrink-0">
+              <TopHeader viewName="List" />
+            </div>
+            {/* Columns row — flex-1 + min-h-0 so children can shrink to fit and each column
+                can have its own overflow:auto scroller. */}
+            <div className="flex flex-row gap-0 flex-1 min-h-0 overflow-x-auto">
               {LISTS.map(renderColumn)}
             </div>
           </div>
@@ -4460,35 +6298,50 @@ export default function App() {
           // getAnimationProps, the existing DragOverlay path). The only diff is the column body
           // uses renderProjectGroupedColumn (with client > project hierarchy) instead of
           // renderColumn. The Dashboard column is replaced with a Resources + Clients sidebar.
-          <div className="pb-[140px]" style={{ paddingTop: SPACING.topMargin }}>
-            <TopHeader viewName="Projects" />
-            <div className="flex gap-0">
-            {/* Sidebar: Resources (people) + Clients */}
-            <div className="flex-1 min-w-[280px]">
-              <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]" style={{ marginBottom: SPACING.dcr }}>
-                <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Resources</p>
-                <AddPlus onClick={addPerson} />
-              </div>
-              {people.map((p) => (
-                <ResourceRow key={p.id} person={p} bodyFont={proj2BodyFont} onDelete={() => deletePerson(p.id)} />
-              ))}
-              <Spacer />
-              <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]" style={{ marginBottom: SPACING.dcr }}>
-                <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Clients</p>
-                <AddPlus onClick={addBlankClient} />
-              </div>
-              {proj2SortedClients.map((c) => (
-                <ClientRow
-                  key={c.id}
-                  client={c}
-                  autoFocus={c.id === newId}
-                  bodyFont={proj2BodyFont}
-                  onRenameName={(v) => renameClient(c.id, v)}
-                  onRenameShort={(v) => renameClientShort(c.id, v)}
-                  onDelete={() => deleteClient(c.id)}
-                  currentUserShort={currentUserShort}
-                />
-              ))}
+          // Layout: TopHeader is fixed (shrink-0), then a flex-1 row with each column carrying
+          // its own scroll. Same fixed-header / per-column-scroll pattern as list view.
+          <div className="h-full flex flex-col" style={{ paddingTop: SPACING.topMargin, paddingBottom: 76 }}>
+            <div className="shrink-0">
+              <TopHeader viewName="Projects" />
+            </div>
+            <div className="flex flex-row gap-0 flex-1 min-h-0 overflow-x-auto">
+            {/* Sidebar: Resources (people) + Clients. Scrolls independently. */}
+            <div className="flex-1 min-w-[280px] flex flex-col min-h-0 overflow-hidden">
+              {/* Spacer matching the column-title row above each column (h-[37px] + mb=dcr) so
+                  the Resources label drops down to align with the first project-group title in
+                  each column (NewLiving, Build Good Set of Mock Ups, Today, etc.) instead of
+                  sitting in the same row as the Work / Projects / Admin column titles. */}
+              <div className="shrink-0 h-[37px]" style={{ marginBottom: SPACING.dcr }} aria-hidden />
+              <CustomScroll>
+                {/* Resources / Clients headers are presentational labels, not column titles, so they
+                    render in the same muted gray as calendar band labels and sit DIRECTLY above the
+                    first row underneath (no dcr paragraph break — the label reads as the header of
+                    the list immediately below it, like an inline section divider). */}
+                <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]">
+                  <p className="font-['NB_International:Regular',sans-serif] text-[#5e5e5e] text-[14.333px]">Resources</p>
+                  <AddPlus onClick={addPerson} />
+                </div>
+                {people.map((p) => (
+                  <ResourceRow key={p.id} person={p} bodyFont={proj2BodyFont} onDelete={() => requestDeleteResource(p.id)} />
+                ))}
+                <Spacer />
+                <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]">
+                  <p className="font-['NB_International:Regular',sans-serif] text-[#5e5e5e] text-[14.333px]">Clients</p>
+                  <AddPlus onClick={addBlankClient} />
+                </div>
+                {proj2SortedClients.map((c) => (
+                  <ClientRow
+                    key={c.id}
+                    client={c}
+                    autoFocus={c.id === newId}
+                    bodyFont={proj2BodyFont}
+                    onRenameName={(v) => renameClient(c.id, v)}
+                    onRenameShort={(v) => renameClientShort(c.id, v)}
+                    onDelete={() => deleteClient(c.id)}
+                    currentUserShort={currentUserShort}
+                  />
+                ))}
+              </CustomScroll>
             </div>
             {(['work', 'projects', 'admin'] as ListId[]).map((l) => renderProjectGroupedColumn(l))}
             </div>
@@ -4516,6 +6369,343 @@ export default function App() {
             taskOrder={taskOrder}
           />
         )}
+        {mode === 'focus' && (() => {
+          // Project Focus mode — three-column dashboard pinned to a single project.
+          //   Col 1: the user's Dashboard (Today + Tomorrow), same renderer as list view.
+          //   Col 2: "<Project Name> — Information", with an editable Brief block and a
+          //          stub Integrations section (Dropbox + Lightroom hookup placeholders).
+          //   Col 3: References — list of saved URLs scoped to this project.
+          // The Information panel follows the current selection. We track two keys separately:
+          //   projectKey: the project id WHEN the selection has a project
+          //   taskKey:    the selected task id WHEN something is selected
+          // Briefs / Notes / Images are stored under whichever key applies, so a project's brief
+          // is shared across every task in the project, while task-level notes + images stay
+          // pinned to that one task. With NO selection at all, both keys are null and the
+          // Information / References columns render a quiet "select a task" empty state — no
+          // dummy fallback project.
+          const selectedTask = selectedTaskId ? tasks.find((t) => t.id === selectedTaskId) : null;
+          const taskProject = selectedTask?.projectId ? projects.find((p) => p.id === selectedTask.projectId) : null;
+          const taskProjectClient = taskProject?.clientId ? clients.find((c) => c.id === taskProject.clientId) : undefined;
+          let projectKey: string | null = null;
+          let taskKey: string | null = null;
+          if (taskProject) {
+            projectKey = taskProject.id;
+            taskKey = selectedTask!.id;
+          } else if (selectedTask) {
+            taskKey = selectedTask.id;
+          }
+          // Reusable JSX node for the "<Client> ⌧ <Project>" breadcrumb. Used in the column
+          // title AND the Brief sub-header so the labels stay in lockstep.
+          const projectBreadcrumb = taskProject ? (
+            <>
+              {taskProjectClient && taskProjectClient.short && <>{taskProjectClient.short}<Arrowhead /></>}
+              {taskProject.name || 'Untitled'}
+            </>
+          ) : null;
+          // activeProjectId: the key used by the existing subtask + integration sections, which
+          // are scoped to either project or (if no project) the task. Null when nothing is
+          // selected — the dependent sections only render when this is non-null.
+          const activeProjectId: string | null = projectKey || taskKey || null;
+          const projectBriefValue = projectKey ? (focusBriefs[projectKey] ?? '') : '';
+          const taskNotesValue = taskKey ? (focusBriefs[taskKey] ?? '') : '';
+          // References: hardcoded URL list (link references), plus the dropped + processed images
+          // from both the project and task drop zones (merged for display).
+          const refs = projectKey ? focusReferences[projectKey] || [] : (taskKey ? focusReferences[taskKey] || [] : []);
+          const projectImgs = projectKey ? focusImages[projectKey] || [] : [];
+          const taskImgs = taskKey ? focusImages[taskKey] || [] : [];
+          const allImages = [...projectImgs, ...taskImgs];
+          const taskTitleForNotes = (selectedTask?.title || 'Task').trim() || 'Task';
+          const dashTodayKey = (l: ListId) => `dashboard:list:${l}` as const;
+          const todayItems = (['admin', 'work', 'projects'] as ListId[]).map((l) => ({ list: l, items: tasksByKey[dashTodayKey(l)] || [] }));
+          const tomorrowItems = tasksByKey['dashboard:tomorrow'] || [];
+          const nextItems = tasksByKey['dashboard:next'] || [];
+          return (
+            // Focus mode: fixed TopHeader, fixed column titles, each column body scrolls
+            // independently. Same pattern as List / Project / Calendar.
+            <div className="h-full flex flex-col" style={{ paddingTop: SPACING.topMargin, paddingBottom: 76 }}>
+              <div className="shrink-0">
+                <TopHeader viewName="Focus" />
+              </div>
+              <div className="flex flex-row gap-0 flex-1 min-h-0 overflow-x-auto">
+                {/* Column 1 — Dashboard */}
+                <div className="flex-1 min-w-[280px] flex flex-col min-h-0 overflow-hidden">
+                  <div className="shrink-0 group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]" style={{ marginBottom: SPACING.dcr }}>
+                    <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">
+                      Dashboard — {people.find((p) => p.short === currentUserShort)?.name || currentUserShort}
+                    </p>
+                  </div>
+                  <CustomScroll>
+                  <SectionHeader title="Today" />
+                  {todayItems.map(({ list, items }) => items.length === 0 ? null : (
+                    <Fragment key={`focus-today-${list}`}>
+                      <Spacer />
+                      <SectionHeader title={LIST_TITLES[list]} />
+                      {renderBucket(items, `focus-dash:${list}:`)}
+                    </Fragment>
+                  ))}
+                  {tomorrowItems.length > 0 && (
+                    <>
+                      <Spacer />
+                      <SectionHeader title="Tomorrow" />
+                      {renderBucket(tomorrowItems, 'focus-dash:tomorrow:')}
+                    </>
+                  )}
+                  {nextItems.length > 0 && (
+                    <>
+                      <Spacer />
+                      <SectionHeader title="Next" />
+                      {renderBucket(nextItems, 'focus-dash:next:')}
+                    </>
+                  )}
+                  </CustomScroll>
+                </div>
+                {/* Column 2 — Project / Task Information (Brief + Integrations).
+                    Title sits in the same row as the Dashboard column header so the three
+                    columns share a single top-aligned header line. The header reads
+                    "<Client> ⌧ <Project> — Information" when a project is in play, or
+                    "<Task Title> — Information" for an unprojected task. */}
+                <div className="flex-1 min-w-[280px] flex flex-col min-h-0 overflow-hidden">
+                  <div className="shrink-0 group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]" style={{ marginBottom: SPACING.dcr }}>
+                    <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">
+                      {projectBreadcrumb ? <>{projectBreadcrumb} — Information</>
+                        : selectedTask ? <>{(selectedTask.title || 'Untitled Task').trim() || 'Untitled Task'} — Information</>
+                        : 'Information'}
+                    </p>
+                  </div>
+                  <CustomScroll>
+                  {/* Brief / Notes section. Three cases:
+                        - Selection has a project → "Project Brief" (shared across the project)
+                          PLUS "<Task Title> — Notes" (task-specific) underneath
+                        - Selection has no project → just "Notes" (task-specific)
+                        - No selection (fallback project) → "Project Brief" only
+                      Both fields share focusBriefs storage; the key is what differs (project id
+                      vs task id), so each scope has its own persistent text. */}
+                  {projectKey && (
+                    <>
+                      <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px]">
+                        <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[#656464] text-[14px] whitespace-nowrap">
+                          {projectBreadcrumb ? <>{projectBreadcrumb} — Brief</> : 'Brief'}
+                        </p>
+                      </div>
+                      <div className="px-[31px] pb-[37px]">
+                        <BriefField
+                          value={projectBriefValue}
+                          onChange={(v) => setFocusBriefs((prev) => ({ ...prev, [projectKey]: v }))}
+                          placeholder="Write the project brief…"
+                        />
+                      </div>
+                    </>
+                  )}
+                  {taskKey && (
+                    <>
+                      <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px]">
+                        <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[#656464] text-[14px] whitespace-nowrap">
+                          {taskTitleForNotes} — Notes
+                        </p>
+                      </div>
+                      <div className="px-[31px] pb-[37px]">
+                        <BriefField
+                          value={taskNotesValue}
+                          onChange={(v) => setFocusBriefs((prev) => ({ ...prev, [taskKey]: v }))}
+                          placeholder={`Notes for ${taskTitleForNotes}…`}
+                        />
+                      </div>
+                    </>
+                  )}
+                  {/* Sub-Tasks — only renders when there's at least one sub-task on the current
+                      project / task. The first one is added from the inline "+ Sub-Task" button
+                      that always sits at the bottom of column 2 (see below) so an empty state
+                      doesn't carve out vertical real estate in the Information panel. */}
+                  {activeProjectId && (focusSubtasks[activeProjectId] || []).length > 0 && (
+                    <>
+                      <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px]">
+                        <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[#656464] text-[14px] whitespace-nowrap">Sub-Tasks</p>
+                        <AddPlus onClick={() => addFocusSubtask(activeProjectId)} />
+                      </div>
+                      <div className="pb-[37px]">
+                        <SortableContext
+                          items={(focusSubtasks[activeProjectId] || []).map((s) => `subtask:${activeProjectId}:${s.id}`)}
+                          strategy={verticalListSortingStrategy}
+                        >
+                          {(focusSubtasks[activeProjectId] || []).map((sub) => (
+                            <SortableSubtaskRow
+                              key={sub.id}
+                              sub={sub}
+                              storageKey={activeProjectId}
+                              isAnyDragging={!!activeId}
+                              newId={focusNewSubtaskId}
+                              onToggle={() => toggleFocusSubtask(activeProjectId, sub.id)}
+                              onRename={(v) => renameFocusSubtask(activeProjectId, sub.id, v)}
+                              onDiscardIfEmpty={() => deleteFocusSubtask(activeProjectId, sub.id)}
+                              onAddAfter={() => addFocusSubtask(activeProjectId, sub.id)}
+                              onDelete={() => deleteFocusSubtask(activeProjectId, sub.id)}
+                            />
+                          ))}
+                        </SortableContext>
+                      </div>
+                    </>
+                  )}
+                  {/* Inline "+ Sub-Task" entry-point — visible whenever a project / task is in
+                      play, so the user can spawn the first sub-task without an empty Sub-Tasks
+                      header taking up space until then. */}
+                  {activeProjectId && (focusSubtasks[activeProjectId] || []).length === 0 && (
+                    <button
+                      type="button"
+                      onClick={() => addFocusSubtask(activeProjectId)}
+                      className="px-[31px] pb-[37px] flex flex-row items-center gap-2 text-[14px] text-[#656464] hover:text-white transition-colors"
+                    >
+                      <Plus size={14} />
+                      <span>Sub-Task</span>
+                    </button>
+                  )}
+                  {/* Reference image drop zones — moved up here from the References column so
+                      the user can drop images while their eyes are still on the Information
+                      panel. The Project zone is hidden when there's no project context; the
+                      Task zone is hidden when nothing is selected. The actual DAM grid still
+                      lives in column 3 and reads from the same focusImages storage. */}
+                  {(projectKey || taskKey) && (
+                    <>
+                      <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px]">
+                        <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[#656464] text-[14px] whitespace-nowrap">Reference Drops</p>
+                      </div>
+                      <div className="px-[31px] pb-[37px] flex flex-row gap-2">
+                        {projectKey && (
+                          <FocusDropZone
+                            label="Project"
+                            sublabel="Drop images here"
+                            onDropFiles={(files) => addFocusImages(projectKey, files)}
+                          />
+                        )}
+                        {taskKey && (
+                          <FocusDropZone
+                            label="Task"
+                            sublabel="Drop images here"
+                            onDropFiles={(files) => addFocusImages(taskKey, files)}
+                          />
+                        )}
+                      </div>
+                    </>
+                  )}
+                  {/* Integrations — placeholder row of hookup buttons. Hidden when no selection
+                      so an empty Information panel doesn't look like dummy scaffolding. */}
+                  {activeProjectId && (
+                    <>
+                      <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px]">
+                        <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[#656464] text-[14px] whitespace-nowrap">Integrations</p>
+                      </div>
+                      <div className="px-[31px] flex flex-col gap-2">
+                        <button type="button" onClick={() => console.log('connect dropbox', activeProjectId)} className="flex flex-row items-center justify-between bg-[#1f1f1f] hover:bg-[#262626] rounded-md px-3 py-2 text-[14px] text-white text-left transition-colors">
+                          <span>Dropbox</span>
+                          <span className="text-[#656464] text-[12px]">Connect</span>
+                        </button>
+                      </div>
+                    </>
+                  )}
+                  {!activeProjectId && (
+                    <div className="px-[31px] text-[#656464] text-[14px]">Select a task to see its information.</div>
+                  )}
+                  </CustomScroll>
+                </div>
+                {/* Column 3 — References. Twice the width of the Dashboard / Information
+                    columns (flex-[2]) since reference cards are a richer visual surface and
+                    benefit from the extra horizontal real estate. Two drop zones (project,
+                    task) accept image files, scale them to 1920px max + WebP-compress, then
+                    feed a scrollable DAM grid below with view-mode toggles.
+                    Layout (flex column):
+                      - Title row (shrink-0)
+                      - URL references list (shrink-0)
+                      - View-mode toggles (shrink-0)
+                      - Gallery slot (flex-1 min-h-0) — for Zoom All it renders the gallery
+                        DIRECTLY (gallery uses h-full and ResizeObserver to fit exactly,
+                        no scrollbar); for Small / Medium / Large it wraps the gallery in
+                        a CustomScroll so the rows can overflow and scroll. */}
+                <div className="flex-[2] min-w-[280px] flex flex-col min-h-0 overflow-hidden">
+                  <div className="shrink-0 group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]" style={{ marginBottom: SPACING.dcr }}>
+                    <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">References</p>
+                  </div>
+                  {/* Existing URL references (link list) */}
+                  {refs.length > 0 && (
+                    <div className="shrink-0 px-[31px] flex flex-col gap-2 pb-[37px]">
+                      {refs.map((r, i) => (
+                        <a
+                          key={`${r.url}-${i}`}
+                          href={r.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="flex flex-row items-center justify-between bg-[#1f1f1f] hover:bg-[#262626] rounded-md px-3 py-2 text-[14px] text-white transition-colors"
+                        >
+                          <span className="truncate">{r.label}</span>
+                          <span className="text-[#656464] text-[12px] shrink-0 ml-2">Open</span>
+                        </a>
+                      ))}
+                    </div>
+                  )}
+                  {/* View-mode toggles — Zoom All auto-fits every image into the visible
+                      area; Small / Medium / Large use fixed row heights (120 / 180 / 260px). */}
+                  <div className="shrink-0 px-[31px]">
+                    <div className="flex flex-row gap-2 mb-3 text-[12px] flex-wrap">
+                      {([
+                        ['zoom', 'Zoom All'],
+                        ['sm', 'Small'],
+                        ['md', 'Medium'],
+                        ['lg', 'Large'],
+                      ] as const).map(([key, label]) => (
+                        <button
+                          key={key}
+                          type="button"
+                          onClick={() => setFocusDamTileHeight(key)}
+                          className={`px-2 py-1 rounded-md transition-colors ${focusDamTileHeight === key ? 'bg-[#3a3a3a] text-white' : 'text-[#656464] hover:text-white'}`}
+                        >
+                          {label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  {/* Gallery slot — flex column so CustomScroll's `flex-1 min-h-0` and
+                      FocusDamViewer's `h-full` (zoom mode) both correctly take the
+                      remaining space. Zoom All: render gallery directly (no scrollbar,
+                      gallery's ResizeObserver fits to this exact box). Small/Medium/Large:
+                      wrap in CustomScroll so rows can overflow + scroll. */}
+                  <div className="flex-1 min-h-0 px-[31px] pb-[8px] flex flex-col">
+                    {focusDamTileHeight === 'zoom' ? (
+                      <FocusDamViewer
+                        images={allImages.map((img) => {
+                          const ownerKey = (projectKey && (focusImages[projectKey] || []).some((i) => i.id === img.id))
+                            ? projectKey
+                            : taskKey;
+                          return { ...img, ownerKey };
+                        })}
+                        tileView={focusDamTileHeight}
+                        oneUpImageId={focusOneUpImageId}
+                        onOneUpToggle={(id) => setFocusOneUpImageId((cur) => cur === id ? null : id)}
+                        onDelete={(ownerKey, id) => deleteFocusImage(ownerKey, id)}
+                        onToggleFavorite={(ownerKey, id) => toggleFocusImageFavorite(ownerKey, id)}
+                      />
+                    ) : (
+                      <CustomScroll>
+                        <FocusDamViewer
+                          images={allImages.map((img) => {
+                            const ownerKey = (projectKey && (focusImages[projectKey] || []).some((i) => i.id === img.id))
+                              ? projectKey
+                              : taskKey;
+                            return { ...img, ownerKey };
+                          })}
+                          tileView={focusDamTileHeight}
+                          oneUpImageId={focusOneUpImageId}
+                          onOneUpToggle={(id) => setFocusOneUpImageId((cur) => cur === id ? null : id)}
+                          onDelete={(ownerKey, id) => deleteFocusImage(ownerKey, id)}
+                          onToggleFavorite={(ownerKey, id) => toggleFocusImageFavorite(ownerKey, id)}
+                        />
+                      </CustomScroll>
+                    )}
+                  </div>
+                  {/* Lightbox removed — single-click on any tile now toggles inline 1-up
+                      view via FocusDamViewer's onOneUpToggle. */}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
         {mode === 'settings' && (
           <SettingsMode
             people={people}
@@ -4539,6 +6729,11 @@ export default function App() {
             onUntrashTask={untrashTask}
             onPurgeTask={purgeTask}
             onToggleTask={toggleTask}
+            liveBackupAt={liveBackupAt}
+            dailyBackupAt={dailyBackupAt}
+            onDownloadBackup={downloadBackup}
+            onRestoreFromFile={restoreFromFile}
+            onRestoreFromSlot={restoreFromSlot}
           />
         )}
 
@@ -4556,6 +6751,16 @@ export default function App() {
                 if (pendingTrash.kind === 'client') deleteClient(pendingTrash.id);
                 setPendingTrash(null);
               }}
+            />
+          )}
+          {pendingResourceDelete && (
+            <ResourceDeleteModal
+              key={`resource-delete-${pendingResourceDelete.id}`}
+              resource={pendingResourceDelete}
+              taskCount={tasks.filter((t) => t.assignees.includes(pendingResourceDelete.short)).length}
+              otherResources={people.filter((p) => p.id !== pendingResourceDelete.id && p.short).map((p) => ({ id: p.id, name: p.name, short: p.short }))}
+              onClose={() => setPendingResourceDelete(null)}
+              onConfirm={(reassignToShort) => confirmDeleteResource(reassignToShort)}
             />
           )}
           {showAdd && (
@@ -4648,7 +6853,28 @@ export default function App() {
                 className="bg-[#333333]"
                 style={{ width: activeRectWidth, willChange: 'transform' }}
               >
-                <SortableTaskItem task={activeTask} onToggle={() => {}} isDragOverlay projects={projects} clients={clients} />
+                {/* Forward the SAME render-controlling props the source row uses
+                    (taskOrder, density, hasFocusContent), otherwise the lifted
+                    overlay renders in the component defaults — different slot
+                    order, different truncation thresholds, missing focus icon —
+                    and the card visibly "scrambles" the moment the user picks it
+                    up. Width is pinned to the source's measured rect, but the
+                    INTERNAL layout still needs the source's settings. */}
+                <SortableTaskItem
+                  task={activeTask}
+                  onToggle={() => {}}
+                  // No-op onRename so the title row renders its trailing 7px hit-zone
+                  // span. Without it the title div's `-mr-2` cancels the parent flex's
+                  // gap-2 with nothing to push back, and the first assignee badge gets
+                  // jammed up against the title text.
+                  onRename={() => {}}
+                  isDragOverlay
+                  projects={projects}
+                  clients={clients}
+                  taskOrder={taskOrder}
+                  density={density}
+                  hasFocusContent={taskHasFocusContent(activeTask)}
+                />
               </motion.div>
             )
           ) : null}
@@ -4684,7 +6910,7 @@ export default function App() {
             >
               <LIndent />
               <TaskCheckbox completed={activeProjTask.completed} onToggle={() => {}} />
-              <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap ${activeProjTask.completed ? 'text-[#383838]' : 'text-white'}`}>{activeProjTask.title}</span>
+              <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap ${activeProjTask.completed ? 'text-[#474747]' : 'text-white'}`}>{activeProjTask.title}</span>
             </motion.div>
           ) : null}
         </DragOverlay>
