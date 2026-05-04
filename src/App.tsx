@@ -4825,6 +4825,17 @@ export default function App() {
   // click on any thumbnail enters 1-up; single-click on the 1-up image exits back to whatever
   // grid/tile view was active. Stays inline (no fullscreen lightbox modal).
   const [focusOneUpImageId, setFocusOneUpImageId] = useState<string | null>(null);
+  // Drag-over state for the References column. When the user drags a file from
+  // outside the app onto the column AND there are already images visible, we
+  // overlay an "Add Images" sheet on top of the gallery so they can pick a
+  // bucket (Project / Task / WIP). Empty-state path doesn't need this — its
+  // drop zones are already on screen.
+  const [refsDragActive, setRefsDragActive] = useState(false);
+  const refsDragCounter = useRef(0);
+  // File-picker ref for the "+ Add" button on the References toggles row.
+  // Click the button → hidden input opens the OS file picker → multi-select
+  // images get routed to projectKey by default (or taskKey if no project).
+  const refsAddInputRef = useRef<HTMLInputElement | null>(null);
   // The currently-selected task. Set on single-click of a task row, or when the user opens
   // the edit / quick-edit panel. The Focus mode's Information column dynamically shows the
   // project tied to this task, and rows render a 25%-brighter highlight while selected.
@@ -6712,7 +6723,35 @@ export default function App() {
                         DIRECTLY (gallery uses h-full and ResizeObserver to fit exactly,
                         no scrollbar); for Small / Medium / Large it wraps the gallery in
                         a CustomScroll so the rows can overflow and scroll. */}
-                <div className="flex-[2] min-w-[280px] flex flex-col min-h-0 overflow-hidden">
+                <div
+                  className="flex-[2] min-w-[280px] flex flex-col min-h-0 overflow-hidden relative"
+                  // External-file drag tracking. We keep a counter ref because moving
+                  // between child elements fires dragLeave-then-dragEnter rapidly,
+                  // causing flicker if you naively toggle a boolean. Counter only
+                  // hits zero when the cursor truly leaves the column. preventDefault
+                  // on dragOver is required for the drop event to fire later.
+                  onDragEnter={(e) => {
+                    if (!e.dataTransfer.types.includes('Files')) return;
+                    e.preventDefault();
+                    refsDragCounter.current += 1;
+                    if (!refsDragActive) setRefsDragActive(true);
+                  }}
+                  onDragOver={(e) => {
+                    if (!e.dataTransfer.types.includes('Files')) return;
+                    e.preventDefault();
+                  }}
+                  onDragLeave={() => {
+                    refsDragCounter.current = Math.max(0, refsDragCounter.current - 1);
+                    if (refsDragCounter.current === 0) setRefsDragActive(false);
+                  }}
+                  onDrop={() => {
+                    // The inner FocusDropZone handles the actual file ingestion.
+                    // We just reset the overlay flag here in case the drop missed
+                    // a zone (e.g. user released over the gallery area itself).
+                    refsDragCounter.current = 0;
+                    setRefsDragActive(false);
+                  }}
+                >
                   <div className="shrink-0 group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]" style={{ marginBottom: SPACING.dcr }}>
                     <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">References</p>
                   </div>
@@ -6738,12 +6777,15 @@ export default function App() {
                       ))}
                     </div>
                   )}
-                  {/* View-mode toggles. "Zoom All" stays a wordmark since it's a
-                      mode rather than a size; the size knobs collapse to one-letter
-                      glyphs (S / M / L). Active = white text, no background pill —
-                      contrast alone signals selection. Inactive = grey, brightens to
-                      white on hover. Wider gap between the buttons since the labels
-                      are now narrower. */}
+                  {/* View-mode toggles + "+ Add" affordance, all on one row.
+                      "Zoom All" stays a wordmark since it's a mode rather than a
+                      size; size knobs collapse to one-letter glyphs (S / M / L).
+                      Active = white text, no background pill — contrast alone
+                      signals selection. Inactive = grey, brightens to white on
+                      hover. The + Add button sits at the far right (ml-auto) and
+                      opens the OS file picker; selected files default to the
+                      project bucket (falling back to the task bucket if no
+                      project context). */}
                   <div className="shrink-0 px-[31px]">
                     <div className="flex flex-row gap-4 mb-3 text-[12px] flex-wrap items-center">
                       {([
@@ -6761,6 +6803,30 @@ export default function App() {
                           {label}
                         </button>
                       ))}
+                      {(projectKey || taskKey) && (
+                        <button
+                          type="button"
+                          onClick={() => refsAddInputRef.current?.click()}
+                          className="ml-auto flex flex-row items-center gap-1 text-[#656464] hover:text-white transition-colors"
+                        >
+                          <Plus size={14} />
+                          <span>Add</span>
+                        </button>
+                      )}
+                      <input
+                        ref={refsAddInputRef}
+                        type="file"
+                        accept="image/*"
+                        multiple
+                        className="hidden"
+                        onChange={(e) => {
+                          const files = e.target.files;
+                          e.currentTarget.value = '';
+                          if (!files || files.length === 0) return;
+                          const target = projectKey ?? taskKey;
+                          if (target) addFocusImages(target, files);
+                        }}
+                      />
                     </div>
                   </div>
                   {/* Gallery slot — flex column so CustomScroll's `flex-1 min-h-0` and
@@ -6835,6 +6901,55 @@ export default function App() {
                       </CustomScroll>
                     )}
                   </div>
+                  {/* Drag-over overlay: covers the column at 90% opacity when the
+                      user drags an external file over the column AND there are
+                      already images visible (the empty-state path doesn't need
+                      this — its drop zones are always on screen). The same three
+                      buckets (Project / Task / WIP) are presented; release on any
+                      one ingests the file. pointer-events:none on the wrapper text
+                      so only the FocusDropZones are draggable targets. */}
+                  {refsDragActive && allImages.length > 0 && (projectKey || taskKey) && (
+                    <div className="absolute inset-0 z-50 bg-[#282828]/90 flex flex-col items-center justify-center gap-3 p-6">
+                      <span className="text-[#656464] text-[18px] font-bold pointer-events-none">Add Images</span>
+                      <p className="text-[#656464] text-[13px] text-center max-w-[480px] pointer-events-none">
+                        Drop into one of the buckets below — Project for shared
+                        references that belong to the whole project, Task for the
+                        one you've got selected, or WIP for in-progress work.
+                      </p>
+                      <div className="flex flex-row gap-3 w-full max-w-[700px] mt-3">
+                        {projectKey && (
+                          <FocusDropZone
+                            label="Project"
+                            onDropFiles={(files) => {
+                              addFocusImages(projectKey, files);
+                              refsDragCounter.current = 0;
+                              setRefsDragActive(false);
+                            }}
+                          />
+                        )}
+                        {taskKey && (
+                          <FocusDropZone
+                            label="Task"
+                            onDropFiles={(files) => {
+                              addFocusImages(taskKey, files);
+                              refsDragCounter.current = 0;
+                              setRefsDragActive(false);
+                            }}
+                          />
+                        )}
+                        {projectKey && (
+                          <FocusDropZone
+                            label="WIP"
+                            onDropFiles={(files) => {
+                              addFocusImages(projectKey, files);
+                              refsDragCounter.current = 0;
+                              setRefsDragActive(false);
+                            }}
+                          />
+                        )}
+                      </div>
+                    </div>
+                  )}
                   {/* Lightbox removed — single-click on any tile now toggles inline 1-up
                       view via FocusDamViewer's onOneUpToggle. */}
                 </div>
