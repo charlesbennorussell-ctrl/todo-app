@@ -3989,6 +3989,41 @@ export default function App() {
     }).catch(() => {});
     return () => { cancelled = true; };
   }, []);
+  // Periodic version poll. Every 3 minutes (and once on mount), fetch the
+  // version.json manifest the build step writes. If its buildTime is newer
+  // than the constant baked into the running bundle, surface a banner so
+  // the user can reload into the new version. Cache-busting via timestamp
+  // so any HTTP cache layer (browser, GitHub Pages CDN) doesn't serve a
+  // stale manifest. `dismissedBuildTime` lets the user mute the banner
+  // for THIS particular build — opens up again the next time a newer one
+  // ships.
+  const [newBuildTime, setNewBuildTime] = useState<string | null>(null);
+  const [dismissedBuildTime, setDismissedBuildTime] = useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    const POLL_MS = 3 * 60 * 1000;
+    const check = async () => {
+      try {
+        // base path on GH Pages is /todo-app/; build-time we know what `base`
+        // we used so derive the manifest URL from the document's <base> or
+        // import.meta.env.BASE_URL (Vite exposes this constant).
+        const baseUrl = import.meta.env.BASE_URL || '/';
+        const url = `${baseUrl}version.json?t=${Date.now()}`;
+        const res = await fetch(url, { cache: 'no-store' });
+        if (!res.ok) return;
+        const manifest = await res.json() as { version: string; buildTime: string };
+        if (cancelled) return;
+        if (manifest.buildTime && manifest.buildTime > __BUILD_TIME__) {
+          setNewBuildTime(manifest.buildTime);
+        }
+      } catch {
+        // Network blip / file missing during deploy — silently retry next tick.
+      }
+    };
+    check();
+    const id = window.setInterval(check, POLL_MS);
+    return () => { cancelled = true; window.clearInterval(id); };
+  }, []);
   // Hoisted up-front because several useCallbacks below reference currentUserShort in their dep arrays
   // (e.g. to seed new tasks with the current user as assignee).
   const [currentUserShort, setCurrentUserShortState] = useState<string>(() => {
@@ -6283,6 +6318,36 @@ export default function App() {
       // back to source list) so the card visually moves freely while the data stays clean.
       modifiers={activeType === 'task' || activeType === 'projTask' ? [restrictToVerticalAxis] : []}
     >
+      {/* New-version banner. Sits fixed at the top of the viewport with a
+          high z-index so it overlays the TopHeader and column titles. The
+          poll detected a freshly-deployed bundle whose buildTime is newer
+          than the one running in this webview; the user can either Reload
+          (window.location.reload pulls the new bundle from the server) or
+          Dismiss (mutes for THIS specific buildTime — banner re-opens the
+          next time a newer build is detected). */}
+      {newBuildTime && newBuildTime !== dismissedBuildTime && (
+        <div className="fixed top-0 left-0 right-0 z-[1000] bg-[#8465ff] text-white px-[35px] py-2 flex flex-row items-center gap-3 text-[13px] shadow-lg">
+          <span className="font-bold">New version available</span>
+          <span className="text-white/80">deployed {new Date(newBuildTime).toLocaleString()}</span>
+          <div className="ml-auto flex flex-row gap-2 items-center">
+            <button
+              type="button"
+              onClick={() => window.location.reload()}
+              className="px-3 py-1 rounded-md bg-white text-[#8465ff] hover:bg-white/90 transition-colors font-bold"
+            >
+              Reload
+            </button>
+            <button
+              type="button"
+              onClick={() => setDismissedBuildTime(newBuildTime)}
+              className="px-3 py-1 rounded-md text-white/80 hover:text-white transition-colors"
+              aria-label="Dismiss"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
       <div className="relative h-screen bg-[#282828] overflow-hidden">
         {mode === 'dashboard' && (
           <div className="h-full flex flex-col" style={{ paddingTop: SPACING.topMargin, paddingBottom: 76 }}>
