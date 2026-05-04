@@ -1925,6 +1925,207 @@ function FocusDamViewer({
   );
 }
 
+// ─── Focus DAM (Reference Gallery) helpers ─────────────────────────────────
+// Image data shape used across the gallery. Same as the storage shape but with
+// `ownerKey` (the bucket id) appended so the gallery doesn't need to look up
+// which bucket each image came from on every render.
+type FocusDamImage = { id: string; url?: string; dataUrl?: string; filename: string; width: number; height: number; favorited?: boolean; folderId?: string; ownerKey: string };
+type FocusDamFolder = { id: string; name: string };
+type FocusDamBucket = { key: string; label: string; images: FocusDamImage[]; folders: FocusDamFolder[] };
+
+// FocusDamGroup: renders ONE flat block of images at the requested tile size
+// (sm / md / lg / zoom). No empty handling, no one-up handling, no folder
+// awareness — just the justified-gallery / column-stack flex layout. The
+// parent (FocusDamGallery) decides which images belong to which block and
+// composes blocks together.
+function FocusDamGroup({
+  images,
+  tileView,
+  ownerKey,
+  selectedImageIds,
+  onImageClick,
+  onDelete,
+  onToggleFavorite,
+}: {
+  images: FocusDamImage[];
+  tileView: 'zoom' | 'sm' | 'md' | 'lg';
+  ownerKey: string;
+  selectedImageIds: Set<string>;
+  onImageClick: (id: string, e: React.MouseEvent) => void;
+  onDelete: (ownerKey: string, id: string) => void;
+  onToggleFavorite: (ownerKey: string, id: string) => void;
+}) {
+  if (images.length === 0) return null;
+  // Large = one image per row, full column width, with a viewport-height cap.
+  if (tileView === 'lg') {
+    return (
+      <div className="flex flex-col gap-1 pr-1">
+        {images.map((img) => {
+          const sel = selectedImageIds.has(img.id);
+          return (
+            <div key={img.id} className="relative group flex flex-row justify-start" onClick={(e) => onImageClick(img.id, e)}>
+              <div className={`relative inline-block cursor-zoom-in ${sel ? 'ring-2 ring-[#7363FF] ring-offset-0' : ''}`}>
+                <CachedImage src={resolveImageSrc(img)} alt={img.filename} className="block max-w-full max-h-[70vh] w-auto h-auto" />
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); onToggleFavorite(ownerKey, img.id); }}
+                  className={`absolute top-1 left-1 p-1 bg-black/40 hover:bg-black/70 opacity-0 group-hover:opacity-100 transition-opacity ${img.favorited ? 'text-[#FF7171]' : 'text-white'}`}
+                  aria-label={img.favorited ? 'Unfavorite image' : 'Favorite image'}
+                >
+                  <Heart size={12} fill={img.favorited ? 'currentColor' : 'none'} />
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); onDelete(ownerKey, img.id); }}
+                  className="absolute top-1 right-1 p-1 bg-black/40 opacity-0 group-hover:opacity-100 text-white hover:bg-black/70 transition-opacity"
+                  aria-label="Delete image"
+                >
+                  <Trash2 size={12} />
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+  // Sm / Md / Zoom — uniform-height rows, justified-gallery widths. Zoom mode
+  // in a sectioned layout uses the same flow but with the largest row height
+  // (the historical "fit everything in the box" math doesn't apply when blocks
+  // are stacked with their own intrinsic heights).
+  const rowH = tileView === 'sm' ? 120 : tileView === 'md' ? 240 : 360;
+  return (
+    <div className="flex flex-row flex-wrap gap-1 content-start">
+      {images.map((img) => {
+        const ar = (img.width || 1) / (img.height || 1);
+        const sel = selectedImageIds.has(img.id);
+        return (
+          <div
+            key={img.id}
+            onClick={(e) => onImageClick(img.id, e)}
+            className={`relative group bg-[#1f1f1f] overflow-hidden cursor-zoom-in ${sel ? 'outline outline-2 outline-[#7363FF]' : ''}`}
+            style={{ height: rowH, flexGrow: ar, flexBasis: ar * rowH, minWidth: Math.min(60, ar * rowH) }}
+          >
+            <CachedImage src={resolveImageSrc(img)} alt={img.filename} className="block w-full h-full object-cover" />
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onToggleFavorite(ownerKey, img.id); }}
+              className={`absolute top-1 left-1 p-1 bg-black/40 hover:bg-black/70 opacity-0 group-hover:opacity-100 transition-opacity ${img.favorited ? 'opacity-100 text-[#FF7171]' : 'text-white'}`}
+              aria-label={img.favorited ? 'Unfavorite image' : 'Favorite image'}
+            >
+              <Heart size={12} fill={img.favorited ? 'currentColor' : 'none'} />
+            </button>
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); onDelete(ownerKey, img.id); }}
+              className="absolute top-1 right-1 p-1 bg-black/40 opacity-0 group-hover:opacity-100 text-white hover:bg-black/70 transition-opacity"
+              aria-label="Delete image"
+            >
+              <Trash2 size={12} />
+            </button>
+          </div>
+        );
+      })}
+      {Array.from({ length: 4 }).map((_, i) => (
+        <span key={`phantom-${i}`} className="grow-[1000]" aria-hidden />
+      ))}
+    </div>
+  );
+}
+
+// Folder row: docks the folder icon + name on the left and creates a "carriage
+// return" — a full-width row that breaks the flex flow above and below it. In
+// rename mode, the name renders as an inline input that auto-focuses, commits
+// on Enter / blur, and cancels on Esc. The trash affordance only appears on
+// hover so the row stays visually quiet at rest. The whole row is rendered as
+// a sortable item via dnd-kit so the user can drag-reorder folders within
+// their bucket using the same underpinnings as the list-view sub-task reorder.
+function FocusDamFolderRow({
+  folder,
+  bucketKey,
+  isEditing,
+  onStartEdit,
+  onCommitRename,
+  onCancelRename,
+  onDelete,
+}: {
+  folder: FocusDamFolder;
+  bucketKey: string;
+  isEditing: boolean;
+  onStartEdit: () => void;
+  onCommitRename: (name: string) => void;
+  onCancelRename: () => void;
+  onDelete: () => void;
+}) {
+  const sortableId = `dam-folder:${bucketKey}:${folder.id}`;
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: sortableId, data: { type: 'damFolder', bucketKey, folderId: folder.id } });
+  const style: React.CSSProperties = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : 1 };
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className="group flex flex-row items-center gap-2 py-1 select-none"
+    >
+      {/* Drag handle — visible on hover so the row reads quiet at rest. */}
+      <div
+        {...attributes}
+        {...listeners}
+        className="opacity-0 group-hover:opacity-100 text-[#5e5e5e] cursor-grab active:cursor-grabbing transition-opacity"
+        aria-label="Drag folder to reorder"
+      >
+        <FolderTree size={12} />
+      </div>
+      <Folder size={14} className="text-[#a8a8a8] shrink-0" />
+      {isEditing ? (
+        <input
+          type="text"
+          autoFocus
+          defaultValue={folder.name}
+          onBlur={(e) => onCommitRename(e.target.value.trim())}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') { e.preventDefault(); onCommitRename((e.target as HTMLInputElement).value.trim()); }
+            else if (e.key === 'Escape') { e.preventDefault(); onCancelRename(); }
+          }}
+          className="bg-transparent text-white outline-none border-b border-[#7363FF] flex-1 min-w-0"
+          placeholder="Folder name…"
+        />
+      ) : (
+        <span
+          className="text-white cursor-text flex-1 min-w-0 truncate"
+          onClick={onStartEdit}
+        >
+          {folder.name || <span className="text-[#656464]">Untitled folder</span>}
+        </span>
+      )}
+      <button
+        type="button"
+        onClick={onDelete}
+        className="opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-[#FF7171] transition-opacity"
+        aria-label="Delete folder"
+      >
+        <Trash2 size={12} />
+      </button>
+    </div>
+  );
+}
+
+// FocusDamFolderDropTarget: the carriage-return row + the empty space directly
+// below a folder header double as a drop target so a multi-selection of images
+// can be dragged in. dnd-kit's useDroppable lights the row when isOver, giving
+// the user the same "this is where it lands" affordance as the project-view
+// drop targets above.
+function FocusDamFolderDropTarget({ bucketKey, folderId, children }: { bucketKey: string; folderId: string | null; children: React.ReactNode }) {
+  const { setNodeRef, isOver } = useDroppable({
+    id: `dam-folder-drop:${bucketKey}:${folderId ?? 'root'}`,
+    data: { type: 'damFolderDrop', bucketKey, folderId },
+  });
+  return (
+    <div ref={setNodeRef} className={`transition-colors ${isOver ? 'bg-white/[0.04] rounded-sm' : ''}`}>
+      {children}
+    </div>
+  );
+}
+
 // Project-block drop target for project view. Wraps the header + task list so dragging a
 // task onto either lands the task as a child of this project. Inline highlight on hover lets
 // the user see the drop target before releasing. The actual reparent happens in handleDragEnd
@@ -3652,7 +3853,7 @@ function resolveImageSrc(img: { id: string; url?: string; dataUrl?: string }): s
   return img.url || getImageDataLocal(img.id) || img.dataUrl || '';
 }
 
-type StorageRecordKey = 'focusBriefs' | 'focusSubtasks' | 'focusImages' | 'focusReferences';
+type StorageRecordKey = 'focusBriefs' | 'focusSubtasks' | 'focusImages' | 'focusReferences' | 'focusImageFolders';
 function useStorageRecord<K extends StorageRecordKey, T>(key: K) {
   const value = useStorage((root) => (root as any)[key]) as Record<string, T> | null;
   const setter = useMutation(({ storage }, updater: Record<string, T> | ((prev: Record<string, T>) => Record<string, T>)) => {
@@ -4561,7 +4762,16 @@ export default function App() {
   // Reference images: Liveblocks holds metadata + hosted URL only (~80 bytes per image).
   // The actual binary lives in Supabase Storage. URLs sync across collaborators for free —
   // any client can render the image directly from its Supabase URL.
-  const [focusImages, setFocusImages] = useStorageRecord<'focusImages', { id: string; url?: string; dataUrl?: string; filename: string; width: number; height: number; favorited?: boolean }[]>('focusImages');
+  // `folderId` (optional): if set, the image belongs to a sub-folder inside its bucket;
+  // otherwise it sits at the bucket's root. The folders themselves live in
+  // `focusImageFolders[bucketKey]` (see below).
+  const [focusImages, setFocusImages] = useStorageRecord<'focusImages', { id: string; url?: string; dataUrl?: string; filename: string; width: number; height: number; favorited?: boolean; folderId?: string }[]>('focusImages');
+  // Folder definitions per image bucket. The bucket key matches the focusImages key:
+  // projectKey for Project, taskKey for Task, or `wip:${projectKey}` for WIP. The
+  // array order IS the display order — folders render top-to-bottom in the gallery,
+  // each producing a carriage-return row break with the folder icon + name docked
+  // left, followed by the images that point at it via folderId.
+  const [focusImageFolders, setFocusImageFolders] = useStorageRecord<'focusImageFolders', { id: string; name: string }[]>('focusImageFolders');
   // "Has any Focus-mode content" lookup — returns true if the task itself OR its project
   // has a brief / notes / sub-tasks / images / references stashed against it. Drives the
   // inline FileText icon on every task row. Project-level content IS inherited so users
@@ -4578,6 +4788,9 @@ export default function App() {
     if (pid && (focusSubtasks[pid] || []).length > 0) return true;
     if ((focusImages[tid] || []).length > 0) return true;
     if (pid && (focusImages[pid] || []).length > 0) return true;
+    // WIP bucket lives under a derived key — also check it so the inline icon
+    // appears for tasks whose project has WIP-zone images attached.
+    if (pid && (focusImages[`wip:${pid}`] || []).length > 0) return true;
     if ((focusReferences[tid] || []).length > 0) return true;
     if (pid && (focusReferences[pid] || []).length > 0) return true;
     return false;
@@ -4782,6 +4995,81 @@ export default function App() {
       return { ...prev, [key]: next };
     });
   }, [setFocusImages]);
+  // ── Image folder helpers ────────────────────────────────────────────────────
+  // Folders live PER image bucket (WIP / Project / Task), with the array order
+  // doubling as the display order. addFocusFolder appends a new untitled folder
+  // and returns its id so the caller can immediately put it into rename mode.
+  const addFocusFolder = useCallback((bucketKey: string): string => {
+    const id = `folder-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    setFocusImageFolders((prev) => ({
+      ...prev,
+      [bucketKey]: [...(prev[bucketKey] || []), { id, name: '' }],
+    }));
+    return id;
+  }, [setFocusImageFolders]);
+  const renameFocusFolder = useCallback((bucketKey: string, folderId: string, name: string) => {
+    setFocusImageFolders((prev) => ({
+      ...prev,
+      [bucketKey]: (prev[bucketKey] || []).map((f) => f.id === folderId ? { ...f, name } : f),
+    }));
+  }, [setFocusImageFolders]);
+  // Delete a folder. Images that pointed at it become orphans (folderId no longer
+  // resolves); we re-home them to the bucket's root by clearing folderId so they
+  // re-appear above any remaining folders rather than disappearing. This also keeps
+  // the bucket's image array intact — only the folder definition is removed.
+  const deleteFocusFolder = useCallback((bucketKey: string, folderId: string) => {
+    setFocusImageFolders((prev) => ({
+      ...prev,
+      [bucketKey]: (prev[bucketKey] || []).filter((f) => f.id !== folderId),
+    }));
+    setFocusImages((prev) => {
+      const arr = prev[bucketKey] || [];
+      const next = arr.map((img) => img.folderId === folderId ? { ...img, folderId: undefined } : img);
+      return { ...prev, [bucketKey]: next };
+    });
+  }, [setFocusImageFolders, setFocusImages]);
+  // Reorder folders within a bucket via drag-drop. Same shape as reorderFocusSubtask.
+  const reorderFocusFolder = useCallback((bucketKey: string, fromId: string, toId: string) => {
+    if (fromId === toId) return;
+    setFocusImageFolders((prev) => {
+      const arr = [...(prev[bucketKey] || [])];
+      const fromIdx = arr.findIndex((f) => f.id === fromId);
+      const toIdx = arr.findIndex((f) => f.id === toId);
+      if (fromIdx < 0 || toIdx < 0) return prev;
+      const [moved] = arr.splice(fromIdx, 1);
+      arr.splice(toIdx, 0, moved);
+      return { ...prev, [bucketKey]: arr };
+    });
+  }, [setFocusImageFolders]);
+  // Move a set of images to a folder (or to the bucket's root if folderId is null)
+  // WITHIN the same bucket. Images keep their relative order in the bucket array;
+  // only the `folderId` field is mutated. For cross-bucket moves use moveFocusImagesToBucket.
+  const moveFocusImagesToFolder = useCallback((bucketKey: string, imageIds: string[], folderId: string | null) => {
+    if (imageIds.length === 0) return;
+    const idSet = new Set(imageIds);
+    setFocusImages((prev) => {
+      const arr = prev[bucketKey] || [];
+      const next = arr.map((img) => idSet.has(img.id) ? { ...img, folderId: folderId ?? undefined } : img);
+      return { ...prev, [bucketKey]: next };
+    });
+  }, [setFocusImages]);
+  // Cross-bucket move: pull the named images out of `fromBucket` and append them
+  // to `toBucket`, optionally landing inside a folder in the destination. Used when
+  // the user drags a multi-selection from (say) Project into the WIP section, or
+  // into a folder header inside another bucket.
+  const moveFocusImagesToBucket = useCallback((fromBucket: string, toBucket: string, imageIds: string[], folderId: string | null) => {
+    if (fromBucket === toBucket || imageIds.length === 0) return;
+    const idSet = new Set(imageIds);
+    setFocusImages((prev) => {
+      const fromArr = prev[fromBucket] || [];
+      const toArr = prev[toBucket] || [];
+      const moving = fromArr
+        .filter((img) => idSet.has(img.id))
+        .map((img) => ({ ...img, folderId: folderId ?? undefined }));
+      const fromNext = fromArr.filter((img) => !idSet.has(img.id));
+      return { ...prev, [fromBucket]: fromNext, [toBucket]: [...toArr, ...moving] };
+    });
+  }, [setFocusImages]);
   const addFocusSubtask = useCallback((key: string, afterId?: string) => {
     const id = `sub-${Date.now()}`;
     setFocusSubtasks((prev) => {
@@ -4832,10 +5120,22 @@ export default function App() {
   // drop zones are already on screen.
   const [refsDragActive, setRefsDragActive] = useState(false);
   const refsDragCounter = useRef(0);
-  // File-picker ref for the "+ Add" button on the References toggles row.
+  // File-picker ref for the "Add Image +" button on the References toggles row.
   // Click the button → hidden input opens the OS file picker → multi-select
   // images get routed to projectKey by default (or taskKey if no project).
   const refsAddInputRef = useRef<HTMLInputElement | null>(null);
+  // Multi-select state for the gallery. A Set of image ids currently selected.
+  // Plain click on an image (without modifier) toggles 1-up like before; Cmd/Ctrl-
+  // click toggles selection of that one image; Shift-click extends the selection
+  // from the most recent anchor click to the clicked image. The anchor is the
+  // last id the user clicked WITHOUT shift held, so chains of shift-clicks always
+  // pivot off the same point.
+  const [selectedImageIds, setSelectedImageIds] = useState<Set<string>>(() => new Set());
+  const [selectionAnchorId, setSelectionAnchorId] = useState<string | null>(null);
+  // Folder rename inline-edit state. Stores the id of the folder whose label is
+  // currently in edit mode (renamed via the inline input next to the icon).
+  // Setting null exits rename mode. New folders auto-enter rename mode on creation.
+  const [editingFolderId, setEditingFolderId] = useState<string | null>(null);
   // The currently-selected task. Set on single-click of a task row, or when the user opens
   // the edit / quick-edit panel. The Focus mode's Information column dynamically shows the
   // project tied to this task, and rows render a 25%-brighter highlight while selected.
@@ -5162,6 +5462,21 @@ export default function App() {
       clearOverlay();
       return;
     }
+    // DAM folder drag-reorder. Folders are sortable within their bucket — same
+    // shape as the sub-task reorder above. Cross-bucket folder moves aren't a
+    // thing (folders are scoped to a bucket).
+    if (active.data.current?.type === 'damFolder') {
+      const fromId = active.data.current.folderId as string;
+      const bucketKey = active.data.current.bucketKey as string;
+      const overData = over?.data.current;
+      if (overData?.type === 'damFolder' && overData.bucketKey === bucketKey) {
+        const toId = overData.folderId as string;
+        if (fromId && toId && fromId !== toId) reorderFocusFolder(bucketKey, fromId, toId);
+      }
+      resetDragRefs();
+      clearOverlay();
+      return;
+    }
     if (active.data.current?.type === 'projTask') {
       const srcTask = active.data.current.task as Task;
       const overData = over?.data.current;
@@ -5454,7 +5769,7 @@ export default function App() {
       handleCrossSectionMove(a, o);
     }
     setActiveId(null); setActiveTaskIdState(null); setActiveType(null); setActiveCalendarCellId(null); setColumnOffset(0); pendingOffsetRef.current = 0; if (dwellTimerRef.current) { clearTimeout(dwellTimerRef.current); dwellTimerRef.current = null; } if (collapseTimerRef.current) { clearTimeout(collapseTimerRef.current); collapseTimerRef.current = null; } setSourceCollapsed(false);
-  }, [tasks, reorderFocusSubtask]);
+  }, [tasks, reorderFocusSubtask, reorderFocusFolder]);
 
   // Default to first person if unset
   useEffect(() => {
@@ -6522,9 +6837,20 @@ export default function App() {
           // References: hardcoded URL list (link references), plus the dropped + processed images
           // from both the project and task drop zones (merged for display).
           const refs = projectKey ? focusReferences[projectKey] || [] : (taskKey ? focusReferences[taskKey] || [] : []);
+          // WIP gets its own bucket key so images dropped into the WIP zone don't co-mingle
+          // with the shared project pool. The key is just a deterministic string derived from
+          // projectKey — the storage layer doesn't care, it's a flat Record<string, …>.
+          const wipKey: string | null = projectKey ? `wip:${projectKey}` : null;
+          const wipImgs = wipKey ? focusImages[wipKey] || [] : [];
           const projectImgs = projectKey ? focusImages[projectKey] || [] : [];
           const taskImgs = taskKey ? focusImages[taskKey] || [] : [];
-          const allImages = [...projectImgs, ...taskImgs];
+          // Display order in the gallery: WIP → Project → Task. Same order as the drop zones.
+          const allImages = [...wipImgs, ...projectImgs, ...taskImgs];
+          // Folder definitions per bucket — pulled here so we can pass them into the
+          // sectioned gallery. Bucket key matches focusImages key (wipKey, projectKey, taskKey).
+          const wipFolders = wipKey ? focusImageFolders[wipKey] || [] : [];
+          const projectFolders = projectKey ? focusImageFolders[projectKey] || [] : [];
+          const taskFolders = taskKey ? focusImageFolders[taskKey] || [] : [];
           const taskTitleForNotes = (selectedTask?.title || 'Task').trim() || 'Task';
           const dashTodayKey = (l: ListId) => `dashboard:list:${l}` as const;
           const todayItems = (['admin', 'work', 'projects'] as ListId[]).map((l) => ({ list: l, items: tasksByKey[dashTodayKey(l)] || [] }));
@@ -6777,15 +7103,16 @@ export default function App() {
                       ))}
                     </div>
                   )}
-                  {/* View-mode toggles + "+ Add" affordance, all on one row.
-                      "Zoom All" stays a wordmark since it's a mode rather than a
-                      size; size knobs collapse to one-letter glyphs (S / M / L).
-                      Active = white text, no background pill — contrast alone
-                      signals selection. Inactive = grey, brightens to white on
-                      hover. The + Add button sits at the far right (ml-auto) and
-                      opens the OS file picker; selected files default to the
-                      project bucket (falling back to the task bucket if no
-                      project context). */}
+                  {/* View-mode toggles + "Add Image +" / "Add Folder +" affordances,
+                      all on one row. "Zoom All" stays a wordmark since it's a mode
+                      rather than a size; size knobs collapse to one-letter glyphs
+                      (S / M / L). Active = white text, no background pill —
+                      contrast alone signals selection. Inactive = grey, brightens
+                      to white on hover. The two add buttons sit at the far right
+                      (ml-auto on the first one), with Add Image opening the OS
+                      file picker and Add Folder appending an empty folder to the
+                      project bucket (or task bucket if no project) and putting it
+                      straight into rename mode. */}
                   <div className="shrink-0 px-[31px]">
                     <div className="flex flex-row gap-4 mb-3 text-[12px] flex-wrap items-center">
                       {([
@@ -6809,8 +7136,28 @@ export default function App() {
                           onClick={() => refsAddInputRef.current?.click()}
                           className="ml-auto flex flex-row items-center gap-1 text-[#656464] hover:text-white transition-colors"
                         >
+                          <span>Add Image</span>
                           <Plus size={14} />
-                          <span>Add</span>
+                        </button>
+                      )}
+                      {(projectKey || taskKey) && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            // Default destination matches Add Image: project bucket
+                            // first (so the folder shows up in the Project section),
+                            // falling back to the task bucket if no project is
+                            // selected. The newly-created folder enters rename mode
+                            // immediately so the user can type its name.
+                            const target = projectKey ?? taskKey;
+                            if (!target) return;
+                            const id = addFocusFolder(target);
+                            setEditingFolderId(id);
+                          }}
+                          className="flex flex-row items-center gap-1 text-[#656464] hover:text-white transition-colors"
+                        >
+                          <span>Add Folder</span>
+                          <Plus size={14} />
                         </button>
                       )}
                       <input
@@ -6829,76 +7176,229 @@ export default function App() {
                       />
                     </div>
                   </div>
-                  {/* Gallery slot — flex column so CustomScroll's `flex-1 min-h-0` and
-                      FocusDamViewer's `h-full` (zoom mode) both correctly take the
-                      remaining space. Zoom All: render gallery directly (no scrollbar,
-                      gallery's ResizeObserver fits to this exact box). Small/Medium/Large:
-                      wrap in CustomScroll so rows can overflow + scroll.
-                      EMPTY STATE: when there are no images yet AND a project / task is
-                      selected, render a single sheet with the "No Images Yet" label
-                      stacked above the three drop zones (Project / Task / WIP) side by
-                      side. Combines the prompt + the action affordance into one zone
-                      instead of carrying a separate Reference Drops section above. */}
-                  <div className="flex-1 min-h-0 px-[31px] pb-[8px] flex flex-col">
-                    {allImages.length === 0 && (projectKey || taskKey) ? (
-                      <div className="flex-1 bg-white/[0.03] flex flex-col items-center justify-center gap-3 p-6">
-                        <span className="text-[#656464] text-[18px] font-bold">No Images Yet</span>
-                        <p className="text-[#656464] text-[13px] text-center max-w-[480px]">
-                          Drop Into One of the Zones Below
-                        </p>
-                        <div className="flex flex-row gap-3 w-full max-w-[700px] mt-3">
-                          {projectKey && (
-                            <FocusDropZone
-                              label="Project"
-                              onDropFiles={(files) => addFocusImages(projectKey, files)}
-                            />
-                          )}
-                          {taskKey && (
-                            <FocusDropZone
-                              label="Task"
-                              onDropFiles={(files) => addFocusImages(taskKey, files)}
-                            />
-                          )}
-                          {projectKey && (
-                            <FocusDropZone
-                              label="WIP"
-                              onDropFiles={(files) => addFocusImages(projectKey, files)}
-                            />
-                          )}
-                        </div>
+                  {/* Gallery slot — flex column with the new sectioned layout. The
+                      buckets (WIP / Project / Task) each render as their own section
+                      with a header label and a dnd-kit-sortable list of folders;
+                      images flow inside their assigned folder, or at the bucket
+                      "root" (above any folders) when they have no folderId. The
+                      whole thing scrolls inside a CustomScroll regardless of the
+                      tile-view mode — the multi-section world makes the original
+                      Zoom-All "fit everything in the box" math impractical, so
+                      Zoom mode now just uses the largest tile size and lets the
+                      content scroll like S/M/L.
+                      EMPTY STATE: when no bucket has any images OR folders AND a
+                      project / task is selected, render a single sheet with the
+                      "No Images Yet" label stacked above the three drop zones
+                      (WIP / Project / Task) side by side. */}
+                  {(() => {
+                    // Build the bucket array exactly once per render so both the
+                    // empty-state branch and the gallery branch see the same data.
+                    // Each bucket carries its key (for delete / move callbacks),
+                    // its label (for the section header), the images stamped with
+                    // their ownerKey, and the folders for that bucket.
+                    const damBuckets: FocusDamBucket[] = [];
+                    if (wipKey) damBuckets.push({ key: wipKey, label: 'WIP', images: wipImgs.map((i) => ({ ...i, ownerKey: wipKey })), folders: wipFolders });
+                    if (projectKey) damBuckets.push({ key: projectKey, label: 'Project', images: projectImgs.map((i) => ({ ...i, ownerKey: projectKey })), folders: projectFolders });
+                    if (taskKey) damBuckets.push({ key: taskKey, label: 'Task', images: taskImgs.map((i) => ({ ...i, ownerKey: taskKey })), folders: taskFolders });
+                    const flatImages: FocusDamImage[] = damBuckets.flatMap((b) => b.images);
+                    const isCompletelyEmpty = flatImages.length === 0 && damBuckets.every((b) => b.folders.length === 0);
+                    // Multi-select click router. Plain click toggles 1-up;
+                    // Cmd/Ctrl-click toggles the image's membership in the
+                    // selection set; Shift-click extends from the last anchor
+                    // (the most recent non-shift click) to the clicked image,
+                    // walking the flat-images list so the range crosses bucket /
+                    // folder boundaries naturally.
+                    const handleImageClick = (id: string, e: React.MouseEvent) => {
+                      const mod = e.ctrlKey || e.metaKey;
+                      if (mod) {
+                        e.stopPropagation();
+                        setSelectedImageIds((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(id)) next.delete(id);
+                          else next.add(id);
+                          return next;
+                        });
+                        setSelectionAnchorId(id);
+                        return;
+                      }
+                      if (e.shiftKey) {
+                        e.stopPropagation();
+                        const anchor = selectionAnchorId;
+                        if (!anchor) {
+                          setSelectedImageIds(new Set([id]));
+                          setSelectionAnchorId(id);
+                          return;
+                        }
+                        const a = flatImages.findIndex((img) => img.id === anchor);
+                        const b = flatImages.findIndex((img) => img.id === id);
+                        if (a < 0 || b < 0) return;
+                        const [lo, hi] = a < b ? [a, b] : [b, a];
+                        const range = flatImages.slice(lo, hi + 1).map((img) => img.id);
+                        setSelectedImageIds((prev) => {
+                          const next = new Set(prev);
+                          for (const r of range) next.add(r);
+                          return next;
+                        });
+                        return;
+                      }
+                      // Plain click — clear selection, toggle 1-up.
+                      setSelectedImageIds(new Set());
+                      setSelectionAnchorId(id);
+                      setFocusOneUpImageId((cur) => cur === id ? null : id);
+                    };
+                    return (
+                      <div
+                        className="flex-1 min-h-0 px-[31px] pb-[8px] flex flex-col"
+                        // Click on the empty space inside the gallery slot
+                        // clears the multi-selection. Image clicks call
+                        // stopPropagation when modifiers are held, so this
+                        // only fires for actual whitespace clicks.
+                        onClick={() => { if (selectedImageIds.size > 0) setSelectedImageIds(new Set()); }}
+                      >
+                        {isCompletelyEmpty && (projectKey || taskKey) ? (
+                          <div className="flex-1 bg-white/[0.03] flex flex-col items-center justify-center gap-3 p-6">
+                            <span className="text-[#656464] text-[18px] font-bold">No Images Yet</span>
+                            <p className="text-[#656464] text-[13px] text-center max-w-[480px]">
+                              Drop Into One of the Zones Below
+                            </p>
+                            <div className="flex flex-row gap-3 w-full max-w-[700px] mt-3">
+                              {/* WIP renders first (own bucket — wipKey), Project second
+                                  (projectKey), Task third (taskKey). Each zone routes its
+                                  dropped files to the matching bucket via addFocusImages. */}
+                              {wipKey && (
+                                <FocusDropZone
+                                  label="WIP"
+                                  onDropFiles={(files) => addFocusImages(wipKey, files)}
+                                />
+                              )}
+                              {projectKey && (
+                                <FocusDropZone
+                                  label="Project"
+                                  onDropFiles={(files) => addFocusImages(projectKey, files)}
+                                />
+                              )}
+                              {taskKey && (
+                                <FocusDropZone
+                                  label="Task"
+                                  onDropFiles={(files) => addFocusImages(taskKey, files)}
+                                />
+                              )}
+                            </div>
+                          </div>
+                        ) : focusOneUpImageId ? (
+                          (() => {
+                            const img = flatImages.find((i) => i.id === focusOneUpImageId);
+                            if (!img) return null;
+                            return (
+                              <div className="w-full">
+                                <div
+                                  className="relative group inline-block cursor-zoom-out"
+                                  onClick={() => setFocusOneUpImageId(null)}
+                                >
+                                  <CachedImage
+                                    src={resolveImageSrc(img)}
+                                    alt={img.filename}
+                                    className="block max-w-full max-h-[80vh] w-auto h-auto"
+                                    loading="eager"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={(e) => { e.stopPropagation(); toggleFocusImageFavorite(img.ownerKey, img.id); }}
+                                    className={`absolute top-1 left-1 p-1 bg-black/40 hover:bg-black/70 opacity-0 group-hover:opacity-100 transition-opacity ${img.favorited ? 'text-[#FF7171]' : 'text-white'}`}
+                                    aria-label={img.favorited ? 'Unfavorite image' : 'Favorite image'}
+                                  >
+                                    <Heart size={12} fill={img.favorited ? 'currentColor' : 'none'} />
+                                  </button>
+                                  <button
+                                    type="button"
+                                    onClick={(e) => { e.stopPropagation(); deleteFocusImage(img.ownerKey, img.id); setFocusOneUpImageId(null); }}
+                                    className="absolute top-1 right-1 p-1 bg-black/40 opacity-0 group-hover:opacity-100 text-white hover:bg-black/70 transition-opacity"
+                                    aria-label="Delete image"
+                                  >
+                                    <Trash2 size={12} />
+                                  </button>
+                                </div>
+                              </div>
+                            );
+                          })()
+                        ) : (
+                          <CustomScroll>
+                            <div className="flex flex-col gap-4">
+                              {damBuckets.map((bucket) => {
+                                if (bucket.images.length === 0 && bucket.folders.length === 0) return null;
+                                const folderIdSet = new Set(bucket.folders.map((f) => f.id));
+                                // Root images = anything in the bucket that doesn't
+                                // resolve to an existing folder (handles orphans
+                                // gracefully — deleted folder's images come back to
+                                // root rather than disappearing).
+                                const rootImages = bucket.images.filter((i) => !i.folderId || !folderIdSet.has(i.folderId));
+                                return (
+                                  <div key={bucket.key} className="flex flex-col gap-2">
+                                    {/* Section header — bucket label, all caps grey. */}
+                                    <div className="text-[#a8a8a8] text-[11px] uppercase tracking-wider">{bucket.label}</div>
+                                    {/* Root drop target — accepts a multi-select drop into the bucket's root. */}
+                                    <FocusDamFolderDropTarget bucketKey={bucket.key} folderId={null}>
+                                      {rootImages.length > 0 ? (
+                                        <FocusDamGroup
+                                          images={rootImages}
+                                          tileView={focusDamTileHeight}
+                                          ownerKey={bucket.key}
+                                          selectedImageIds={selectedImageIds}
+                                          onImageClick={handleImageClick}
+                                          onDelete={deleteFocusImage}
+                                          onToggleFavorite={toggleFocusImageFavorite}
+                                        />
+                                      ) : (
+                                        <div className="h-1" />
+                                      )}
+                                    </FocusDamFolderDropTarget>
+                                    {/* Folder rows — sortable so the user can reorder them inside their bucket. */}
+                                    <SortableContext
+                                      items={bucket.folders.map((f) => `dam-folder:${bucket.key}:${f.id}`)}
+                                      strategy={verticalListSortingStrategy}
+                                    >
+                                      {bucket.folders.map((folder) => {
+                                        const folderImgs = bucket.images.filter((i) => i.folderId === folder.id);
+                                        return (
+                                          <div key={folder.id} className="flex flex-col gap-1">
+                                            <FocusDamFolderRow
+                                              folder={folder}
+                                              bucketKey={bucket.key}
+                                              isEditing={editingFolderId === folder.id}
+                                              onStartEdit={() => setEditingFolderId(folder.id)}
+                                              onCommitRename={(name) => { renameFocusFolder(bucket.key, folder.id, name); setEditingFolderId(null); }}
+                                              onCancelRename={() => setEditingFolderId(null)}
+                                              onDelete={() => deleteFocusFolder(bucket.key, folder.id)}
+                                            />
+                                            <FocusDamFolderDropTarget bucketKey={bucket.key} folderId={folder.id}>
+                                              {folderImgs.length > 0 ? (
+                                                <FocusDamGroup
+                                                  images={folderImgs}
+                                                  tileView={focusDamTileHeight}
+                                                  ownerKey={bucket.key}
+                                                  selectedImageIds={selectedImageIds}
+                                                  onImageClick={handleImageClick}
+                                                  onDelete={deleteFocusImage}
+                                                  onToggleFavorite={toggleFocusImageFavorite}
+                                                />
+                                              ) : (
+                                                // Empty folder placeholder — keeps the drop target tall enough to land on.
+                                                <div className="h-6 text-[#5e5e5e] text-[11px] italic pl-6">Drop images here</div>
+                                              )}
+                                            </FocusDamFolderDropTarget>
+                                          </div>
+                                        );
+                                      })}
+                                    </SortableContext>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </CustomScroll>
+                        )}
                       </div>
-                    ) : focusDamTileHeight === 'zoom' ? (
-                      <FocusDamViewer
-                        images={allImages.map((img) => {
-                          const ownerKey = (projectKey && (focusImages[projectKey] || []).some((i) => i.id === img.id))
-                            ? projectKey
-                            : taskKey;
-                          return { ...img, ownerKey };
-                        })}
-                        tileView={focusDamTileHeight}
-                        oneUpImageId={focusOneUpImageId}
-                        onOneUpToggle={(id) => setFocusOneUpImageId((cur) => cur === id ? null : id)}
-                        onDelete={(ownerKey, id) => deleteFocusImage(ownerKey, id)}
-                        onToggleFavorite={(ownerKey, id) => toggleFocusImageFavorite(ownerKey, id)}
-                      />
-                    ) : (
-                      <CustomScroll>
-                        <FocusDamViewer
-                          images={allImages.map((img) => {
-                            const ownerKey = (projectKey && (focusImages[projectKey] || []).some((i) => i.id === img.id))
-                              ? projectKey
-                              : taskKey;
-                            return { ...img, ownerKey };
-                          })}
-                          tileView={focusDamTileHeight}
-                          oneUpImageId={focusOneUpImageId}
-                          onOneUpToggle={(id) => setFocusOneUpImageId((cur) => cur === id ? null : id)}
-                          onDelete={(ownerKey, id) => deleteFocusImage(ownerKey, id)}
-                          onToggleFavorite={(ownerKey, id) => toggleFocusImageFavorite(ownerKey, id)}
-                        />
-                      </CustomScroll>
-                    )}
-                  </div>
+                    );
+                  })()}
                   {/* Drag-over overlay: covers the column fully (solid #282828) when
                       the user drags an external file over the column AND there are
                       already images visible (the empty-state path doesn't need
@@ -6913,6 +7413,17 @@ export default function App() {
                         Drop Into One of the Zones Below
                       </p>
                       <div className="flex flex-row gap-3 w-full max-w-[700px] mt-3">
+                        {/* Same WIP / Project / Task order as the empty-state zones. */}
+                        {wipKey && (
+                          <FocusDropZone
+                            label="WIP"
+                            onDropFiles={(files) => {
+                              addFocusImages(wipKey, files);
+                              refsDragCounter.current = 0;
+                              setRefsDragActive(false);
+                            }}
+                          />
+                        )}
                         {projectKey && (
                           <FocusDropZone
                             label="Project"
@@ -6928,16 +7439,6 @@ export default function App() {
                             label="Task"
                             onDropFiles={(files) => {
                               addFocusImages(taskKey, files);
-                              refsDragCounter.current = 0;
-                              setRefsDragActive(false);
-                            }}
-                          />
-                        )}
-                        {projectKey && (
-                          <FocusDropZone
-                            label="WIP"
-                            onDropFiles={(files) => {
-                              addFocusImages(projectKey, files);
                               refsDragCounter.current = 0;
                               setRefsDragActive(false);
                             }}

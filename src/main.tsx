@@ -40,6 +40,11 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
             focusSubtasks: {},
             focusImages: {},
             focusReferences: {},
+            // Image-folder definitions per bucket. Bucket key = projectKey, taskKey,
+            // or `wip:${projectKey}`. Each entry is an ordered list of folders.
+            // Images carry an optional `folderId` that points into this list — null /
+            // missing = root of the bucket.
+            focusImageFolders: {},
           }}
         >
           <ClientSideSuspense fallback={<Loading />}>
