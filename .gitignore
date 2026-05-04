@@ -12,3 +12,6 @@ dist
 # Tauri build artifacts (recreated on every build)
 src-tauri/target/
 src-tauri/gen/
+
+# TypeScript incremental build cache
+tsconfig.tsbuildinfo

@@ -6844,9 +6844,7 @@ export default function App() {
                       <div className="flex-1 bg-white/[0.03] flex flex-col items-center justify-center gap-3 p-6">
                         <span className="text-[#656464] text-[18px] font-bold">No Images Yet</span>
                         <p className="text-[#656464] text-[13px] text-center max-w-[480px]">
-                          Drop images into one of the buckets below — Project for shared
-                          references that belong to the whole project, Task for the one
-                          you've got selected, or WIP for in-progress work.
+                          Drop Into One of the Zones Below
                         </p>
                         <div className="flex flex-row gap-3 w-full max-w-[700px] mt-3">
                           {projectKey && (
@@ -6901,20 +6899,18 @@ export default function App() {
                       </CustomScroll>
                     )}
                   </div>
-                  {/* Drag-over overlay: covers the column at 90% opacity when the
-                      user drags an external file over the column AND there are
+                  {/* Drag-over overlay: covers the column fully (solid #282828) when
+                      the user drags an external file over the column AND there are
                       already images visible (the empty-state path doesn't need
                       this — its drop zones are always on screen). The same three
                       buckets (Project / Task / WIP) are presented; release on any
                       one ingests the file. pointer-events:none on the wrapper text
                       so only the FocusDropZones are draggable targets. */}
                   {refsDragActive && allImages.length > 0 && (projectKey || taskKey) && (
-                    <div className="absolute inset-0 z-50 bg-[#282828]/90 flex flex-col items-center justify-center gap-3 p-6">
+                    <div className="absolute inset-0 z-50 bg-[#282828] flex flex-col items-center justify-center gap-3 p-6">
                       <span className="text-[#656464] text-[18px] font-bold pointer-events-none">Add Images</span>
                       <p className="text-[#656464] text-[13px] text-center max-w-[480px] pointer-events-none">
-                        Drop into one of the buckets below — Project for shared
-                        references that belong to the whole project, Task for the
-                        one you've got selected, or WIP for in-progress work.
+                        Drop Into One of the Zones Below
                       </p>
                       <div className="flex flex-row gap-3 w-full max-w-[700px] mt-3">
                         {projectKey && (
