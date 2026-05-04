@@ -3273,6 +3273,50 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
           <button type="button" onClick={() => onSetCaseMode('off')} className={`text-[13px] transition-colors ${caseMode === 'off' ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>Off</button>
           <button type="button" onClick={() => onSetCaseMode('title')} className={`text-[13px] transition-colors ${caseMode === 'title' ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>On</button>
         </div>
+        {/* --- About / Version --------------------------------------------
+            Shows which JS bundle is currently running (the in-memory webview
+            doesn't auto-poll for new deploys). The Reload button does a
+            window.location.reload() so the user can pull a fresh build
+            from GitHub Pages without quitting the app. The dot color hints
+            at how recent the build is — green (<1d), yellow (<7d), red
+            (older). Build time is the moment Vite produced the bundle. */}
+        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-0">
+          <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">About</p>
+        </div>
+        <div className="px-[31px] mb-[37px] flex flex-col gap-2 text-[13px]">
+          {(() => {
+            const buildDate = new Date(__BUILD_TIME__);
+            const ageMs = Date.now() - buildDate.getTime();
+            const ageDays = ageMs / (24 * 60 * 60 * 1000);
+            const dotColor = ageDays < 1 ? '#7ED957' : ageDays < 7 ? '#E0C200' : '#FF7171';
+            const ageLabel =
+              ageMs < 60_000 ? 'just now'
+              : ageMs < 60 * 60_000 ? `${Math.round(ageMs / 60_000)}m ago`
+              : ageMs < 24 * 60 * 60_000 ? `${Math.round(ageMs / (60 * 60_000))}h ago`
+              : `${Math.round(ageDays)}d ago`;
+            return (
+              <>
+                <div className="flex flex-row items-center gap-3">
+                  <span className="inline-block w-[8px] h-[8px] rounded-full" style={{ backgroundColor: dotColor }} />
+                  <span className="text-white">Ctrl-Project v{__APP_VERSION__}</span>
+                  <span className="text-[#656464]">built {ageLabel} ({buildDate.toLocaleString()})</span>
+                </div>
+                <div className="flex flex-row items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => window.location.reload()}
+                    className="px-3 py-1 rounded-md bg-[#1f1f1f] hover:bg-[#262626] text-white transition-colors"
+                  >
+                    Reload to latest
+                  </button>
+                  <span className="text-[#656464] text-[12px]">
+                    Pulls a fresh build from the server. Use this if you've left the app open during a deploy.
+                  </span>
+                </div>
+              </>
+            );
+          })()}
+        </div>
         {/* --- Local Backup --------------------------------------------------
             Auto-snapshot every 5 min into IndexedDB (rolling 20). The download
             button writes the current state to disk as JSON; restore reads a
