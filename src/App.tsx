@@ -321,7 +321,7 @@ function BriefField({ value, onChange, placeholder }: { value: string; onChange:
   // caret into the editor at the appropriate position.
   return (
     <div
-      className="bg-white/[0.03] rounded-md px-3 py-2 cursor-text"
+      className="bg-white/[0.03] px-3 py-2 cursor-text"
       onClick={(e) => {
         // Forward clicks landing on the sheet's padding to the contentEditable
         // so the user can click anywhere inside the panel to start typing,
@@ -1709,8 +1709,8 @@ function FocusDamViewer({
     // so the panel reads as a paused / waiting-for-content surface rather
     // than a hard chrome panel.
     return (
-      <div className="h-full w-full bg-white/[0.03] rounded-md flex items-center justify-center">
-        <span className="text-[#282828] text-[18px] font-bold">No Images Yet</span>
+      <div className="h-full w-full bg-white/[0.03] flex items-center justify-center">
+        <span className="text-[#656464] text-[18px] font-bold">No Images Yet</span>
       </div>
     );
   }
@@ -1965,7 +1965,7 @@ function FocusDropZone({ label, sublabel, onDropFiles }: { label: string; sublab
       } : undefined}
       // 2px dashed grey border, no background fill (the parent sheet's tint
       // shows through). Hover / drag-over brightens the border.
-      className={`flex-1 flex flex-col items-center justify-center min-h-[80px] rounded-md border-2 border-dashed transition-colors ${interactive ? 'cursor-pointer' : 'cursor-default'} ${over ? 'border-white' : 'border-[#656464] hover:border-white'}`}
+      className={`flex-1 flex flex-col items-center justify-center min-h-[80px] border-2 border-dashed transition-colors ${interactive ? 'cursor-pointer' : 'cursor-default'} ${over ? 'border-white' : 'border-[#656464] hover:border-white'}`}
     >
       {interactive && (
         <input
@@ -6584,8 +6584,8 @@ export default function App() {
                       column title — no gap, no extra padding chrome — so the
                       empty state feels like the column itself is paused. */}
                   {!activeProjectId && (
-                    <div className="flex-1 mx-[31px] mb-[8px] bg-white/[0.03] rounded-md flex items-center justify-center">
-                      <span className="text-[#282828] text-[18px] font-bold">Select a Task</span>
+                    <div className="flex-1 mx-[31px] mb-[8px] bg-white/[0.03] flex items-center justify-center">
+                      <span className="text-[#656464] text-[18px] font-bold">Select a Task</span>
                     </div>
                   )}
                   {activeProjectId && (
@@ -6601,7 +6601,7 @@ export default function App() {
                     <>
                       <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px]">
                         <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[#656464] text-[14px] whitespace-nowrap">
-                          {projectBreadcrumb ? <>{projectBreadcrumb} — Brief</> : 'Brief'}
+                          {projectBreadcrumb ? <>Project: {projectBreadcrumb} — Brief</> : 'Project: Brief'}
                         </p>
                       </div>
                       <div className="px-[31px] pb-[37px]">
@@ -6617,7 +6617,7 @@ export default function App() {
                     <>
                       <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px]">
                         <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[#656464] text-[14px] whitespace-nowrap">
-                          {taskTitleForNotes} — Notes
+                          Task: {taskTitleForNotes} — Notes
                         </p>
                       </div>
                       <div className="px-[31px] pb-[37px]">
@@ -6675,49 +6675,10 @@ export default function App() {
                       <span>Sub-Task</span>
                     </button>
                   )}
-                  {/* Reference image drop zones — moved up here from the References column so
-                      the user can drop images while their eyes are still on the Information
-                      panel. The Project zone is hidden when there's no project context; the
-                      Task zone is hidden when nothing is selected. The actual DAM grid still
-                      lives in column 3 and reads from the same focusImages storage. */}
-                  {(projectKey || taskKey) && (
-                    <>
-                      <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px]">
-                        <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[#656464] text-[14px] whitespace-nowrap">Reference Drops</p>
-                      </div>
-                      {/* Sheet (soft hover-tint background) holding the three
-                          drop zones stacked vertically. Each zone has its own
-                          2px dashed grey border. The labels include the live
-                          project / task names where applicable so the user can
-                          see exactly which scope a drop will land in. WIP is a
-                          third bucket for "in-progress" work — same routing
-                          as the project zone for now; the data model can grow
-                          a dedicated WIP key later if we need it separated. */}
-                      <div className="mx-[31px] mb-[37px] bg-white/[0.03] rounded-md p-3 flex flex-col gap-2">
-                        {projectKey && (
-                          <FocusDropZone
-                            label={`(${(taskProject?.name || 'Project').trim() || 'Project'}) Related References`}
-                            sublabel="Drop images here"
-                            onDropFiles={(files) => addFocusImages(projectKey, files)}
-                          />
-                        )}
-                        {taskKey && (
-                          <FocusDropZone
-                            label={`(${(selectedTask?.title || 'Task').trim() || 'Task'}) Related References`}
-                            sublabel="Drop images here"
-                            onDropFiles={(files) => addFocusImages(taskKey, files)}
-                          />
-                        )}
-                        {projectKey && (
-                          <FocusDropZone
-                            label="WIP"
-                            sublabel="Drop images here"
-                            onDropFiles={(files) => addFocusImages(projectKey, files)}
-                          />
-                        )}
-                      </div>
-                    </>
-                  )}
+                  {/* (Reference drop zones live in the References column now —
+                      directly under that column's header, where the resulting
+                      gallery grid sits, so the action and the result share the
+                      same visual surface.) */}
                   {/* Integrations — placeholder row of hookup buttons. Hidden when no selection
                       so an empty Information panel doesn't look like dummy scaffolding. */}
                   {activeProjectId && (
@@ -6753,6 +6714,38 @@ export default function App() {
                   <div className="shrink-0 group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]" style={{ marginBottom: SPACING.dcr }}>
                     <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">References</p>
                   </div>
+                  {/* Reference drop zones — moved here directly under the References
+                      header so the action (drop a file) and the result (the gallery
+                      below) share the same visual zone. Stacked vertically inside a
+                      sheet (soft hover-tint background); each zone gets its own 2px
+                      dashed grey border. WIP routes to the project key for now —
+                      same destination as the project zone — so it's a visual third
+                      bucket without a separate data model yet. */}
+                  {(projectKey || taskKey) && (
+                    <div className="shrink-0 mx-[31px] mb-[37px] bg-white/[0.03] p-3 flex flex-col gap-2">
+                      {projectKey && (
+                        <FocusDropZone
+                          label={`(${(taskProject?.name || 'Project').trim() || 'Project'}) Related References`}
+                          sublabel="Drop images here"
+                          onDropFiles={(files) => addFocusImages(projectKey, files)}
+                        />
+                      )}
+                      {taskKey && (
+                        <FocusDropZone
+                          label={`(${(selectedTask?.title || 'Task').trim() || 'Task'}) Related References`}
+                          sublabel="Drop images here"
+                          onDropFiles={(files) => addFocusImages(taskKey, files)}
+                        />
+                      )}
+                      {projectKey && (
+                        <FocusDropZone
+                          label="WIP"
+                          sublabel="Drop images here"
+                          onDropFiles={(files) => addFocusImages(projectKey, files)}
+                        />
+                      )}
+                    </div>
+                  )}
                   {/* Existing URL references (link list) */}
                   {refs.length > 0 && (
                     <div className="shrink-0 px-[31px] flex flex-col gap-2 pb-[37px]">
