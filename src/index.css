@@ -230,4 +230,12 @@ textarea:focus-visible,
 .brief-edit {
   display: block;
 }
+/* Placeholder color override for BriefField: matches the "finished task"
+   grey (#474747) instead of the global #383838 so dummy notes / brief
+   placeholder text reads with the same weight as completed-row text. The
+   higher specificity (.brief-edit + [data-placeholder]) beats the global
+   `[data-placeholder]:empty:before { color: #383838 }` rule. */
+.brief-edit[data-placeholder]:empty:before {
+  color: #474747;
+}
 

@@ -313,29 +313,47 @@ function BriefField({ value, onChange, placeholder }: { value: string; onChange:
     renderToDom(el, text);
   }, [value, onChange, renderToDom]);
 
+  // Sheet wrapper: soft hover-tint background panel that visually groups the
+  // brief / notes content. When the field is empty, the placeholder text inside
+  // shows in #474747 (the same grey as a finished task) per the .brief-edit CSS
+  // override in index.css. The wrapper is a click-to-edit affordance — clicks
+  // anywhere on the sheet (even outside the contentEditable's bounds) drop the
+  // caret into the editor at the appropriate position.
   return (
     <div
-      ref={ref}
-      contentEditable
-      suppressContentEditableWarning
-      data-placeholder={placeholder}
-      onBlur={commit}
-      onKeyDown={(e) => {
-        // Esc reverts to the last-saved value and blurs.
-        if (e.key === 'Escape') {
-          e.preventDefault();
-          if (ref.current) renderToDom(ref.current, value);
-          (e.currentTarget as HTMLDivElement).blur();
+      className="bg-white/[0.03] rounded-md px-3 py-2 cursor-text"
+      onClick={(e) => {
+        // Forward clicks landing on the sheet's padding to the contentEditable
+        // so the user can click anywhere inside the panel to start typing,
+        // not just on the text itself.
+        if (e.target === e.currentTarget && ref.current) {
+          ref.current.focus();
         }
       }}
-      // Body text grey (#656464), like a task body. caret-color: white so the
-      // cursor pops against the grey/dark background. line-height 2.2 makes
-      // the caret visibly taller; .brief-edit (CSS in index.css) bottoms the
-      // text glyphs in each line box so the caret reads as extending UP from
-      // the baseline. Anchors render in white via inline style in renderToDom.
-      className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] text-[#656464] whitespace-pre-wrap break-words outline-none cursor-text min-h-[21px] brief-edit"
-      style={{ caretColor: 'white', lineHeight: 2.2 }}
-    />
+    >
+      <div
+        ref={ref}
+        contentEditable
+        suppressContentEditableWarning
+        data-placeholder={placeholder}
+        onBlur={commit}
+        onKeyDown={(e) => {
+          // Esc reverts to the last-saved value and blurs.
+          if (e.key === 'Escape') {
+            e.preventDefault();
+            if (ref.current) renderToDom(ref.current, value);
+            (e.currentTarget as HTMLDivElement).blur();
+          }
+        }}
+        // Body text grey (#656464), like a task body. caret-color: white so the
+        // cursor pops against the grey/dark background. line-height 2.2 makes
+        // the caret visibly taller; .brief-edit (CSS in index.css) bottoms the
+        // text glyphs in each line box so the caret reads as extending UP from
+        // the baseline. Anchors render in white via inline style in renderToDom.
+        className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] text-[#656464] whitespace-pre-wrap break-words outline-none cursor-text min-h-[21px] brief-edit"
+        style={{ caretColor: 'white', lineHeight: 2.2 }}
+      />
+    </div>
   );
 }
 
@@ -1686,7 +1704,15 @@ function FocusDamViewer({
     return () => ro.disconnect();
   }, [tileView, oneUpImageId]);
   if (images.length === 0) {
-    return <div className="text-[#656464] text-[14px]">No images yet — drag images onto a drop zone in the Information column.</div>;
+    // Same full-fill rectangle empty state as Information column's "Select a
+    // Task" — soft hover-tint sheet, dummy text in the page background color
+    // so the panel reads as a paused / waiting-for-content surface rather
+    // than a hard chrome panel.
+    return (
+      <div className="h-full w-full bg-white/[0.03] rounded-md flex items-center justify-center">
+        <span className="text-[#282828] text-[18px] font-bold">No Images Yet</span>
+      </div>
+    );
   }
   // 1-up inline view — when an image is single-clicked, it expands to fill the column. Click
   // again (or hit Esc, handled by App's keydown effect) to collapse back to the active grid /
@@ -1919,32 +1945,39 @@ function Proj2ProjectDropZone({ projectId, listId, children }: { projectId: stri
   );
 }
 
-function FocusDropZone({ label, sublabel, onDropFiles }: { label: string; sublabel: string; onDropFiles: (files: FileList) => void }) {
-  // Native HTML5 drag-and-drop for image files. We track `over` so the dashed border
-  // brightens while a drag is hovering. preventDefault on dragOver is the magic that
-  // lets the drop event fire — without it the browser navigates to the dropped file.
+function FocusDropZone({ label, sublabel, onDropFiles }: { label: string; sublabel?: string; onDropFiles?: (files: FileList) => void }) {
+  // Native HTML5 drag-and-drop for image files. We track `over` so the border
+  // brightens while a drag hovers. preventDefault on dragOver is the magic that
+  // lets the drop event fire — without it the browser navigates to the file.
+  // onDropFiles is optional so a "WIP" zone (visual placeholder, no behavior
+  // wired yet) can render as a non-functional drop target.
   const [over, setOver] = useState(false);
+  const interactive = !!onDropFiles;
   return (
     <label
-      onDragOver={(e) => { e.preventDefault(); if (!over) setOver(true); }}
-      onDragEnter={(e) => { e.preventDefault(); setOver(true); }}
-      onDragLeave={() => setOver(false)}
-      onDrop={(e) => {
+      onDragOver={interactive ? (e) => { e.preventDefault(); if (!over) setOver(true); } : undefined}
+      onDragEnter={interactive ? (e) => { e.preventDefault(); setOver(true); } : undefined}
+      onDragLeave={interactive ? () => setOver(false) : undefined}
+      onDrop={interactive ? (e) => {
         e.preventDefault();
         setOver(false);
-        if (e.dataTransfer.files?.length) onDropFiles(e.dataTransfer.files);
-      }}
-      className={`flex-1 flex flex-col items-center justify-center min-h-[80px] rounded-md border border-dashed cursor-pointer transition-colors ${over ? 'border-[#7363FF] bg-[#7363FF]/[0.08]' : 'border-[#3a3a3a] bg-[#1f1f1f] hover:border-[#5e5e5e]'}`}
+        if (e.dataTransfer.files?.length) onDropFiles!(e.dataTransfer.files);
+      } : undefined}
+      // 2px dashed grey border, no background fill (the parent sheet's tint
+      // shows through). Hover / drag-over brightens the border.
+      className={`flex-1 flex flex-col items-center justify-center min-h-[80px] rounded-md border-2 border-dashed transition-colors ${interactive ? 'cursor-pointer' : 'cursor-default'} ${over ? 'border-white' : 'border-[#656464] hover:border-white'}`}
     >
-      <input
-        type="file"
-        accept="image/*"
-        multiple
-        className="hidden"
-        onChange={(e) => { if (e.target.files?.length) onDropFiles(e.target.files); e.currentTarget.value = ''; }}
-      />
-      <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[13px] text-white">{label}</p>
-      <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[11px] text-[#656464]">{sublabel}</p>
+      {interactive && (
+        <input
+          type="file"
+          accept="image/*"
+          multiple
+          className="hidden"
+          onChange={(e) => { if (e.target.files?.length) onDropFiles!(e.target.files); e.currentTarget.value = ''; }}
+        />
+      )}
+      <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[13px] text-[#656464]">{label}</p>
+      {sublabel && <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[11px] text-[#656464]">{sublabel}</p>}
     </label>
   );
 }
@@ -6652,19 +6685,34 @@ export default function App() {
                       <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px]">
                         <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[#656464] text-[14px] whitespace-nowrap">Reference Drops</p>
                       </div>
-                      <div className="px-[31px] pb-[37px] flex flex-row gap-2">
+                      {/* Sheet (soft hover-tint background) holding the three
+                          drop zones stacked vertically. Each zone has its own
+                          2px dashed grey border. The labels include the live
+                          project / task names where applicable so the user can
+                          see exactly which scope a drop will land in. WIP is a
+                          third bucket for "in-progress" work — same routing
+                          as the project zone for now; the data model can grow
+                          a dedicated WIP key later if we need it separated. */}
+                      <div className="mx-[31px] mb-[37px] bg-white/[0.03] rounded-md p-3 flex flex-col gap-2">
                         {projectKey && (
                           <FocusDropZone
-                            label="Project"
+                            label={`(${(taskProject?.name || 'Project').trim() || 'Project'}) Related References`}
                             sublabel="Drop images here"
                             onDropFiles={(files) => addFocusImages(projectKey, files)}
                           />
                         )}
                         {taskKey && (
                           <FocusDropZone
-                            label="Task"
+                            label={`(${(selectedTask?.title || 'Task').trim() || 'Task'}) Related References`}
                             sublabel="Drop images here"
                             onDropFiles={(files) => addFocusImages(taskKey, files)}
+                          />
+                        )}
+                        {projectKey && (
+                          <FocusDropZone
+                            label="WIP"
+                            sublabel="Drop images here"
+                            onDropFiles={(files) => addFocusImages(projectKey, files)}
                           />
                         )}
                       </div>
