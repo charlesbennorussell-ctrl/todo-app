@@ -29,6 +29,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { useStorage, useMutation, useUndo, useRedo } from '@liveblocks/react/suspense';
 import { uploadFocusImage, deleteFocusImageBlob } from './supabase';
 import { getCachedImageUrl, getCachedImageUrlSync, evictCachedImage } from './imageCache';
+import { consumeOauthRedirect, openLightroomAuth, hasLightroomAuth } from './lightroom';
 import {
   buildSnapshot,
   getSlot,
@@ -5317,6 +5318,27 @@ export default function App() {
   // the filter still render, so the user can still see / use them as drop
   // targets while filtered).
   const [favoritesFilterActive, setFavoritesFilterActive] = useState(false);
+  // Lightroom import auth + UI state. `lightroomAuthed` mirrors the localStorage
+  // token presence; flipped to true when the redirect handler completes the
+  // OAuth dance, flipped to false on sign-out (UI not yet wired). The import
+  // dialog state controls the share-URL prompt that appears when an
+  // authenticated user clicks Import from Lightroom.
+  const [lightroomAuthed, setLightroomAuthed] = useState<boolean>(() => hasLightroomAuth());
+  const [lightroomImportOpen, setLightroomImportOpen] = useState(false);
+  // OAuth redirect consumer — runs once at mount. If the URL has ?code=…,
+  // exchange it for tokens, then update lightroomAuthed so the import button
+  // flips to "ready". Errors are logged; the button stays in the auth state
+  // and the user can retry.
+  useEffect(() => {
+    let cancelled = false;
+    consumeOauthRedirect()
+      .then((consumed) => {
+        if (cancelled) return;
+        if (consumed) setLightroomAuthed(true);
+      })
+      .catch((e) => console.warn('[lightroom] oauth redirect consume failed:', e));
+    return () => { cancelled = true; };
+  }, []);
   // Refs for the multi-select drag handler — handleDragEnd is wrapped in
   // useCallback and would be recreated on every selection / image change if we
   // depended on the values directly. Using refs lets the callback read the
@@ -7666,6 +7688,32 @@ export default function App() {
                           <Plus size={14} />
                         </button>
                       )}
+                      {(projectKey || taskKey) && (
+                        <button
+                          type="button"
+                          // Two paths:
+                          //   - Not authenticated yet → kick off the Adobe OAuth
+                          //     flow. The browser navigates away to ims-na1.adobelogin.com,
+                          //     comes back with ?code=…, and the consumeOauthRedirect
+                          //     useEffect at App mount finishes the exchange and flips
+                          //     lightroomAuthed → true.
+                          //   - Authenticated → open the import dialog (paste-share-URL
+                          //     → fetch → process → land in a new folder named after
+                          //     the album). Dialog itself is not yet wired (placeholder
+                          //     for next pass once the proxy is deployed).
+                          onClick={() => {
+                            if (!lightroomAuthed) {
+                              openLightroomAuth().catch((e) => console.error('[lightroom] auth start failed:', e));
+                              return;
+                            }
+                            setLightroomImportOpen(true);
+                          }}
+                          className="px-2 py-1 flex flex-row items-center gap-1 text-[#656464] hover:text-white transition-colors"
+                        >
+                          <span>{lightroomAuthed ? 'Import from Lightroom' : 'Connect Lightroom'}</span>
+                          <Plus size={14} />
+                        </button>
+                      )}
                       <input
                         ref={refsAddInputRef}
                         type="file"
@@ -8107,6 +8155,36 @@ export default function App() {
                       view via FocusDamViewer's onOneUpToggle. */}
                 </div>
               </div>
+              {/* Lightroom import dialog — opens when an authenticated user
+                  clicks "Import from Lightroom". Currently a placeholder; the
+                  share-URL → fetch → process pipeline lights up once the
+                  Supabase Edge Function proxy is deployed (next pass). */}
+              {lightroomImportOpen && (
+                <div
+                  className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60"
+                  onClick={() => setLightroomImportOpen(false)}
+                >
+                  <div
+                    className="bg-[#2a2a2a] border border-[#3a3a3a] rounded-2xl w-[480px] p-6 flex flex-col gap-4 shadow-2xl"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <p className="text-white text-[14px] font-bold">Import from Lightroom</p>
+                    <p className="text-[#a8a8a8] text-[13px]">
+                      Connected. The album-import pipeline finishes deploying once the
+                      Supabase Edge Function proxy lands. Next deploy will let you
+                      paste a Lightroom share URL here and pull the album into a new
+                      folder.
+                    </p>
+                    <button
+                      type="button"
+                      onClick={() => setLightroomImportOpen(false)}
+                      className="self-end px-3 py-1 text-[13px] text-[#a8a8a8] hover:text-white transition-colors"
+                    >
+                      Close
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           );
         })()}
