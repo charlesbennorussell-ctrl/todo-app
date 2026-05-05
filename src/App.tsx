@@ -5547,36 +5547,9 @@ export default function App() {
       lrSyncingFolderIdsRef.current.delete(folderId);
     }
   }, [addFocusImages, setFocusImageFolders]);
-  // Auto-sync trigger. Fires whenever the user lands on a different task
-  // (which changes the active project / task / wip buckets in Focus mode).
-  // Walks every folder in those buckets and kicks a background sync for any
-  // that have an lrSource AND haven't synced in the last 60 seconds.
-  // syncLightroomFolder de-dupes via lrSyncingFolderIdsRef so concurrent
-  // triggers (e.g. from a fast task-switch) don't pile up jobs on the same
-  // folder. Only runs in Focus mode — no point pulling LR data when the
-  // user is in List or Calendar view.
-  useEffect(() => {
-    if (mode !== 'focus') return;
-    const sel = selectedTaskId ? tasks.find((t) => t.id === selectedTaskId) : null;
-    const proj = sel?.projectId ? projects.find((p) => p.id === sel.projectId) : null;
-    const projectKey = proj?.id ?? null;
-    const taskKey = sel?.id ?? null;
-    const wipKey = projectKey ? `wip:${projectKey}` : null;
-    const buckets = [projectKey, taskKey, wipKey].filter((k): k is string => !!k);
-    if (buckets.length === 0) return;
-    const STALE_MS = 60_000;
-    const now = Date.now();
-    const folders = focusImageFoldersRef.current;
-    for (const bucket of buckets) {
-      for (const f of folders[bucket] || []) {
-        if (!f.lrSource) continue;
-        if (f.lrSyncedAt && now - f.lrSyncedAt < STALE_MS) continue;
-        // Background — don't await. syncLightroomFolder handles its own
-        // errors and updates state when finished.
-        syncLightroomFolder(bucket, f.id);
-      }
-    }
-  }, [mode, selectedTaskId, tasks, projects, syncLightroomFolder]);
+  // (Auto-sync useEffect lives further down, AFTER selectedTaskId is
+  // declared — referencing it from up here would land in the temporal-dead-
+  // -zone and crash the whole bundle on first render.)
   // OAuth redirect consumer — runs once at mount. If the URL has ?code=…,
   // exchange it for tokens, then update lightroomAuthed so the import button
   // flips to "ready". Errors are logged; the button stays in the auth state
@@ -5724,6 +5697,40 @@ export default function App() {
   // the edit / quick-edit panel. The Focus mode's Information column dynamically shows the
   // project tied to this task, and rows render a 25%-brighter highlight while selected.
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  // Lightroom auto-sync trigger. Fires whenever the user lands on a different
+  // task (which changes the active project / task / wip buckets in Focus
+  // mode). Walks every folder in those buckets and kicks a background sync
+  // for any with an lrSource that hasn't synced in the last 60 seconds.
+  // syncLightroomFolder de-dupes via lrSyncingFolderIdsRef so concurrent
+  // triggers (e.g. from a fast task-switch) don't pile up jobs on the same
+  // folder. Only runs in Focus mode — no point pulling LR data when the
+  // user is in List or Calendar view.
+  // NOTE: this useEffect lives HERE (after selectedTaskId is declared)
+  // rather than next to syncLightroomFolder up above, because including
+  // selectedTaskId in the dep array before its declaration is hit lands
+  // in the temporal-dead-zone and crashes the bundle at first render.
+  useEffect(() => {
+    if (mode !== 'focus') return;
+    const sel = selectedTaskId ? tasks.find((t) => t.id === selectedTaskId) : null;
+    const proj = sel?.projectId ? projects.find((p) => p.id === sel.projectId) : null;
+    const projectKey = proj?.id ?? null;
+    const taskKey = sel?.id ?? null;
+    const wipKey = projectKey ? `wip:${projectKey}` : null;
+    const buckets = [projectKey, taskKey, wipKey].filter((k): k is string => !!k);
+    if (buckets.length === 0) return;
+    const STALE_MS = 60_000;
+    const now = Date.now();
+    const folders = focusImageFoldersRef.current;
+    for (const bucket of buckets) {
+      for (const f of folders[bucket] || []) {
+        if (!f.lrSource) continue;
+        if (f.lrSyncedAt && now - f.lrSyncedAt < STALE_MS) continue;
+        // Background — don't await. syncLightroomFolder handles its own
+        // errors and updates state when finished.
+        syncLightroomFolder(bucket, f.id);
+      }
+    }
+  }, [mode, selectedTaskId, tasks, projects, syncLightroomFolder]);
   // Liveblocks history hooks — Cmd/Ctrl+Z undoes the last storage mutation, Cmd/Ctrl+Shift+Z (or
   // Ctrl+Y on Windows) redoes. Skip when the user is editing text so the browser's native input
   // undo handles in-progress typing.
