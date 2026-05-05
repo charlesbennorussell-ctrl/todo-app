@@ -1993,7 +1993,12 @@ function FocusDamTile({
       <div
         ref={setNodeRef}
         className="relative group flex flex-row justify-start"
-        onClick={(e) => onImageClick(img.id, e)}
+        // Modifier clicks (ctrl/meta/shift) fire on mousedown — instant
+        // visual feedback. The plain click flow still goes through onClick.
+        onMouseDown={(e) => {
+          if (e.ctrlKey || e.metaKey || e.shiftKey) onImageClick(img.id, e as unknown as React.MouseEvent);
+        }}
+        onClick={(e) => { if (!e.ctrlKey && !e.metaKey && !e.shiftKey) onImageClick(img.id, e); }}
         {...attributes}
         {...listeners}
         style={lgStyle}
@@ -2037,7 +2042,16 @@ function FocusDamTile({
   return (
     <div
       ref={setNodeRef}
-      onClick={(e) => onImageClick(img.id, e)}
+      // Modifier clicks (ctrl/meta/shift) fire on mousedown for instant
+      // visual feedback. Without this, the React render triggered by the
+      // click event was landing one user interaction late — the outline
+      // would only appear when the user clicked the NEXT image. mousedown
+      // bypasses the click-event lifecycle (and any dnd-kit pointer-event
+      // bookkeeping) and fires the moment the button is pressed.
+      onMouseDown={(e) => {
+        if (e.ctrlKey || e.metaKey || e.shiftKey) onImageClick(img.id, e as unknown as React.MouseEvent);
+      }}
+      onClick={(e) => { if (!e.ctrlKey && !e.metaKey && !e.shiftKey) onImageClick(img.id, e); }}
       {...attributes}
       {...listeners}
       className={`relative group bg-[#1f1f1f] overflow-hidden cursor-zoom-in ${isSelected ? 'outline outline-2 outline-[#7363FF]' : ''}`}
