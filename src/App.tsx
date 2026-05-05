@@ -1,4 +1,5 @@
 ﻿import { Fragment, memo, useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect } from 'react';
+import { flushSync } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { Plus, X, List, FolderTree, SlidersHorizontal as SettingsIcon, Folder, Trash2, Calendar as CalendarIcon, ChevronLeft, ChevronRight, ArrowUp, LayoutDashboard, Heart, FileText } from 'lucide-react';
 import {
@@ -1993,12 +1994,7 @@ function FocusDamTile({
       <div
         ref={setNodeRef}
         className="relative group flex flex-row justify-start"
-        // Modifier clicks (ctrl/meta/shift) fire on mousedown — instant
-        // visual feedback. The plain click flow still goes through onClick.
-        onMouseDown={(e) => {
-          if (e.ctrlKey || e.metaKey || e.shiftKey) onImageClick(img.id, e as unknown as React.MouseEvent);
-        }}
-        onClick={(e) => { if (!e.ctrlKey && !e.metaKey && !e.shiftKey) onImageClick(img.id, e); }}
+        onClick={(e) => onImageClick(img.id, e)}
         {...attributes}
         {...listeners}
         style={lgStyle}
@@ -2042,16 +2038,7 @@ function FocusDamTile({
   return (
     <div
       ref={setNodeRef}
-      // Modifier clicks (ctrl/meta/shift) fire on mousedown for instant
-      // visual feedback. Without this, the React render triggered by the
-      // click event was landing one user interaction late — the outline
-      // would only appear when the user clicked the NEXT image. mousedown
-      // bypasses the click-event lifecycle (and any dnd-kit pointer-event
-      // bookkeeping) and fires the moment the button is pressed.
-      onMouseDown={(e) => {
-        if (e.ctrlKey || e.metaKey || e.shiftKey) onImageClick(img.id, e as unknown as React.MouseEvent);
-      }}
-      onClick={(e) => { if (!e.ctrlKey && !e.metaKey && !e.shiftKey) onImageClick(img.id, e); }}
+      onClick={(e) => onImageClick(img.id, e)}
       {...attributes}
       {...listeners}
       className={`relative group bg-[#1f1f1f] overflow-hidden cursor-zoom-in ${isSelected ? 'outline outline-2 outline-[#7363FF]' : ''}`}
@@ -5390,11 +5377,20 @@ export default function App() {
     const mod = e.ctrlKey || e.metaKey;
     if (mod) {
       e.stopPropagation();
-      setSelectedImageIds((prev) => {
-        const next = new Set(prev);
-        if (next.has(id)) next.delete(id);
-        else next.add(id);
-        return next;
+      // flushSync forces React to commit the state update + re-render
+      // synchronously, before this handler returns. Without it, the
+      // setSelectedImageIds was getting batched into a deferred update
+      // that didn't paint until the NEXT user interaction — the outline
+      // appeared on the second click instead of the first. flushSync
+      // pulls the commit into the current event tick so the new selection
+      // outline is part of the very next browser paint.
+      flushSync(() => {
+        setSelectedImageIds((prev) => {
+          const next = new Set(prev);
+          if (next.has(id)) next.delete(id);
+          else next.add(id);
+          return next;
+        });
       });
       setSelectionAnchorId(id);
       return;
@@ -5407,10 +5403,12 @@ export default function App() {
       // it as the bridge start. The next shift-click will fill the gap
       // between this image and wherever the user lands.
       if (!start) {
-        setSelectedImageIds((prev) => {
-          const next = new Set(prev);
-          next.add(id);
-          return next;
+        flushSync(() => {
+          setSelectedImageIds((prev) => {
+            const next = new Set(prev);
+            next.add(id);
+            return next;
+          });
         });
         shiftStartIdRef.current = id;
         setSelectionAnchorId(id);
@@ -5426,17 +5424,21 @@ export default function App() {
       if (a < 0 || b < 0) return;
       const [lo, hi] = a < b ? [a, b] : [b, a];
       const range = flat.slice(lo, hi + 1).map((img) => img.id);
-      setSelectedImageIds((prev) => {
-        const next = new Set(prev);
-        for (const r of range) next.add(r);
-        return next;
+      flushSync(() => {
+        setSelectedImageIds((prev) => {
+          const next = new Set(prev);
+          for (const r of range) next.add(r);
+          return next;
+        });
       });
       setSelectionAnchorId(id);
       return;
     }
     // Plain click: clear selection, toggle 1-up. Also clear the shift-start
     // so the next shift-click begins a fresh range from where the user
-    // clicked, not from a stale prior sequence.
+    // clicked, not from a stale prior sequence. No flushSync needed — plain
+    // clicks already feel instant because the visual change is the 1-up
+    // expansion, not the outline.
     shiftStartIdRef.current = null;
     setSelectedImageIds(new Set());
     setSelectionAnchorId(id);
