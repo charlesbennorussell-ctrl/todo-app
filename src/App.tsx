@@ -1991,8 +1991,12 @@ function FocusDamTile({
         {...listeners}
         style={lgStyle}
       >
-        <div className={`relative inline-block cursor-zoom-in ${isSelected ? 'ring-2 ring-[#7363FF] ring-offset-0' : ''}`}>
-          <CachedImage src={resolveImageSrc(img)} alt={img.filename} className="block max-w-full max-h-[70vh] w-auto h-auto" />
+        {/* w-full + h-auto + object-contain: small images scale UP to the
+            column width (intentionally going past 1:1, even though that
+            sacrifices DPI sharpness). max-h-[70vh] caps super-tall portraits;
+            object-contain keeps aspect when the cap kicks in (no stretch). */}
+        <div className={`relative block w-full cursor-zoom-in ${isSelected ? 'ring-2 ring-[#7363FF] ring-offset-0' : ''}`}>
+          <CachedImage src={resolveImageSrc(img)} alt={img.filename} className="block w-full h-auto max-h-[70vh] object-contain" />
           <button
             type="button"
             onClick={(e) => { e.stopPropagation(); onToggleFavorite(ownerKey, img.id); }}
@@ -7831,13 +7835,25 @@ export default function App() {
                                 }}
                               >
                                 <div
-                                  className="relative group inline-block cursor-zoom-out"
+                                  // block w-full so the wrapper takes the
+                                  // column width — the image inside scales
+                                  // up to match (small natural-size images
+                                  // get blown up to fill the slot, which
+                                  // sacrifices DPI sharpness on purpose per
+                                  // the user's note that 72dpi-at-scale is
+                                  // fine for this view).
+                                  className="relative group block w-full cursor-zoom-out"
                                   onClick={() => setFocusOneUpImageId(null)}
                                 >
                                   <CachedImage
                                     src={resolveImageSrc(img)}
                                     alt={img.filename}
-                                    className="block max-w-full max-h-[80vh] w-auto h-auto"
+                                    // w-full + h-auto: image fills the
+                                    // column. max-h-[80vh] caps super-tall
+                                    // portraits; object-contain keeps the
+                                    // aspect ratio when the cap kicks in
+                                    // (no stretch / no crop).
+                                    className="block w-full h-auto max-h-[80vh] object-contain"
                                     loading="eager"
                                   />
                                   <button
