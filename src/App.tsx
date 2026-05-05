@@ -1949,7 +1949,12 @@ type FocusDamBucket = { key: string; label: string; images: FocusDamImage[]; fol
 // drag is picked up by a DragOverlay rendered up at the DndContext level so
 // the drag preview locks 1:1 to the cursor instead of just fading the source.
 // PointerSensor's distance:8 activation keeps stationary clicks as clicks.
-function FocusDamTile({
+// Memoized — the parent re-renders the whole gallery on every selection
+// click, but with a stable onImageClick (App-level useCallback) and the
+// custom field-level comparator below, only tiles whose own state actually
+// changed re-render. This is what keeps ctrl-click feeling instant once
+// you've got 50+ images on screen.
+const FocusDamTile = memo(function FocusDamTile({
   img,
   tileView,
   ownerKey,
@@ -2055,7 +2060,31 @@ function FocusDamTile({
       </button>
     </div>
   );
-}
+}, (prev, next) => {
+  // Custom equality. The parent re-creates the `img` object on every render
+  // (it stamps in `ownerKey`), so a default shallow compare would always
+  // miss. We field-compare the parts of the image that actually drive
+  // rendering — id, src URLs, dimensions, favorited, folderId — plus the
+  // tile-level props (tileView, rowH, isSelected, ownerKey) and the
+  // (now-stable) callbacks. Returns true → skip re-render.
+  return (
+    prev.img.id === next.img.id &&
+    prev.img.url === next.img.url &&
+    prev.img.dataUrl === next.img.dataUrl &&
+    prev.img.filename === next.img.filename &&
+    prev.img.width === next.img.width &&
+    prev.img.height === next.img.height &&
+    prev.img.favorited === next.img.favorited &&
+    prev.img.folderId === next.img.folderId &&
+    prev.tileView === next.tileView &&
+    prev.ownerKey === next.ownerKey &&
+    prev.isSelected === next.isSelected &&
+    prev.rowH === next.rowH &&
+    prev.onImageClick === next.onImageClick &&
+    prev.onDelete === next.onDelete &&
+    prev.onToggleFavorite === next.onToggleFavorite
+  );
+});
 
 // FocusDamGroup: renders ONE flat block of images at the requested tile size
 // (sm / md / lg / zoom). All tiles share a single SortableContext so dnd-kit
@@ -5344,6 +5373,83 @@ export default function App() {
   // Wheel throttle for 1-up cycling — without it a smooth-trackpad swipe
   // burns through every image in the gallery on a single gesture.
   const lastDamWheelRef = useRef(0);
+  // Selection-anchor mirror so the App-level click handler can read the
+  // latest anchor without taking it as a useCallback dependency (which
+  // would re-create the callback on every selection change and bust the
+  // FocusDamTile React.memo).
+  const selectionAnchorIdRef = useRef<string | null>(null);
+  useEffect(() => { selectionAnchorIdRef.current = selectionAnchorId; }, [selectionAnchorId]);
+  // Dedicated shift-click start. First shift-click of a sequence sets it;
+  // subsequent shift-clicks bridge from it; plain click clears it. Ctrl-
+  // click leaves it alone so a user can build (ctrl-click A) + (ctrl-click
+  // C) + (shift-click G to add C-through-G) without losing A.
+  const shiftStartIdRef = useRef<string | null>(null);
+  // Stable per-tile click handler. Defined ONCE at App level (deps: []) so
+  // the reference is identical across renders — combined with React.memo on
+  // FocusDamTile, this means selecting an image only re-renders the tiles
+  // that actually changed selection state, not all 50+ tiles in the gallery.
+  // All "current state" reads go through refs (selectedImageIdsRef,
+  // selectionAnchorIdRef, shiftStartIdRef, damVisualFlatRef), which are kept
+  // in sync by the useEffect mirrors above. Without this stabilization,
+  // every ctrl-click would re-render the whole gallery + every dnd-kit
+  // useSortable hook, producing the perceptible "weird delay" between click
+  // and selection outline appearing.
+  const handleDamImageClick = useCallback((id: string, e: React.MouseEvent) => {
+    const mod = e.ctrlKey || e.metaKey;
+    if (mod) {
+      e.stopPropagation();
+      setSelectedImageIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(id)) next.delete(id);
+        else next.add(id);
+        return next;
+      });
+      setSelectionAnchorId(id);
+      return;
+    }
+    if (e.shiftKey) {
+      e.stopPropagation();
+      const flat = damVisualFlatRef.current;
+      const start = shiftStartIdRef.current;
+      // First shift-click of a sequence — just select this image and stamp
+      // it as the bridge start. The next shift-click will fill the gap
+      // between this image and wherever the user lands.
+      if (!start) {
+        setSelectedImageIds((prev) => {
+          const next = new Set(prev);
+          next.add(id);
+          return next;
+        });
+        shiftStartIdRef.current = id;
+        setSelectionAnchorId(id);
+        return;
+      }
+      // Subsequent shift-click — add the contiguous range from the
+      // shift-start to this image to the selection. We ADD rather than
+      // REPLACE so any ctrl-clicked extras stay in the selection. The
+      // shift-start sticks: another shift-click will redefine the range
+      // from the SAME start, the same way Finder / Explorer do it.
+      const a = flat.findIndex((img) => img.id === start);
+      const b = flat.findIndex((img) => img.id === id);
+      if (a < 0 || b < 0) return;
+      const [lo, hi] = a < b ? [a, b] : [b, a];
+      const range = flat.slice(lo, hi + 1).map((img) => img.id);
+      setSelectedImageIds((prev) => {
+        const next = new Set(prev);
+        for (const r of range) next.add(r);
+        return next;
+      });
+      setSelectionAnchorId(id);
+      return;
+    }
+    // Plain click: clear selection, toggle 1-up. Also clear the shift-start
+    // so the next shift-click begins a fresh range from where the user
+    // clicked, not from a stale prior sequence.
+    shiftStartIdRef.current = null;
+    setSelectedImageIds(new Set());
+    setSelectionAnchorId(id);
+    setFocusOneUpImageId((cur) => cur === id ? null : id);
+  }, []);
   // The currently-selected task. Set on single-click of a task row, or when the user opens
   // the edit / quick-edit panel. The Focus mode's Information column dynamically shows the
   // project tied to this task, and rows render a 25%-brighter highlight while selected.
@@ -7722,50 +7828,11 @@ export default function App() {
                       }
                       zoomRowH = Math.max(40, lo);
                     }
-                    // Multi-select click router. Plain click toggles 1-up;
-                    // Cmd/Ctrl-click toggles the image's membership in the
-                    // selection set; Shift-click extends from the last anchor
-                    // (the most recent non-shift click) to the clicked image,
-                    // walking the flat-images list so the range crosses bucket /
-                    // folder boundaries naturally.
-                    const handleImageClick = (id: string, e: React.MouseEvent) => {
-                      const mod = e.ctrlKey || e.metaKey;
-                      if (mod) {
-                        e.stopPropagation();
-                        setSelectedImageIds((prev) => {
-                          const next = new Set(prev);
-                          if (next.has(id)) next.delete(id);
-                          else next.add(id);
-                          return next;
-                        });
-                        setSelectionAnchorId(id);
-                        return;
-                      }
-                      if (e.shiftKey) {
-                        e.stopPropagation();
-                        const anchor = selectionAnchorId;
-                        if (!anchor) {
-                          setSelectedImageIds(new Set([id]));
-                          setSelectionAnchorId(id);
-                          return;
-                        }
-                        const a = flatImages.findIndex((img) => img.id === anchor);
-                        const b = flatImages.findIndex((img) => img.id === id);
-                        if (a < 0 || b < 0) return;
-                        const [lo, hi] = a < b ? [a, b] : [b, a];
-                        const range = flatImages.slice(lo, hi + 1).map((img) => img.id);
-                        setSelectedImageIds((prev) => {
-                          const next = new Set(prev);
-                          for (const r of range) next.add(r);
-                          return next;
-                        });
-                        return;
-                      }
-                      // Plain click — clear selection, toggle 1-up.
-                      setSelectedImageIds(new Set());
-                      setSelectionAnchorId(id);
-                      setFocusOneUpImageId((cur) => cur === id ? null : id);
-                    };
+                    // Multi-select click router lives at the App level
+                    // (handleDamImageClick — defined alongside the other DAM
+                    // refs). Routing through a stable callback means the per-
+                    // tile React.memo holds; selection changes only re-render
+                    // the tiles that flipped state.
                     return (
                       <div
                         ref={setGalleryContainerEl}
@@ -7937,7 +8004,7 @@ export default function App() {
                                                   tileView={focusDamTileHeight}
                                                   ownerKey={bucket.key}
                                                   selectedImageIds={selectedImageIds}
-                                                  onImageClick={handleImageClick}
+                                                  onImageClick={handleDamImageClick}
                                                   onDelete={deleteFocusImage}
                                                   onToggleFavorite={toggleFocusImageFavorite}
                                                   rowHOverride={zoomRowH}
@@ -7975,7 +8042,7 @@ export default function App() {
                                             tileView={focusDamTileHeight}
                                             ownerKey={bucket.key}
                                             selectedImageIds={selectedImageIds}
-                                            onImageClick={handleImageClick}
+                                            onImageClick={handleDamImageClick}
                                             onDelete={deleteFocusImage}
                                             onToggleFavorite={toggleFocusImageFavorite}
                                             rowHOverride={zoomRowH}
