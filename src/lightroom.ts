@@ -197,20 +197,35 @@ export function signOutLightroom(): void {
 const SUPABASE_URL = import.meta.env.VITE_SUPABASE_URL as string;
 const PROXY_URL = `${SUPABASE_URL}/functions/v1/lr-proxy`;
 
-async function proxyFetch(adobePath: string, init: RequestInit = {}): Promise<Response> {
+type ProxyOpts = {
+  /** Upstream host. Defaults to lr.adobe.io (authenticated API). Use
+   *  photos.adobe.io for public-share endpoints, lightroom.adobe.com for
+   *  fetching share-page HTML. */
+  host?: 'lr.adobe.io' | 'photos.adobe.io' | 'lightroom.adobe.com';
+  /** If true, skip the Authorization header (used for public endpoints
+   *  that only need X-API-Key). Default false. */
+  noAuth?: boolean;
+};
+
+async function proxyFetch(adobePath: string, opts: ProxyOpts = {}, init: RequestInit = {}): Promise<Response> {
+  const host = opts.host || 'lr.adobe.io';
   const doFetch = async (): Promise<Response> => {
-    const accessToken = localStorage.getItem(LS_ACCESS_TOKEN) || '';
-    return fetch(`${PROXY_URL}?path=${encodeURIComponent(adobePath)}`, {
+    const headers: Record<string, string> = {
+      'x-adobe-client-id': ADOBE_CLIENT_ID,
+      ...(init.headers as Record<string, string> | undefined || {}),
+    };
+    if (!opts.noAuth) {
+      const accessToken = localStorage.getItem(LS_ACCESS_TOKEN) || '';
+      if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`;
+    }
+    return fetch(`${PROXY_URL}?path=${encodeURIComponent(adobePath)}&host=${host}`, {
       ...init,
-      headers: {
-        ...(init.headers || {}),
-        'Authorization': `Bearer ${accessToken}`,
-        'x-adobe-client-id': ADOBE_CLIENT_ID,
-      },
+      headers,
     });
   };
   let res = await doFetch();
-  if (res.status === 401) {
+  // Refresh-and-retry only applies to authenticated calls (noAuth=false).
+  if (!opts.noAuth && res.status === 401) {
     const refreshed = await refreshAccessToken();
     if (refreshed) res = await doFetch();
   }
@@ -226,8 +241,8 @@ async function proxyFetch(adobePath: string, init: RequestInit = {}): Promise<Re
 // a list of prefix shapes, this helper: reads the body, then tries JSON.parse
 // from each `{` / `[` position in turn, returning the first successful parse.
 // Linear-time and bulletproof against new prefix shapes Adobe might add later.
-async function proxyFetchJson<T>(adobePath: string, init: RequestInit = {}): Promise<T> {
-  const res = await proxyFetch(adobePath, init);
+async function proxyFetchJson<T>(adobePath: string, opts: ProxyOpts = {}, init: RequestInit = {}): Promise<T> {
+  const res = await proxyFetch(adobePath, opts, init);
   const bodyText = await res.text();
   if (!res.ok) {
     throw new Error(`Adobe ${adobePath} returned ${res.status}: ${bodyText.slice(0, 200)}`);
@@ -257,14 +272,128 @@ export type LightroomAlbumAsset = {
   filename: string;
   width: number;
   height: number;
-  // Adobe returns rendition URLs that we proxy via fetchAssetBlob().
+  // Path to the rendition under the API base. fetchAssetBlob() combines
+  // this with the right host (photos.adobe.io for shareSpaceId-rooted paths,
+  // lr.adobe.io for catalog-rooted paths).
   renditionPath: string;
+  // For public shares, the path is rooted at /v2/spaces/<shareId>/. The
+  // resolved share carries shareId so fetchAssetBlob knows which host to
+  // hit. For authenticated /libraries/ imports, this is undefined and we
+  // use the catalog API (lr.adobe.io).
+  shareId?: string;
 };
 
-/** Get the user's first catalogue ID. Most users have a single catalogue. */
+/** Get the user's first catalogue ID. Most users have a single catalogue.
+ *  Used by the authenticated /libraries/ URL path; public shares don't need it. */
 export async function getCatalogId(): Promise<string> {
   const json = await proxyFetchJson<{ id: string }>('/v2/catalog');
   return json.id;
+}
+
+// ── Public-share path (no auth required) ───────────────────────────────────
+//
+// A public Lightroom share URL (lightroom.adobe.com/shares/<id>) is fully
+// accessible without OAuth — Adobe serves the share page as static-ish HTML
+// with a window.SharesConfig blob inlined, and the asset/rendition endpoints
+// on photos.adobe.io accept any X-API-Key. So we scrape the embedded config
+// to learn the album's id + name, then hit the public endpoints directly.
+
+/** Brace-counting JSON-object extractor. Scans `str` for `marker`, then
+ *  returns the substring of the next balanced `{...}` after it (respecting
+ *  string literals + escapes so braces inside strings don't fool us). */
+function extractObjectAfter(str: string, marker: string): string | null {
+  const i = str.indexOf(marker);
+  if (i < 0) return null;
+  const startIdx = str.indexOf('{', i + marker.length);
+  if (startIdx < 0) return null;
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let j = startIdx; j < str.length; j++) {
+    const c = str[j];
+    if (escaped) { escaped = false; continue; }
+    if (c === '\\') { escaped = true; continue; }
+    if (c === '"') { inString = !inString; continue; }
+    if (inString) continue;
+    if (c === '{') depth++;
+    else if (c === '}') {
+      depth--;
+      if (depth === 0) return str.slice(startIdx, j + 1);
+    }
+  }
+  return null;
+}
+
+/** Fetch the public share page HTML, extract the inlined SharesConfig.
+ *  Returns the album info needed to list its assets. */
+async function fetchPublicShareInfo(shareId: string): Promise<{ albumId: string; name: string }> {
+  const res = await proxyFetch(`/shares/${shareId}`, { host: 'lightroom.adobe.com', noAuth: true });
+  if (!res.ok) throw new Error(`Share page fetch failed: ${res.status}`);
+  const html = await res.text();
+  const albumJsonStr = extractObjectAfter(html, 'albumAttributes:');
+  if (!albumJsonStr) {
+    throw new Error('Could not find albumAttributes in the share page. Is this a valid Lightroom share URL?');
+  }
+  let album: { id?: string; payload?: { name?: string } };
+  try {
+    album = JSON.parse(albumJsonStr);
+  } catch (e) {
+    throw new Error(`Could not parse albumAttributes JSON: ${(e as Error).message}`);
+  }
+  if (!album.id) throw new Error('Share albumAttributes is missing an id.');
+  return { albumId: album.id, name: album.payload?.name || 'Lightroom Import' };
+}
+
+/** List assets in a public share's album. Pagination via the `links.next`
+ *  cursor. Each asset's rendition path is /spaces/<share>/<asset.links.rendition_2048.href>. */
+async function fetchPublicShareAssets(shareId: string, albumId: string): Promise<LightroomAlbumAsset[]> {
+  const all: LightroomAlbumAsset[] = [];
+  let path: string | null = `/v2/spaces/${shareId}/albums/${albumId}/assets?embed=asset&subtype=image%3Bvideo`;
+  while (path) {
+    const json: {
+      base: string;
+      resources: Array<{
+        asset: {
+          id: string;
+          payload: {
+            importSource?: { fileName?: string };
+            develop?: { croppedWidth?: number; croppedHeight?: number };
+          };
+          links: Record<string, { href: string }>;
+        };
+      }>;
+      links?: { next?: { href: string } };
+    } = await proxyFetchJson(path, { host: 'photos.adobe.io', noAuth: true });
+    for (const r of json.resources) {
+      const dev = r.asset.payload.develop || {};
+      const renditionLink = r.asset.links['/rels/rendition_type/2048']
+        || r.asset.links['/rels/rendition_type/1280']
+        || r.asset.links['/rels/rendition_type/640'];
+      if (!renditionLink) continue;
+      // renditionLink.href is relative to the response's base, which is
+      // `https://photos.adobe.io/v2/spaces/<shareId>/`. We just need the
+      // path for the proxy, so prepend `/v2/spaces/<shareId>/`.
+      const renditionPath = `/v2/spaces/${shareId}/${renditionLink.href}`;
+      all.push({
+        id: r.asset.id,
+        filename: r.asset.payload.importSource?.fileName || `${r.asset.id}.jpg`,
+        width: dev.croppedWidth || 0,
+        height: dev.croppedHeight || 0,
+        renditionPath,
+        shareId,
+      });
+    }
+    // Pagination: links.next.href is relative to the assets endpoint's base.
+    const nextHref = json.links?.next?.href;
+    if (nextHref) {
+      // nextHref looks like "albums/.../assets?after=…". Stitch back onto
+      // the spaces path.
+      path = `/v2/spaces/${shareId}/${nextHref}`;
+    } else {
+      path = null;
+    }
+  }
+  return all;
 }
 
 /** Expand an Adobe short URL (https://adobe.ly/...) to its canonical form
@@ -303,40 +432,39 @@ async function expandShortUrl(input: string): Promise<string> {
  *  shared album is not yet supported (would need a server-side scrape of
  *  the public share page; left for a follow-up). Returns null with a
  *  console warning if the URL doesn't match any pattern. */
-export async function resolveShareUrl(rawShareUrl: string): Promise<{ catalogId: string; albumId: string; name: string } | { error: string }> {
-  // Step 0: expand adobe.ly shorteners. No-op for non-short URLs.
+/** Resolved import target. The `kind` discriminates between the public-share
+ *  path (no auth, hits photos.adobe.io) and the authenticated /libraries/
+ *  path (needs OAuth, hits lr.adobe.io). */
+export type ResolvedTarget =
+  | { kind: 'publicShare'; shareId: string; albumId: string; name: string }
+  | { kind: 'ownAlbum'; catalogId: string; albumId: string; name: string };
+
+export async function resolveShareUrl(rawShareUrl: string): Promise<ResolvedTarget | { error: string }> {
   console.log('[lightroom] resolveShareUrl input:', rawShareUrl);
   const shareUrl = await expandShortUrl(rawShareUrl);
   if (shareUrl !== rawShareUrl) console.log('[lightroom] expanded to:', shareUrl);
-  // Direct album URL: /libraries/<catId>/albums/<albumId>/...
-  const directMatch = shareUrl.match(/\/libraries\/([^/]+)\/albums\/([^/?#]+)/);
-  if (directMatch) {
-    const [, catalogId, albumId] = directMatch;
-    console.log('[lightroom] matched album URL:', { catalogId, albumId });
-    const name = await fetchAlbumName(catalogId, albumId);
-    return { catalogId, albumId, name };
-  }
-  // Share-link URL: /shares/<shareId>(/...)? — share belongs to authenticated user.
+  // /shares/<id> — public share path (no OAuth required, scrape the share page).
   const shareMatch = shareUrl.match(/\/shares\/([^/?#]+)/);
   if (shareMatch) {
     const [, shareId] = shareMatch;
-    console.log('[lightroom] matched share URL with id:', shareId);
+    console.log('[lightroom] matched public share id:', shareId);
     try {
-      const catalogId = await getCatalogId();
-      console.log('[lightroom] user catalog id:', catalogId);
-      const path = `/v2/catalogs/${catalogId}/assetshares/${shareId}`;
-      console.log('[lightroom] looking up share at:', path);
-      const json = await proxyFetchJson<{ payload?: { albumId?: string; shareName?: string; album?: { id?: string; name?: string } } }>(path);
-      console.log('[lightroom] share payload:', json);
-      const albumId = json.payload?.albumId || json.payload?.album?.id;
-      if (!albumId) {
-        return { error: `Share resource is missing an album reference. Payload keys: ${Object.keys(json.payload || {}).join(', ')}` };
-      }
-      const name = json.payload?.shareName || json.payload?.album?.name || await fetchAlbumName(catalogId, albumId);
-      return { catalogId, albumId, name };
+      const info = await fetchPublicShareInfo(shareId);
+      return { kind: 'publicShare', shareId, albumId: info.albumId, name: info.name };
     } catch (e) {
       return { error: (e as Error).message };
     }
+  }
+  // /libraries/<cat>/albums/<id> — authenticated own-album path.
+  const directMatch = shareUrl.match(/\/libraries\/([^/]+)\/albums\/([^/?#]+)/);
+  if (directMatch) {
+    const [, catalogId, albumId] = directMatch;
+    console.log('[lightroom] matched own album URL:', { catalogId, albumId });
+    if (!hasLightroomAuth()) {
+      return { error: '/libraries/ URLs need a Lightroom sign-in (the share is in your private catalog). Click Connect Lightroom in the toolbar first, then retry. /shares/ URLs work without sign-in.' };
+    }
+    const name = await fetchAlbumName(catalogId, albumId);
+    return { kind: 'ownAlbum', catalogId, albumId, name };
   }
   return { error: `URL does not match a Lightroom share or album pattern. Got: ${shareUrl}` };
 }
@@ -352,12 +480,17 @@ async function fetchAlbumName(catalogId: string, albumId: string): Promise<strin
   }
 }
 
-/** List all assets in an album. Returns paginated results — caller iterates. */
-export async function fetchAlbumAssets(catalogId: string, albumId: string): Promise<LightroomAlbumAsset[]> {
+/** List all assets in a resolved target — dispatches to the public-share or
+ *  authenticated-own-album loader as appropriate. */
+export async function fetchAlbumAssets(target: ResolvedTarget): Promise<LightroomAlbumAsset[]> {
+  if (target.kind === 'publicShare') {
+    return fetchPublicShareAssets(target.shareId, target.albumId);
+  }
+  // Own-album path (authenticated, lr.adobe.io).
   const all: LightroomAlbumAsset[] = [];
   let cursor: string | undefined;
   do {
-    const path = `/v2/catalogs/${catalogId}/albums/${albumId}/assets${cursor ? `?after=${cursor}` : ''}`;
+    const path = `/v2/catalogs/${target.catalogId}/albums/${target.albumId}/assets${cursor ? `?after=${cursor}` : ''}`;
     const json = await proxyFetchJson<{ resources: Array<{ asset: { id: string; payload: { importSource: { fileName: string }; develop?: { croppedHeight?: number; croppedWidth?: number } } } }>; links?: { next?: { href: string } } }>(path);
     for (const r of json.resources) {
       const dev = r.asset.payload.develop || {};
@@ -366,7 +499,7 @@ export async function fetchAlbumAssets(catalogId: string, albumId: string): Prom
         filename: r.asset.payload.importSource.fileName,
         width: dev.croppedWidth || 0,
         height: dev.croppedHeight || 0,
-        renditionPath: `/v2/catalogs/${catalogId}/assets/${r.asset.id}/renditions/2048`,
+        renditionPath: `/v2/catalogs/${target.catalogId}/assets/${r.asset.id}/renditions/2048`,
       });
     }
     cursor = json.links?.next?.href ? new URL(json.links.next.href, 'https://lr.adobe.io').searchParams.get('after') || undefined : undefined;
@@ -375,9 +508,12 @@ export async function fetchAlbumAssets(catalogId: string, albumId: string): Prom
 }
 
 /** Fetch a single asset's rendition as a Blob, ready to feed into the
- *  existing addFocusImages() pipeline (which scales + uploads to Supabase). */
+ *  existing addFocusImages() pipeline. Routes to the right host based on
+ *  whether the asset came from a public share (photos.adobe.io, no auth)
+ *  or a private catalog (lr.adobe.io, authenticated). */
 export async function fetchAssetBlob(asset: LightroomAlbumAsset): Promise<Blob> {
-  const res = await proxyFetch(asset.renditionPath);
-  if (!res.ok) throw new Error(`Adobe rendition fetch failed for ${asset.filename}: ${res.status}`);
+  const isPublic = !!asset.shareId;
+  const res = await proxyFetch(asset.renditionPath, isPublic ? { host: 'photos.adobe.io', noAuth: true } : {});
+  if (!res.ok) throw new Error(`Rendition fetch failed for ${asset.filename}: ${res.status}`);
   return res.blob();
 }

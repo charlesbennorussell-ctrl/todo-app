@@ -5360,7 +5360,7 @@ export default function App() {
         setLrImportStatus('error');
         return;
       }
-      const assets = await fetchAlbumAssets(resolved.catalogId, resolved.albumId);
+      const assets = await fetchAlbumAssets(resolved);
       if (assets.length === 0) {
         setLrImportError('Album has no images.');
         setLrImportStatus('error');
@@ -7760,27 +7760,30 @@ export default function App() {
                       {(projectKey || taskKey) && (
                         <button
                           type="button"
-                          // Two paths:
-                          //   - Not authenticated yet → kick off the Adobe OAuth
-                          //     flow. The browser navigates away to ims-na1.adobelogin.com,
-                          //     comes back with ?code=…, and the consumeOauthRedirect
-                          //     useEffect at App mount finishes the exchange and flips
-                          //     lightroomAuthed → true.
-                          //   - Authenticated → open the import dialog (paste-share-URL
-                          //     → fetch → process → land in a new folder named after
-                          //     the album). Dialog itself is not yet wired (placeholder
-                          //     for next pass once the proxy is deployed).
-                          onClick={() => {
-                            if (!lightroomAuthed) {
-                              openLightroomAuth().catch((e) => console.error('[lightroom] auth start failed:', e));
-                              return;
-                            }
-                            setLightroomImportOpen(true);
-                          }}
+                          // Always opens the import dialog — no OAuth required for
+                          // public /shares/ URLs (the dialog scrapes the public
+                          // share page directly). Private /libraries/ URLs still
+                          // need an Adobe sign-in; the dialog tells the user to
+                          // click Connect Lightroom in that case.
+                          onClick={() => setLightroomImportOpen(true)}
                           className="px-2 py-1 flex flex-row items-center gap-1 text-[#656464] hover:text-white transition-colors"
                         >
-                          <span>{lightroomAuthed ? 'Import from Lightroom' : 'Connect Lightroom'}</span>
+                          <span>Import from Lightroom</span>
                           <Plus size={14} />
+                        </button>
+                      )}
+                      {/* Adobe sign-in affordance, only shown when NOT yet
+                          authenticated. Tucked at the end of the toolbar so
+                          it doesn't get in the way once the user has signed
+                          in (most users only need it for /libraries/ URLs). */}
+                      {(projectKey || taskKey) && !lightroomAuthed && (
+                        <button
+                          type="button"
+                          onClick={() => openLightroomAuth().catch((e) => console.error('[lightroom] auth start failed:', e))}
+                          className="px-2 py-1 flex flex-row items-center gap-1 text-[#656464] hover:text-white transition-colors"
+                          title="Connect your Adobe Lightroom account (only needed to import your own /libraries/ URLs — public /shares/ URLs work without sign-in)"
+                        >
+                          <span>Connect Lightroom</span>
                         </button>
                       )}
                       <input

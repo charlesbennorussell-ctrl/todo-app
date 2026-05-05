@@ -25,7 +25,12 @@
 // deno-lint-ignore-file no-explicit-any
 import { serve } from 'https://deno.land/std@0.224.0/http/server.ts';
 
-const ADOBE_API_BASE = 'https://lr.adobe.io';
+// Allowlisted upstream hosts. lr.adobe.io is the authenticated Lightroom
+// Services API. photos.adobe.io is the public-shares API (no Bearer token
+// needed, only X-API-Key). lightroom.adobe.com is for fetching public share
+// pages as HTML so we can scrape the embedded SharesConfig.
+const ALLOWED_HOSTS = new Set(['lr.adobe.io', 'photos.adobe.io', 'lightroom.adobe.com']);
+const DEFAULT_HOST = 'lr.adobe.io';
 
 // Allow the app's origins. Adjust if you add new deploy targets.
 const ALLOWED_ORIGINS = new Set([
@@ -88,18 +93,16 @@ serve(async (req: Request) => {
     }
   }
 
-  // ── Adobe API proxy endpoint ──────────────────────────────────────────────
-  // Validate caller credentials (auth + Adobe client id required for API path).
+  // ── Adobe API / share-page proxy endpoint ────────────────────────────────
+  // Auth headers are NO LONGER required to call this endpoint — public-share
+  // assets on photos.adobe.io don't need a Bearer token, only an X-API-Key.
+  // We pass through whatever auth headers the caller provided; if Adobe
+  // needs them and they're missing, Adobe will reject the request and we
+  // surface the error verbatim.
   const authHeader = req.headers.get('Authorization');
   const clientId = req.headers.get('x-adobe-client-id');
-  if (!authHeader || !clientId) {
-    return new Response(
-      JSON.stringify({ error: 'Missing Authorization or x-adobe-client-id header' }),
-      { status: 401, headers: { ...baseHeaders, 'Content-Type': 'application/json' } },
-    );
-  }
 
-  // Parse the target path from the query string
+  // Parse the target path + optional host
   const pathParam = url.searchParams.get('path');
   if (!pathParam) {
     return new Response(
@@ -107,25 +110,33 @@ serve(async (req: Request) => {
       { status: 400, headers: { ...baseHeaders, 'Content-Type': 'application/json' } },
     );
   }
-  // Defensive: only allow forwarding to lr.adobe.io paths (prevent SSRF).
   if (!pathParam.startsWith('/')) {
     return new Response(
       JSON.stringify({ error: 'path must start with /' }),
       { status: 400, headers: { ...baseHeaders, 'Content-Type': 'application/json' } },
     );
   }
+  const hostParam = url.searchParams.get('host') || DEFAULT_HOST;
+  if (!ALLOWED_HOSTS.has(hostParam)) {
+    return new Response(
+      JSON.stringify({ error: `host not allowed: ${hostParam}` }),
+      { status: 400, headers: { ...baseHeaders, 'Content-Type': 'application/json' } },
+    );
+  }
 
-  // Forward to Adobe
-  const adobeUrl = `${ADOBE_API_BASE}${pathParam}`;
+  // Forward to Adobe. Pass through the auth headers the caller provided
+  // (all are optional from the proxy's perspective).
+  const adobeUrl = `https://${hostParam}${pathParam}`;
+  const upstreamHeaders: Record<string, string> = {
+    'Accept': req.headers.get('Accept') || 'application/json',
+  };
+  if (authHeader) upstreamHeaders['Authorization'] = authHeader;
+  if (clientId) upstreamHeaders['X-API-Key'] = clientId;
   let adobeRes: Response;
   try {
     adobeRes = await fetch(adobeUrl, {
       method: req.method,
-      headers: {
-        'Authorization': authHeader,
-        'X-API-Key': clientId,
-        'Accept': req.headers.get('Accept') || 'application/json',
-      },
+      headers: upstreamHeaders,
       body: ['GET', 'HEAD'].includes(req.method) ? undefined : await req.arrayBuffer(),
     });
   } catch (e) {
