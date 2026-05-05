@@ -217,6 +217,25 @@ async function proxyFetch(adobePath: string, init: RequestInit = {}): Promise<Re
   return res;
 }
 
+// Adobe wraps JSON responses with an anti-JSON-hijacking prefix that varies
+// by endpoint (`while (1) {}`, `while (1) ;`, `)]}',`, etc.). The browser's
+// res.json() chokes on it. This helper reads the body as text, strips
+// everything before the first `{` or `[`, then parses the rest.
+async function proxyFetchJson<T>(adobePath: string, init: RequestInit = {}): Promise<T> {
+  const res = await proxyFetch(adobePath, init);
+  const bodyText = await res.text();
+  if (!res.ok) {
+    throw new Error(`Adobe ${adobePath} returned ${res.status}: ${bodyText.slice(0, 200)}`);
+  }
+  const firstObj = bodyText.search(/[{[]/);
+  const cleaned = firstObj >= 0 ? bodyText.slice(firstObj) : bodyText;
+  try {
+    return JSON.parse(cleaned) as T;
+  } catch {
+    throw new Error(`Adobe ${adobePath} returned non-JSON body: ${cleaned.slice(0, 200)}`);
+  }
+}
+
 export type LightroomAlbumAsset = {
   id: string;
   filename: string;
@@ -228,9 +247,7 @@ export type LightroomAlbumAsset = {
 
 /** Get the user's first catalogue ID. Most users have a single catalogue. */
 export async function getCatalogId(): Promise<string> {
-  const res = await proxyFetch('/v2/catalog');
-  if (!res.ok) throw new Error(`Adobe catalog fetch failed: ${res.status}`);
-  const json = await res.json() as { id: string };
+  const json = await proxyFetchJson<{ id: string }>('/v2/catalog');
   return json.id;
 }
 
@@ -293,20 +310,8 @@ export async function resolveShareUrl(rawShareUrl: string): Promise<{ catalogId:
       console.log('[lightroom] user catalog id:', catalogId);
       const path = `/v2/catalogs/${catalogId}/assetshares/${shareId}`;
       console.log('[lightroom] looking up share at:', path);
-      const res = await proxyFetch(path);
-      const bodyText = await res.text();
-      console.log('[lightroom] share lookup response:', res.status, bodyText.slice(0, 500));
-      if (!res.ok) {
-        return { error: `Adobe returned ${res.status} for the share lookup. The share most likely belongs to a different Adobe account than the one you signed in with. (Adobe response: ${bodyText.slice(0, 200)})` };
-      }
-      // Adobe sometimes prefixes JSON responses with "while(1){}" — strip that.
-      const cleanedBody = bodyText.replace(/^while\s*\(1\)\s*\{\s*\}\s*/, '');
-      let json: { payload?: { albumId?: string; shareName?: string; album?: { id?: string; name?: string } } };
-      try {
-        json = JSON.parse(cleanedBody);
-      } catch {
-        return { error: `Adobe response wasn't valid JSON: ${cleanedBody.slice(0, 200)}` };
-      }
+      const json = await proxyFetchJson<{ payload?: { albumId?: string; shareName?: string; album?: { id?: string; name?: string } } }>(path);
+      console.log('[lightroom] share payload:', json);
       const albumId = json.payload?.albumId || json.payload?.album?.id;
       if (!albumId) {
         return { error: `Share resource is missing an album reference. Payload keys: ${Object.keys(json.payload || {}).join(', ')}` };
@@ -314,7 +319,7 @@ export async function resolveShareUrl(rawShareUrl: string): Promise<{ catalogId:
       const name = json.payload?.shareName || json.payload?.album?.name || await fetchAlbumName(catalogId, albumId);
       return { catalogId, albumId, name };
     } catch (e) {
-      return { error: `Share resolution threw: ${(e as Error).message}` };
+      return { error: (e as Error).message };
     }
   }
   return { error: `URL does not match a Lightroom share or album pattern. Got: ${shareUrl}` };
@@ -324,9 +329,7 @@ export async function resolveShareUrl(rawShareUrl: string): Promise<{ catalogId:
  *  the imported images into. Falls back to "Lightroom Import" on failure. */
 async function fetchAlbumName(catalogId: string, albumId: string): Promise<string> {
   try {
-    const res = await proxyFetch(`/v2/catalogs/${catalogId}/albums/${albumId}`);
-    if (!res.ok) return 'Lightroom Import';
-    const json = await res.json() as { payload?: { name?: string } };
+    const json = await proxyFetchJson<{ payload?: { name?: string } }>(`/v2/catalogs/${catalogId}/albums/${albumId}`);
     return json.payload?.name || 'Lightroom Import';
   } catch {
     return 'Lightroom Import';
@@ -339,9 +342,7 @@ export async function fetchAlbumAssets(catalogId: string, albumId: string): Prom
   let cursor: string | undefined;
   do {
     const path = `/v2/catalogs/${catalogId}/albums/${albumId}/assets${cursor ? `?after=${cursor}` : ''}`;
-    const res = await proxyFetch(path);
-    if (!res.ok) throw new Error(`Adobe album assets fetch failed: ${res.status}`);
-    const json = await res.json() as { resources: Array<{ asset: { id: string; payload: { importSource: { fileName: string }; develop?: { croppedHeight?: number; croppedWidth?: number } } } }>; links?: { next?: { href: string } } };
+    const json = await proxyFetchJson<{ resources: Array<{ asset: { id: string; payload: { importSource: { fileName: string }; develop?: { croppedHeight?: number; croppedWidth?: number } } } }>; links?: { next?: { href: string } } }>(path);
     for (const r of json.resources) {
       const dev = r.asset.payload.develop || {};
       all.push({
