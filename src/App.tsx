@@ -1949,12 +1949,14 @@ type FocusDamBucket = { key: string; label: string; images: FocusDamImage[]; fol
 // drag is picked up by a DragOverlay rendered up at the DndContext level so
 // the drag preview locks 1:1 to the cursor instead of just fading the source.
 // PointerSensor's distance:8 activation keeps stationary clicks as clicks.
-// Memoized — the parent re-renders the whole gallery on every selection
-// click, but with a stable onImageClick (App-level useCallback) and the
-// custom field-level comparator below, only tiles whose own state actually
-// changed re-render. This is what keeps ctrl-click feeling instant once
-// you've got 50+ images on screen.
-const FocusDamTile = memo(function FocusDamTile({
+// NOT memoized — a previous attempt wrapped this in React.memo with a
+// field-level comparator to avoid re-rendering every tile on every selection
+// click, but the interaction with useSortable's internal context-driven
+// re-renders caused the selection outline to lag one click behind (ctrl-
+// click A → outline on A appears only after ctrl-click B). Stable callbacks
+// from the App level (handleDamImageClick) still cut most of the per-click
+// work; the remaining cost is acceptable for the correctness benefit.
+function FocusDamTile({
   img,
   tileView,
   ownerKey,
@@ -2060,31 +2062,7 @@ const FocusDamTile = memo(function FocusDamTile({
       </button>
     </div>
   );
-}, (prev, next) => {
-  // Custom equality. The parent re-creates the `img` object on every render
-  // (it stamps in `ownerKey`), so a default shallow compare would always
-  // miss. We field-compare the parts of the image that actually drive
-  // rendering — id, src URLs, dimensions, favorited, folderId — plus the
-  // tile-level props (tileView, rowH, isSelected, ownerKey) and the
-  // (now-stable) callbacks. Returns true → skip re-render.
-  return (
-    prev.img.id === next.img.id &&
-    prev.img.url === next.img.url &&
-    prev.img.dataUrl === next.img.dataUrl &&
-    prev.img.filename === next.img.filename &&
-    prev.img.width === next.img.width &&
-    prev.img.height === next.img.height &&
-    prev.img.favorited === next.img.favorited &&
-    prev.img.folderId === next.img.folderId &&
-    prev.tileView === next.tileView &&
-    prev.ownerKey === next.ownerKey &&
-    prev.isSelected === next.isSelected &&
-    prev.rowH === next.rowH &&
-    prev.onImageClick === next.onImageClick &&
-    prev.onDelete === next.onDelete &&
-    prev.onToggleFavorite === next.onToggleFavorite
-  );
-});
+}
 
 // FocusDamGroup: renders ONE flat block of images at the requested tile size
 // (sm / md / lg / zoom). All tiles share a single SortableContext so dnd-kit
