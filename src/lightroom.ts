@@ -270,15 +270,16 @@ async function expandShortUrl(input: string): Promise<string> {
  *  shared album is not yet supported (would need a server-side scrape of
  *  the public share page; left for a follow-up). Returns null with a
  *  console warning if the URL doesn't match any pattern. */
-export async function resolveShareUrl(rawShareUrl: string): Promise<{ catalogId: string; albumId: string; name: string } | null> {
+export async function resolveShareUrl(rawShareUrl: string): Promise<{ catalogId: string; albumId: string; name: string } | { error: string }> {
   // Step 0: expand adobe.ly shorteners. No-op for non-short URLs.
+  console.log('[lightroom] resolveShareUrl input:', rawShareUrl);
   const shareUrl = await expandShortUrl(rawShareUrl);
+  if (shareUrl !== rawShareUrl) console.log('[lightroom] expanded to:', shareUrl);
   // Direct album URL: /libraries/<catId>/albums/<albumId>/...
   const directMatch = shareUrl.match(/\/libraries\/([^/]+)\/albums\/([^/?#]+)/);
   if (directMatch) {
     const [, catalogId, albumId] = directMatch;
-    // Pull the album name in a separate call so the import status reads
-    // nicely ("Importing X from <album>").
+    console.log('[lightroom] matched album URL:', { catalogId, albumId });
     const name = await fetchAlbumName(catalogId, albumId);
     return { catalogId, albumId, name };
   }
@@ -286,28 +287,37 @@ export async function resolveShareUrl(rawShareUrl: string): Promise<{ catalogId:
   const shareMatch = shareUrl.match(/\/shares\/([^/?#]+)/);
   if (shareMatch) {
     const [, shareId] = shareMatch;
+    console.log('[lightroom] matched share URL with id:', shareId);
     try {
       const catalogId = await getCatalogId();
-      const res = await proxyFetch(`/v2/catalogs/${catalogId}/assetshares/${shareId}`);
+      console.log('[lightroom] user catalog id:', catalogId);
+      const path = `/v2/catalogs/${catalogId}/assetshares/${shareId}`;
+      console.log('[lightroom] looking up share at:', path);
+      const res = await proxyFetch(path);
+      const bodyText = await res.text();
+      console.log('[lightroom] share lookup response:', res.status, bodyText.slice(0, 500));
       if (!res.ok) {
-        console.warn(`[lightroom] assetshares lookup failed: ${res.status}. The share may belong to a different Adobe account.`);
-        return null;
+        return { error: `Adobe returned ${res.status} for the share lookup. The share most likely belongs to a different Adobe account than the one you signed in with. (Adobe response: ${bodyText.slice(0, 200)})` };
       }
-      const json = await res.json() as { payload?: { albumId?: string; shareName?: string } };
-      const albumId = json.payload?.albumId;
+      // Adobe sometimes prefixes JSON responses with "while(1){}" — strip that.
+      const cleanedBody = bodyText.replace(/^while\s*\(1\)\s*\{\s*\}\s*/, '');
+      let json: { payload?: { albumId?: string; shareName?: string; album?: { id?: string; name?: string } } };
+      try {
+        json = JSON.parse(cleanedBody);
+      } catch {
+        return { error: `Adobe response wasn't valid JSON: ${cleanedBody.slice(0, 200)}` };
+      }
+      const albumId = json.payload?.albumId || json.payload?.album?.id;
       if (!albumId) {
-        console.warn('[lightroom] share resource has no albumId in payload.');
-        return null;
+        return { error: `Share resource is missing an album reference. Payload keys: ${Object.keys(json.payload || {}).join(', ')}` };
       }
-      const name = json.payload?.shareName || await fetchAlbumName(catalogId, albumId);
+      const name = json.payload?.shareName || json.payload?.album?.name || await fetchAlbumName(catalogId, albumId);
       return { catalogId, albumId, name };
     } catch (e) {
-      console.warn('[lightroom] share resolution failed:', e);
-      return null;
+      return { error: `Share resolution threw: ${(e as Error).message}` };
     }
   }
-  console.warn('[lightroom] URL does not match a Lightroom share or album pattern.');
-  return null;
+  return { error: `URL does not match a Lightroom share or album pattern. Got: ${shareUrl}` };
 }
 
 /** Look up an album's display name. Used to label the new folder we drop

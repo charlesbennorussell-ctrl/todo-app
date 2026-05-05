@@ -5355,8 +5355,8 @@ export default function App() {
     setLrImportProgress({ current: 0, total: 0 });
     try {
       const resolved = await resolveShareUrl(url);
-      if (!resolved) {
-        setLrImportError('Could not resolve that URL. Make sure the album was shared from the Adobe account you authorized, and the URL ends in /shares/<id> or /libraries/<cat>/albums/<id>.');
+      if ('error' in resolved) {
+        setLrImportError(resolved.error);
         setLrImportStatus('error');
         return;
       }
