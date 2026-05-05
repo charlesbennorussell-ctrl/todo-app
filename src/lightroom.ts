@@ -234,18 +234,45 @@ export async function getCatalogId(): Promise<string> {
   return json.id;
 }
 
+/** Expand an Adobe short URL (https://adobe.ly/...) to its canonical form
+ *  via the proxy's /expand endpoint. Browsers can't follow the redirect
+ *  themselves (CORS), so the Edge Function does it server-side and returns
+ *  the final URL. Pass-through for non-shortened URLs. */
+async function expandShortUrl(input: string): Promise<string> {
+  let parsed: URL;
+  try { parsed = new URL(input); } catch { return input; }
+  if (parsed.host !== 'adobe.ly') return input;
+  try {
+    const res = await fetch(`${PROXY_URL}?expand=${encodeURIComponent(input)}`);
+    if (!res.ok) {
+      console.warn('[lightroom] adobe.ly expand failed:', res.status);
+      return input;
+    }
+    const json = await res.json() as { finalUrl?: string };
+    return json.finalUrl || input;
+  } catch (e) {
+    console.warn('[lightroom] adobe.ly expand threw:', e);
+    return input;
+  }
+}
+
 /** Resolve a Lightroom URL to its catalogId + albumId. Accepts:
+ *    - https://adobe.ly/<short>                               ← Adobe URL shortener
  *    - https://lightroom.adobe.com/shares/<shareId>           ← share-link URL
  *    - https://lightroom.adobe.com/shares/<shareId>/...        ← share variants
  *    - https://lightroom.adobe.com/libraries/<catalogId>/albums/<albumId>/...
  *      (the URL you copy from your own LR web view of an album)
  *
- *  For share-link URLs, this calls /v2/catalogs/{cat}/assetshares/{shareId}
- *  on the AUTHENTICATED user's catalog — which works for albums YOU shared.
- *  Importing someone-else's shared album is not yet supported (would need
- *  a server-side scrape of the public share page; left for a follow-up).
- *  Returns null with a console warning if the URL doesn't match. */
-export async function resolveShareUrl(shareUrl: string): Promise<{ catalogId: string; albumId: string; name: string } | null> {
+ *  Short URLs are expanded server-side first (CORS blocks the browser from
+ *  following adobe.ly redirects). For share-link URLs, this calls
+ *  /v2/catalogs/{cat}/assetshares/{shareId} on the AUTHENTICATED user's
+ *  catalog — which works for albums YOU shared. Importing someone-else's
+ *  shared album is not yet supported (would need a server-side scrape of
+ *  the public share page; left for a follow-up). Returns null with a
+ *  console warning if the URL doesn't match any pattern. */
+export async function resolveShareUrl(rawShareUrl: string): Promise<{ catalogId: string; albumId: string; name: string } | null> {
+  // Step 0: expand adobe.ly shorteners. No-op for non-short URLs.
+  const shareUrl = await expandShortUrl(rawShareUrl);
   // Direct album URL: /libraries/<catId>/albums/<albumId>/...
   const directMatch = shareUrl.match(/\/libraries\/([^/]+)\/albums\/([^/?#]+)/);
   if (directMatch) {

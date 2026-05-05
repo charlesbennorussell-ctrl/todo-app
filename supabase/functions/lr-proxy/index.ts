@@ -53,7 +53,43 @@ serve(async (req: Request) => {
     return new Response(null, { status: 204, headers: baseHeaders });
   }
 
-  // Validate caller credentials
+  const url = new URL(req.url);
+
+  // ── URL-expansion endpoint ────────────────────────────────────────────────
+  // Adobe's mobile share UI hands out adobe.ly short URLs that redirect to
+  // the canonical lightroom.adobe.com/shares/<id> form. The browser can't
+  // follow those redirects (CORS), so we do it here. Pure pass-through, no
+  // auth required — the caller just gets the final destination URL back.
+  // Restricted to a small allowlist of known shortener hosts so this can't
+  // be used as an open redirect resolver.
+  const expandUrl = url.searchParams.get('expand');
+  if (expandUrl) {
+    try {
+      const target = new URL(expandUrl);
+      const allowedExpandHosts = new Set(['adobe.ly', 'lightroom.adobe.com']);
+      if (!allowedExpandHosts.has(target.host)) {
+        return new Response(
+          JSON.stringify({ error: 'expand: host not allowed' }),
+          { status: 400, headers: { ...baseHeaders, 'Content-Type': 'application/json' } },
+        );
+      }
+      // fetch follows redirects by default; .url on the response is the
+      // final URL after all hops. HEAD is cheaper than GET (no body).
+      const resp = await fetch(expandUrl, { method: 'HEAD', redirect: 'follow' });
+      return new Response(
+        JSON.stringify({ finalUrl: resp.url }),
+        { status: 200, headers: { ...baseHeaders, 'Content-Type': 'application/json' } },
+      );
+    } catch (e) {
+      return new Response(
+        JSON.stringify({ error: 'expand failed', detail: (e as Error).message }),
+        { status: 502, headers: { ...baseHeaders, 'Content-Type': 'application/json' } },
+      );
+    }
+  }
+
+  // ── Adobe API proxy endpoint ──────────────────────────────────────────────
+  // Validate caller credentials (auth + Adobe client id required for API path).
   const authHeader = req.headers.get('Authorization');
   const clientId = req.headers.get('x-adobe-client-id');
   if (!authHeader || !clientId) {
@@ -64,7 +100,6 @@ serve(async (req: Request) => {
   }
 
   // Parse the target path from the query string
-  const url = new URL(req.url);
   const pathParam = url.searchParams.get('path');
   if (!pathParam) {
     return new Response(
