@@ -218,22 +218,38 @@ async function proxyFetch(adobePath: string, init: RequestInit = {}): Promise<Re
 }
 
 // Adobe wraps JSON responses with an anti-JSON-hijacking prefix that varies
-// by endpoint (`while (1) {}`, `while (1) ;`, `)]}',`, etc.). The browser's
-// res.json() chokes on it. This helper reads the body as text, strips
-// everything before the first `{` or `[`, then parses the rest.
+// per endpoint:
+//   - "{}" (empty object) + whitespace + real JSON   ← lr-services /v2/catalog
+//   - "while (1) {}" or "while(1)" + real JSON        ← some endpoints
+//   - ")]}'," + real JSON                             ← Google-style
+// The browser's res.json() chokes on every variant. Rather than try to maintain
+// a list of prefix shapes, this helper: reads the body, then tries JSON.parse
+// from each `{` / `[` position in turn, returning the first successful parse.
+// Linear-time and bulletproof against new prefix shapes Adobe might add later.
 async function proxyFetchJson<T>(adobePath: string, init: RequestInit = {}): Promise<T> {
   const res = await proxyFetch(adobePath, init);
   const bodyText = await res.text();
   if (!res.ok) {
     throw new Error(`Adobe ${adobePath} returned ${res.status}: ${bodyText.slice(0, 200)}`);
   }
-  const firstObj = bodyText.search(/[{[]/);
-  const cleaned = firstObj >= 0 ? bodyText.slice(firstObj) : bodyText;
-  try {
-    return JSON.parse(cleaned) as T;
-  } catch {
-    throw new Error(`Adobe ${adobePath} returned non-JSON body: ${cleaned.slice(0, 200)}`);
+  // Fast path: try parsing the whole body first.
+  try { return JSON.parse(bodyText) as T; } catch { /* fall through */ }
+  // Walk every `{` / `[` position and try parsing from there. The first
+  // successful parse is the real payload. Walk forward (not backward) so
+  // we prefer the earliest valid JSON, in case a later one is something
+  // small inside the document we don't want to accidentally land on.
+  for (let i = 0; i < bodyText.length; i++) {
+    const ch = bodyText[i];
+    if (ch !== '{' && ch !== '[') continue;
+    try {
+      const parsed = JSON.parse(bodyText.slice(i)) as T;
+      // Skip the "{}" empty-object prefix specifically — if we parsed an
+      // empty object/array AND there's more content after, keep walking.
+      if ((ch === '{' && bodyText[i + 1] === '}') || (ch === '[' && bodyText[i + 1] === ']')) continue;
+      return parsed;
+    } catch { /* try next position */ }
   }
+  throw new Error(`Adobe ${adobePath} returned non-JSON body: ${bodyText.slice(0, 200)}`);
 }
 
 export type LightroomAlbumAsset = {
