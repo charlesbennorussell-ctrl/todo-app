@@ -15,3 +15,7 @@ src-tauri/gen/
 
 # TypeScript incremental build cache
 tsconfig.tsbuildinfo
+
+# Supabase CLI scratch state (link cache, downloaded binaries). Recreated
+# on the fly by `supabase link` / `supabase functions deploy`.
+supabase/.temp/
