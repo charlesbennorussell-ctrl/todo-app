@@ -205,6 +205,9 @@ type ProxyOpts = {
   /** If true, skip the Authorization header (used for public endpoints
    *  that only need X-API-Key). Default false. */
   noAuth?: boolean;
+  /** Optional cancellation signal. When the signal fires the in-flight
+   *  fetch is aborted and the call rejects with an AbortError. */
+  signal?: AbortSignal;
 };
 
 async function proxyFetch(adobePath: string, opts: ProxyOpts = {}, init: RequestInit = {}): Promise<Response> {
@@ -221,6 +224,7 @@ async function proxyFetch(adobePath: string, opts: ProxyOpts = {}, init: Request
     return fetch(`${PROXY_URL}?path=${encodeURIComponent(adobePath)}&host=${host}`, {
       ...init,
       headers,
+      signal: opts.signal,
     });
   };
   let res = await doFetch();
@@ -346,10 +350,11 @@ async function fetchPublicShareInfo(shareId: string): Promise<{ albumId: string;
 
 /** List assets in a public share's album. Pagination via the `links.next`
  *  cursor. Each asset's rendition path is /spaces/<share>/<asset.links.rendition_2048.href>. */
-async function fetchPublicShareAssets(shareId: string, albumId: string): Promise<LightroomAlbumAsset[]> {
+async function fetchPublicShareAssets(shareId: string, albumId: string, signal?: AbortSignal): Promise<LightroomAlbumAsset[]> {
   const all: LightroomAlbumAsset[] = [];
   let path: string | null = `/v2/spaces/${shareId}/albums/${albumId}/assets?embed=asset&subtype=image%3Bvideo`;
   while (path) {
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
     const json: {
       base: string;
       resources: Array<{
@@ -363,7 +368,7 @@ async function fetchPublicShareAssets(shareId: string, albumId: string): Promise
         };
       }>;
       links?: { next?: { href: string } };
-    } = await proxyFetchJson(path, { host: 'photos.adobe.io', noAuth: true });
+    } = await proxyFetchJson(path, { host: 'photos.adobe.io', noAuth: true, signal });
     for (const r of json.resources) {
       const dev = r.asset.payload.develop || {};
       const renditionLink = r.asset.links['/rels/rendition_type/2048']
@@ -482,16 +487,17 @@ async function fetchAlbumName(catalogId: string, albumId: string): Promise<strin
 
 /** List all assets in a resolved target — dispatches to the public-share or
  *  authenticated-own-album loader as appropriate. */
-export async function fetchAlbumAssets(target: ResolvedTarget): Promise<LightroomAlbumAsset[]> {
+export async function fetchAlbumAssets(target: ResolvedTarget, signal?: AbortSignal): Promise<LightroomAlbumAsset[]> {
   if (target.kind === 'publicShare') {
-    return fetchPublicShareAssets(target.shareId, target.albumId);
+    return fetchPublicShareAssets(target.shareId, target.albumId, signal);
   }
   // Own-album path (authenticated, lr.adobe.io).
   const all: LightroomAlbumAsset[] = [];
   let cursor: string | undefined;
   do {
+    if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
     const path = `/v2/catalogs/${target.catalogId}/albums/${target.albumId}/assets${cursor ? `?after=${cursor}` : ''}`;
-    const json = await proxyFetchJson<{ resources: Array<{ asset: { id: string; payload: { importSource: { fileName: string }; develop?: { croppedHeight?: number; croppedWidth?: number } } } }>; links?: { next?: { href: string } } }>(path);
+    const json = await proxyFetchJson<{ resources: Array<{ asset: { id: string; payload: { importSource: { fileName: string }; develop?: { croppedHeight?: number; croppedWidth?: number } } } }>; links?: { next?: { href: string } } }>(path, { signal });
     for (const r of json.resources) {
       const dev = r.asset.payload.develop || {};
       all.push({
@@ -511,9 +517,9 @@ export async function fetchAlbumAssets(target: ResolvedTarget): Promise<Lightroo
  *  existing addFocusImages() pipeline. Routes to the right host based on
  *  whether the asset came from a public share (photos.adobe.io, no auth)
  *  or a private catalog (lr.adobe.io, authenticated). */
-export async function fetchAssetBlob(asset: LightroomAlbumAsset): Promise<Blob> {
+export async function fetchAssetBlob(asset: LightroomAlbumAsset, signal?: AbortSignal): Promise<Blob> {
   const isPublic = !!asset.shareId;
-  const res = await proxyFetch(asset.renditionPath, isPublic ? { host: 'photos.adobe.io', noAuth: true } : {});
+  const res = await proxyFetch(asset.renditionPath, isPublic ? { host: 'photos.adobe.io', noAuth: true, signal } : { signal });
   if (!res.ok) throw new Error(`Rendition fetch failed for ${asset.filename}: ${res.status}`);
   return res.blob();
 }

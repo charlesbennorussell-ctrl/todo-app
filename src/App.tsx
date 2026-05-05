@@ -1943,7 +1943,15 @@ function FocusDamViewer({
 // `ownerKey` (the bucket id) appended so the gallery doesn't need to look up
 // which bucket each image came from on every render.
 type FocusDamImage = { id: string; url?: string; dataUrl?: string; filename: string; width: number; height: number; favorited?: boolean; folderId?: string; ownerKey: string };
-type FocusDamFolder = { id: string; name: string };
+type FocusDamFolder = {
+  id: string;
+  name: string;
+  // Optional LR provenance — if set, the folder mirrors a Lightroom album
+  // and a Re-sync affordance is shown on hover. The detail of which catalog
+  // / share the folder came from is held in the storage record; the gallery
+  // only needs to know whether to show the affordance.
+  lrSource?: { kind: 'publicShare'; shareId: string; albumId: string } | { kind: 'ownAlbum'; catalogId: string; albumId: string };
+};
 type FocusDamBucket = { key: string; label: string; images: FocusDamImage[]; folders: FocusDamFolder[] };
 
 // FocusDamTile: one image cell. Sortable so reorders inside the same context
@@ -2176,6 +2184,7 @@ function FocusDamFolderRow({
   onCommitRename,
   onCancelRename,
   onDelete,
+  onResync,
 }: {
   folder: FocusDamFolder;
   bucketKey: string;
@@ -2184,6 +2193,10 @@ function FocusDamFolderRow({
   onCommitRename: (name: string) => void;
   onCancelRename: () => void;
   onDelete: () => void;
+  // Only set for LR-sourced folders. Renders the manual "Re-sync" text
+  // affordance on hover; click triggers a foreground sync that mirrors
+  // the auto-sync background path.
+  onResync?: () => void;
 }) {
   const sortableId = `dam-folder:${bucketKey}:${folder.id}`;
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -2245,6 +2258,21 @@ function FocusDamFolderRow({
         >
           {folder.name || <span className="text-[#656464]">Untitled folder</span>}
         </span>
+      )}
+      {onResync && (
+        // Manual Re-sync — text affordance, hover-revealed. Triggers a
+        // foreground sync that pulls any new LR album assets, skipping
+        // duplicates (already-imported lrAssetIds) and respecting the
+        // folder's lrDeletedAssetIds. Sits BEFORE the trash so the
+        // destructive action is the rightmost thing in the row.
+        <button
+          type="button"
+          onClick={onResync}
+          className="opacity-0 group-hover:opacity-100 text-[#656464] hover:text-white transition-opacity text-[12px]"
+          aria-label="Re-sync from Lightroom"
+        >
+          Re-sync
+        </button>
       )}
       <button
         type="button"
@@ -4940,13 +4968,22 @@ export default function App() {
   // `folderId` (optional): if set, the image belongs to a sub-folder inside its bucket;
   // otherwise it sits at the bucket's root. The folders themselves live in
   // `focusImageFolders[bucketKey]` (see below).
-  const [focusImages, setFocusImages] = useStorageRecord<'focusImages', { id: string; url?: string; dataUrl?: string; filename: string; width: number; height: number; favorited?: boolean; folderId?: string }[]>('focusImages');
+  // `lrAssetId` (optional): set when this image was imported from a Lightroom album,
+  // mirroring the LR asset's id. Re-sync uses it to (a) detect duplicates so the
+  // same image isn't imported twice and (b) record deleted-from-local in the folder's
+  // lrDeletedAssetIds so re-sync doesn't keep re-importing something the user removed.
+  const [focusImages, setFocusImages] = useStorageRecord<'focusImages', { id: string; url?: string; dataUrl?: string; filename: string; width: number; height: number; favorited?: boolean; folderId?: string; lrAssetId?: string }[]>('focusImages');
   // Folder definitions per image bucket. The bucket key matches the focusImages key:
   // projectKey for Project, taskKey for Task, or `wip:${projectKey}` for WIP. The
   // array order IS the display order — folders render top-to-bottom in the gallery,
   // each producing a carriage-return row break with the folder icon + name docked
   // left, followed by the images that point at it via folderId.
-  const [focusImageFolders, setFocusImageFolders] = useStorageRecord<'focusImageFolders', { id: string; name: string }[]>('focusImageFolders');
+  // `lrSource`, `lrSyncedAt`, `lrDeletedAssetIds` (all optional): set when this folder
+  // was created by a Lightroom import. lrSource records which album the folder mirrors;
+  // lrSyncedAt is the unix-ms timestamp of the last successful sync; lrDeletedAssetIds
+  // remembers which Lightroom asset ids the user has removed locally, so re-sync
+  // skips them instead of re-importing on every pass.
+  const [focusImageFolders, setFocusImageFolders] = useStorageRecord<'focusImageFolders', { id: string; name: string; lrSource?: { kind: 'publicShare'; shareId: string; albumId: string } | { kind: 'ownAlbum'; catalogId: string; albumId: string }; lrSyncedAt?: number; lrDeletedAssetIds?: string[] }[]>('focusImageFolders');
   // "Has any Focus-mode content" lookup — returns true if the task itself OR its project
   // has a brief / notes / sub-tasks / images / references stashed against it. Drives the
   // inline FileText icon on every task row. Project-level content IS inherited so users
@@ -5124,17 +5161,26 @@ export default function App() {
     const blob: Blob = await new Promise((res, rej) => canvas.toBlob((b) => b ? res(b) : rej(new Error('toBlob failed')), 'image/webp', 0.85));
     return { blob, width: w, height: h };
   }, []);
-  const addFocusImages = useCallback(async (key: string, files: FileList | File[], folderId?: string) => {
-    const list = Array.from(files).filter((f) => f.type.startsWith('image/'));
+  const addFocusImages = useCallback(async (key: string, files: FileList | File[], folderId?: string, lrAssetIds?: (string | undefined)[]) => {
+    const fileArray = Array.from(files);
+    // Pre-filter to image files. Track original indices so the parallel
+    // lrAssetIds array stays aligned (the LR importer passes one id per file
+    // — if non-image files were filtered out without remembering positions
+    // the asset-id mapping would slide).
+    const list: Array<{ file: File; lrAssetId?: string }> = [];
+    fileArray.forEach((f, i) => {
+      if (f.type.startsWith('image/')) list.push({ file: f, lrAssetId: lrAssetIds?.[i] });
+    });
     if (list.length === 0) return;
     // Process + upload all in parallel. Each one: scale → WebP blob → Supabase upload →
     // metadata-with-URL row. Anything that fails the upload throws here so the user sees
     // it in the dev console; the metadata for that image is skipped (no orphan row).
     // If folderId is provided, every new image is stamped with it so the bucket
     // gallery renders them inside that folder rather than at the bucket root.
-    // (Used by the Lightroom importer to drop a whole album into a freshly-
-    // created folder named after the album.)
-    const processed = await Promise.all(list.map(async (file) => {
+    // If lrAssetIds is provided, each image carries the matching asset id so re-sync
+    // can recognise duplicates and the delete path can record the asset id in the
+    // folder's lrDeletedAssetIds.
+    const processed = await Promise.all(list.map(async ({ file, lrAssetId }) => {
       const { blob, width, height } = await scaleAndCompressImage(file);
       const id = `img-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       let url = '';
@@ -5144,8 +5190,9 @@ export default function App() {
         console.error('[focusImages] Supabase upload failed', e);
         throw e;
       }
-      const meta: { id: string; url: string; filename: string; width: number; height: number; folderId?: string } = { id, url, filename: file.name, width, height };
+      const meta: { id: string; url: string; filename: string; width: number; height: number; folderId?: string; lrAssetId?: string } = { id, url, filename: file.name, width, height };
       if (folderId) meta.folderId = folderId;
+      if (lrAssetId) meta.lrAssetId = lrAssetId;
       return meta;
     }));
     setFocusImages((prev) => ({ ...prev, [key]: [...(prev[key] || []), ...processed] }));
@@ -5159,7 +5206,25 @@ export default function App() {
     // an orphan blob is harmless if the delete fails.
     deleteFocusImageBlob(id).catch((e) => console.warn('[focusImages] Supabase delete failed', e));
     setFocusImages((prev) => ({ ...prev, [key]: (prev[key] || []).filter((img) => img.id !== id) }));
-  }, [focusImages, setFocusImages]);
+    // If the deleted image came from a Lightroom import, record its LR asset id
+    // on the parent folder's lrDeletedAssetIds so the next re-sync skips it
+    // instead of pulling it back in. The folderId + lrAssetId both come from
+    // the image metadata we captured before the splice above.
+    if (target?.lrAssetId && target.folderId) {
+      const folderId = target.folderId;
+      const lrAssetId = target.lrAssetId;
+      setFocusImageFolders((prev) => {
+        const arr = prev[key] || [];
+        const next = arr.map((f) => {
+          if (f.id !== folderId) return f;
+          const existing = f.lrDeletedAssetIds || [];
+          if (existing.includes(lrAssetId)) return f;
+          return { ...f, lrDeletedAssetIds: [...existing, lrAssetId] };
+        });
+        return { ...prev, [key]: next };
+      });
+    }
+  }, [focusImages, setFocusImages, setFocusImageFolders]);
   // Toggle the heart on a reference image. Favorited images bubble to the front of their
   // bucket — the viewer also stable-sorts so unfavorited items keep their relative order.
   const toggleFocusImageFavorite = useCallback((key: string, id: string) => {
@@ -5337,11 +5402,20 @@ export default function App() {
   //   importing — fetching + processing assets one at a time
   //   done      — all assets imported (count + folder name shown)
   //   error     — something failed (message shown, can retry)
-  const [lrImportStatus, setLrImportStatus] = useState<'idle' | 'resolving' | 'importing' | 'done' | 'error'>('idle');
+  const [lrImportStatus, setLrImportStatus] = useState<'idle' | 'resolving' | 'importing' | 'done' | 'error' | 'cancelled'>('idle');
   const [lrImportUrl, setLrImportUrl] = useState('');
   const [lrImportError, setLrImportError] = useState<string>('');
   const [lrImportProgress, setLrImportProgress] = useState({ current: 0, total: 0 });
   const [lrImportFolderName, setLrImportFolderName] = useState('');
+  // AbortController for the in-flight import. Set when the import job starts;
+  // calling .abort() interrupts the asset loop AND cancels any in-flight
+  // fetch. Cleared when the job finishes (any outcome).
+  const lrImportAbortRef = useRef<AbortController | null>(null);
+  // Sync ledger — tracks which folder IDs are currently re-syncing so the
+  // auto-sync useEffect doesn't kick off duplicate jobs and the manual
+  // Re-sync button can show a spinner. Kept in a ref because nothing visual
+  // depends on it precisely; tile re-renders don't need to wait.
+  const lrSyncingFolderIdsRef = useRef<Set<string>>(new Set());
   // Import driver — resolves the share URL, creates a folder named after the
   // album, then walks the asset list pulling each image's blob and feeding it
   // into addFocusImages with the new folder's id stamped on. Sequential (one
@@ -5350,17 +5424,23 @@ export default function App() {
   const runLightroomImport = useCallback(async (targetBucket: string) => {
     const url = lrImportUrl.trim();
     if (!url) return;
+    const controller = new AbortController();
+    lrImportAbortRef.current = controller;
+    const { signal } = controller;
     setLrImportStatus('resolving');
     setLrImportError('');
     setLrImportProgress({ current: 0, total: 0 });
+    const isAbort = (e: unknown): boolean => (e instanceof DOMException && e.name === 'AbortError') || signal.aborted;
     try {
       const resolved = await resolveShareUrl(url);
+      if (signal.aborted) { setLrImportStatus('cancelled'); return; }
       if ('error' in resolved) {
         setLrImportError(resolved.error);
         setLrImportStatus('error');
         return;
       }
-      const assets = await fetchAlbumAssets(resolved);
+      const assets = await fetchAlbumAssets(resolved, signal);
+      if (signal.aborted) { setLrImportStatus('cancelled'); return; }
       if (assets.length === 0) {
         setLrImportError('Album has no images.');
         setLrImportStatus('error');
@@ -5376,24 +5456,127 @@ export default function App() {
       setLrImportStatus('importing');
       let imported = 0;
       for (const asset of assets) {
+        if (signal.aborted) break;
         try {
-          const blob = await fetchAssetBlob(asset);
+          const blob = await fetchAssetBlob(asset, signal);
           const file = new File([blob], asset.filename || `${asset.id}.jpg`, { type: blob.type || 'image/jpeg' });
-          await addFocusImages(targetBucket, [file], folderId);
+          await addFocusImages(targetBucket, [file], folderId, [asset.id]);
           imported += 1;
           setLrImportProgress({ current: imported, total: assets.length });
         } catch (e) {
+          if (isAbort(e)) break;
           console.warn(`[lightroom] failed to import ${asset.filename}:`, e);
           // Continue with remaining assets — partial success beats hard fail.
         }
       }
-      setLrImportStatus('done');
+      // Stamp the folder with the LR source so re-sync knows where to pull
+      // from later. Done AFTER the import so we don't auto-sync an empty
+      // folder mid-creation. Set even on partial-import / cancelled (the
+      // user can re-sync from the same source to fill in the rest).
+      const lrSource = resolved.kind === 'publicShare'
+        ? { kind: 'publicShare' as const, shareId: resolved.shareId, albumId: resolved.albumId }
+        : { kind: 'ownAlbum' as const, catalogId: resolved.catalogId, albumId: resolved.albumId };
+      setFocusImageFolders((prev) => ({
+        ...prev,
+        [targetBucket]: (prev[targetBucket] || []).map((f) => f.id === folderId ? { ...f, lrSource, lrSyncedAt: Date.now() } : f),
+      }));
+      setLrImportStatus(signal.aborted ? 'cancelled' : 'done');
     } catch (e) {
+      if (isAbort(e)) {
+        setLrImportStatus('cancelled');
+        return;
+      }
       console.error('[lightroom] import failed:', e);
       setLrImportError((e as Error).message || 'Unknown error during import.');
       setLrImportStatus('error');
+    } finally {
+      lrImportAbortRef.current = null;
     }
-  }, [lrImportUrl, addFocusFolder, renameFocusFolder, addFocusImages]);
+  }, [lrImportUrl, addFocusFolder, renameFocusFolder, addFocusImages, setFocusImageFolders]);
+  // syncLightroomFolder — re-sync an already-imported LR folder. Pulls the
+  // current asset list, diffs against:
+  //   (a) existing local images in the folder that have an lrAssetId — those
+  //       are skipped as duplicates
+  //   (b) the folder's lrDeletedAssetIds — assets the user removed locally,
+  //       which we mustn't re-import or the delete won't stick
+  // …and adds whatever's left. Fire-and-forget; updates lrSyncedAt on the
+  // folder regardless of how many were added (so we don't keep poking it).
+  // De-duped via lrSyncingFolderIdsRef so the auto-sync useEffect doesn't
+  // launch concurrent jobs against the same folder.
+  const syncLightroomFolder = useCallback(async (bucketKey: string, folderId: string): Promise<{ added: number; total: number; error?: string }> => {
+    if (lrSyncingFolderIdsRef.current.has(folderId)) {
+      return { added: 0, total: 0 };
+    }
+    const folder = (focusImageFoldersRef.current[bucketKey] || []).find((f) => f.id === folderId);
+    if (!folder?.lrSource) return { added: 0, total: 0 };
+    lrSyncingFolderIdsRef.current.add(folderId);
+    try {
+      const target: ResolvedTarget = folder.lrSource.kind === 'publicShare'
+        ? { kind: 'publicShare', shareId: folder.lrSource.shareId, albumId: folder.lrSource.albumId, name: folder.name }
+        : { kind: 'ownAlbum', catalogId: folder.lrSource.catalogId, albumId: folder.lrSource.albumId, name: folder.name };
+      const assets = await fetchAlbumAssets(target);
+      // Skip set: existing local images in this folder with an lrAssetId,
+      // plus the folder's lrDeletedAssetIds (user-removed images).
+      const existing = (focusImagesRef.current[bucketKey] || [])
+        .filter((i) => i.folderId === folderId && i.lrAssetId);
+      const existingLrIds = new Set(existing.map((i) => i.lrAssetId!));
+      const deletedLrIds = new Set(folder.lrDeletedAssetIds || []);
+      const newAssets = assets.filter((a) => !existingLrIds.has(a.id) && !deletedLrIds.has(a.id));
+      let added = 0;
+      for (const asset of newAssets) {
+        try {
+          const blob = await fetchAssetBlob(asset);
+          const file = new File([blob], asset.filename || `${asset.id}.jpg`, { type: blob.type || 'image/jpeg' });
+          await addFocusImages(bucketKey, [file], folderId, [asset.id]);
+          added += 1;
+        } catch (e) {
+          console.warn(`[lightroom sync] failed to import ${asset.filename}:`, e);
+        }
+      }
+      // Stamp lrSyncedAt regardless of whether we added anything — that's
+      // what the auto-sync debounce checks against.
+      setFocusImageFolders((prev) => ({
+        ...prev,
+        [bucketKey]: (prev[bucketKey] || []).map((f) => f.id === folderId ? { ...f, lrSyncedAt: Date.now() } : f),
+      }));
+      return { added, total: assets.length };
+    } catch (e) {
+      console.warn('[lightroom sync] failed:', e);
+      return { added: 0, total: 0, error: (e as Error).message };
+    } finally {
+      lrSyncingFolderIdsRef.current.delete(folderId);
+    }
+  }, [addFocusImages, setFocusImageFolders]);
+  // Auto-sync trigger. Fires whenever the user lands on a different task
+  // (which changes the active project / task / wip buckets in Focus mode).
+  // Walks every folder in those buckets and kicks a background sync for any
+  // that have an lrSource AND haven't synced in the last 60 seconds.
+  // syncLightroomFolder de-dupes via lrSyncingFolderIdsRef so concurrent
+  // triggers (e.g. from a fast task-switch) don't pile up jobs on the same
+  // folder. Only runs in Focus mode — no point pulling LR data when the
+  // user is in List or Calendar view.
+  useEffect(() => {
+    if (mode !== 'focus') return;
+    const sel = selectedTaskId ? tasks.find((t) => t.id === selectedTaskId) : null;
+    const proj = sel?.projectId ? projects.find((p) => p.id === sel.projectId) : null;
+    const projectKey = proj?.id ?? null;
+    const taskKey = sel?.id ?? null;
+    const wipKey = projectKey ? `wip:${projectKey}` : null;
+    const buckets = [projectKey, taskKey, wipKey].filter((k): k is string => !!k);
+    if (buckets.length === 0) return;
+    const STALE_MS = 60_000;
+    const now = Date.now();
+    const folders = focusImageFoldersRef.current;
+    for (const bucket of buckets) {
+      for (const f of folders[bucket] || []) {
+        if (!f.lrSource) continue;
+        if (f.lrSyncedAt && now - f.lrSyncedAt < STALE_MS) continue;
+        // Background — don't await. syncLightroomFolder handles its own
+        // errors and updates state when finished.
+        syncLightroomFolder(bucket, f.id);
+      }
+    }
+  }, [mode, selectedTaskId, tasks, projects, syncLightroomFolder]);
   // OAuth redirect consumer — runs once at mount. If the URL has ?code=…,
   // exchange it for tokens, then update lightroomAuthed so the import button
   // flips to "ready". Errors are logged; the button stays in the auth state
@@ -5417,6 +5600,8 @@ export default function App() {
   useEffect(() => { selectedImageIdsRef.current = selectedImageIds; }, [selectedImageIds]);
   const focusImagesRef = useRef(focusImages);
   useEffect(() => { focusImagesRef.current = focusImages; }, [focusImages]);
+  const focusImageFoldersRef = useRef(focusImageFolders);
+  useEffect(() => { focusImageFoldersRef.current = focusImageFolders; }, [focusImageFolders]);
   // Gallery-container dimension tracking — Zoom All needs to know how much
   // room the sectioned content has so we can binary-search the largest row
   // height that still fits everything in the viewport. Using a state-based
@@ -8110,6 +8295,7 @@ export default function App() {
                                               onCommitRename={(name) => { renameFocusFolder(bucket.key, folder.id, name); setEditingFolderId(null); }}
                                               onCancelRename={() => setEditingFolderId(null)}
                                               onDelete={() => deleteFocusFolder(bucket.key, folder.id)}
+                                              onResync={folder.lrSource ? () => { syncLightroomFolder(bucket.key, folder.id); } : undefined}
                                             />
                                             <FocusDamFolderDropTarget bucketKey={bucket.key} folderId={folder.id}>
                                               {folderImgs.length > 0 ? (
@@ -8279,19 +8465,34 @@ export default function App() {
                         </div>
                       </>
                     )}
-                    {lrImportStatus === 'resolving' && (
-                      <p className="text-[#a8a8a8] text-[13px]">Resolving share URL&hellip;</p>
-                    )}
-                    {lrImportStatus === 'importing' && (
+                    {(lrImportStatus === 'resolving' || lrImportStatus === 'importing') && (
                       <>
-                        <p className="text-[#a8a8a8] text-[13px]">
-                          Importing &ldquo;{lrImportFolderName}&rdquo; &mdash; {lrImportProgress.current} of {lrImportProgress.total}&hellip;
-                        </p>
-                        <div className="h-1 bg-[#1f1f1f] rounded overflow-hidden">
-                          <div
-                            className="h-full bg-[#7363FF] transition-all duration-200"
-                            style={{ width: `${(lrImportProgress.current / Math.max(1, lrImportProgress.total)) * 100}%` }}
-                          />
+                        {lrImportStatus === 'resolving' ? (
+                          <p className="text-[#a8a8a8] text-[13px]">Resolving share URL&hellip;</p>
+                        ) : (
+                          <>
+                            <p className="text-[#a8a8a8] text-[13px]">
+                              Importing &ldquo;{lrImportFolderName}&rdquo; &mdash; {lrImportProgress.current} of {lrImportProgress.total}&hellip;
+                            </p>
+                            <div className="h-1 bg-[#1f1f1f] rounded overflow-hidden">
+                              <div
+                                className="h-full bg-[#7363FF] transition-all duration-200"
+                                style={{ width: `${(lrImportProgress.current / Math.max(1, lrImportProgress.total)) * 100}%` }}
+                              />
+                            </div>
+                          </>
+                        )}
+                        {/* Cancel — calls .abort() on the in-flight controller.
+                            The driver picks up signal.aborted between iterations
+                            and bails; any in-flight fetch is also cancelled. */}
+                        <div className="flex flex-row justify-end mt-2">
+                          <button
+                            type="button"
+                            onClick={() => lrImportAbortRef.current?.abort()}
+                            className="px-3 py-1 text-[13px] text-[#a8a8a8] hover:text-white transition-colors"
+                          >
+                            Cancel
+                          </button>
                         </div>
                       </>
                     )}
@@ -8306,6 +8507,20 @@ export default function App() {
                           className="self-end px-3 py-1 text-[13px] text-[#a8a8a8] hover:text-white transition-colors"
                         >
                           Done
+                        </button>
+                      </>
+                    )}
+                    {lrImportStatus === 'cancelled' && (
+                      <>
+                        <p className="text-[#a8a8a8] text-[13px]">
+                          Import cancelled. {lrImportProgress.current > 0 ? `${lrImportProgress.current} of ${lrImportProgress.total} were already imported into "${lrImportFolderName}". Re-sync that folder later to fill in the rest.` : ''}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => { setLightroomImportOpen(false); setLrImportStatus('idle'); setLrImportUrl(''); }}
+                          className="self-end px-3 py-1 text-[13px] text-[#a8a8a8] hover:text-white transition-colors"
+                        >
+                          Close
                         </button>
                       </>
                     )}
