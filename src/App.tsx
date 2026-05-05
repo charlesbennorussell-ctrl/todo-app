@@ -29,7 +29,7 @@ import { CSS } from '@dnd-kit/utilities';
 import { useStorage, useMutation, useUndo, useRedo } from '@liveblocks/react/suspense';
 import { uploadFocusImage, deleteFocusImageBlob } from './supabase';
 import { getCachedImageUrl, getCachedImageUrlSync, evictCachedImage } from './imageCache';
-import { consumeOauthRedirect, openLightroomAuth, hasLightroomAuth } from './lightroom';
+import { consumeOauthRedirect, openLightroomAuth, hasLightroomAuth, resolveShareUrl, fetchAlbumAssets, fetchAssetBlob } from './lightroom';
 import {
   buildSnapshot,
   getSlot,
@@ -5124,12 +5124,16 @@ export default function App() {
     const blob: Blob = await new Promise((res, rej) => canvas.toBlob((b) => b ? res(b) : rej(new Error('toBlob failed')), 'image/webp', 0.85));
     return { blob, width: w, height: h };
   }, []);
-  const addFocusImages = useCallback(async (key: string, files: FileList | File[]) => {
+  const addFocusImages = useCallback(async (key: string, files: FileList | File[], folderId?: string) => {
     const list = Array.from(files).filter((f) => f.type.startsWith('image/'));
     if (list.length === 0) return;
     // Process + upload all in parallel. Each one: scale → WebP blob → Supabase upload →
     // metadata-with-URL row. Anything that fails the upload throws here so the user sees
     // it in the dev console; the metadata for that image is skipped (no orphan row).
+    // If folderId is provided, every new image is stamped with it so the bucket
+    // gallery renders them inside that folder rather than at the bucket root.
+    // (Used by the Lightroom importer to drop a whole album into a freshly-
+    // created folder named after the album.)
     const processed = await Promise.all(list.map(async (file) => {
       const { blob, width, height } = await scaleAndCompressImage(file);
       const id = `img-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -5140,7 +5144,9 @@ export default function App() {
         console.error('[focusImages] Supabase upload failed', e);
         throw e;
       }
-      return { id, url, filename: file.name, width, height };
+      const meta: { id: string; url: string; filename: string; width: number; height: number; folderId?: string } = { id, url, filename: file.name, width, height };
+      if (folderId) meta.folderId = folderId;
+      return meta;
     }));
     setFocusImages((prev) => ({ ...prev, [key]: [...(prev[key] || []), ...processed] }));
   }, [scaleAndCompressImage, setFocusImages]);
@@ -5325,6 +5331,69 @@ export default function App() {
   // authenticated user clicks Import from Lightroom.
   const [lightroomAuthed, setLightroomAuthed] = useState<boolean>(() => hasLightroomAuth());
   const [lightroomImportOpen, setLightroomImportOpen] = useState(false);
+  // Lightroom import job state. The dialog is a small state machine:
+  //   idle      — empty URL field, "Import" button visible
+  //   resolving — looking up the share URL → catalog/album
+  //   importing — fetching + processing assets one at a time
+  //   done      — all assets imported (count + folder name shown)
+  //   error     — something failed (message shown, can retry)
+  const [lrImportStatus, setLrImportStatus] = useState<'idle' | 'resolving' | 'importing' | 'done' | 'error'>('idle');
+  const [lrImportUrl, setLrImportUrl] = useState('');
+  const [lrImportError, setLrImportError] = useState<string>('');
+  const [lrImportProgress, setLrImportProgress] = useState({ current: 0, total: 0 });
+  const [lrImportFolderName, setLrImportFolderName] = useState('');
+  // Import driver — resolves the share URL, creates a folder named after the
+  // album, then walks the asset list pulling each image's blob and feeding it
+  // into addFocusImages with the new folder's id stamped on. Sequential (one
+  // image at a time) to keep the proxy + Supabase upload pipeline from being
+  // hammered, and to give a clean per-image progress count.
+  const runLightroomImport = useCallback(async (targetBucket: string) => {
+    const url = lrImportUrl.trim();
+    if (!url) return;
+    setLrImportStatus('resolving');
+    setLrImportError('');
+    setLrImportProgress({ current: 0, total: 0 });
+    try {
+      const resolved = await resolveShareUrl(url);
+      if (!resolved) {
+        setLrImportError('Could not resolve that URL. Make sure the album was shared from the Adobe account you authorized, and the URL ends in /shares/<id> or /libraries/<cat>/albums/<id>.');
+        setLrImportStatus('error');
+        return;
+      }
+      const assets = await fetchAlbumAssets(resolved.catalogId, resolved.albumId);
+      if (assets.length === 0) {
+        setLrImportError('Album has no images.');
+        setLrImportStatus('error');
+        return;
+      }
+      // Make a folder named after the LR album, stash its id so each image
+      // can be stamped with folderId on creation. Folder lands at the top of
+      // the section per addFocusFolder's prepend behaviour.
+      const folderId = addFocusFolder(targetBucket);
+      renameFocusFolder(targetBucket, folderId, resolved.name);
+      setLrImportFolderName(resolved.name);
+      setLrImportProgress({ current: 0, total: assets.length });
+      setLrImportStatus('importing');
+      let imported = 0;
+      for (const asset of assets) {
+        try {
+          const blob = await fetchAssetBlob(asset);
+          const file = new File([blob], asset.filename || `${asset.id}.jpg`, { type: blob.type || 'image/jpeg' });
+          await addFocusImages(targetBucket, [file], folderId);
+          imported += 1;
+          setLrImportProgress({ current: imported, total: assets.length });
+        } catch (e) {
+          console.warn(`[lightroom] failed to import ${asset.filename}:`, e);
+          // Continue with remaining assets — partial success beats hard fail.
+        }
+      }
+      setLrImportStatus('done');
+    } catch (e) {
+      console.error('[lightroom] import failed:', e);
+      setLrImportError((e as Error).message || 'Unknown error during import.');
+      setLrImportStatus('error');
+    }
+  }, [lrImportUrl, addFocusFolder, renameFocusFolder, addFocusImages]);
   // OAuth redirect consumer — runs once at mount. If the URL has ?code=…,
   // exchange it for tokens, then update lightroomAuthed so the import button
   // flips to "ready". Errors are logged; the button stays in the auth state
@@ -8155,33 +8224,88 @@ export default function App() {
                       view via FocusDamViewer's onOneUpToggle. */}
                 </div>
               </div>
-              {/* Lightroom import dialog — opens when an authenticated user
-                  clicks "Import from Lightroom". Currently a placeholder; the
-                  share-URL → fetch → process pipeline lights up once the
-                  Supabase Edge Function proxy is deployed (next pass). */}
+              {/* Lightroom import dialog. State machine:
+                  - idle: URL input + Import button
+                  - resolving: spinner-like text while we look up the share
+                  - importing: progress count "X of Y"
+                  - done: success message with imported folder name
+                  - error: red error string + retry */}
               {lightroomImportOpen && (
                 <div
                   className="fixed inset-0 z-[60] flex items-center justify-center bg-black/60"
-                  onClick={() => setLightroomImportOpen(false)}
+                  onClick={() => { if (lrImportStatus !== 'importing' && lrImportStatus !== 'resolving') setLightroomImportOpen(false); }}
                 >
                   <div
-                    className="bg-[#2a2a2a] border border-[#3a3a3a] rounded-2xl w-[480px] p-6 flex flex-col gap-4 shadow-2xl"
+                    className="bg-[#2a2a2a] border border-[#3a3a3a] rounded-2xl w-[520px] p-6 flex flex-col gap-4 shadow-2xl"
                     onClick={(e) => e.stopPropagation()}
                   >
                     <p className="text-white text-[14px] font-bold">Import from Lightroom</p>
-                    <p className="text-[#a8a8a8] text-[13px]">
-                      Connected. The album-import pipeline finishes deploying once the
-                      Supabase Edge Function proxy lands. Next deploy will let you
-                      paste a Lightroom share URL here and pull the album into a new
-                      folder.
-                    </p>
-                    <button
-                      type="button"
-                      onClick={() => setLightroomImportOpen(false)}
-                      className="self-end px-3 py-1 text-[13px] text-[#a8a8a8] hover:text-white transition-colors"
-                    >
-                      Close
-                    </button>
+                    {(lrImportStatus === 'idle' || lrImportStatus === 'error') && (
+                      <>
+                        <p className="text-[#a8a8a8] text-[13px]">
+                          Paste a Lightroom share URL (a /shares/&hellip; link from an album YOU shared,
+                          or a /libraries/&hellip;/albums/&hellip; URL from your own LR web view).
+                        </p>
+                        <input
+                          type="text"
+                          value={lrImportUrl}
+                          onChange={(e) => setLrImportUrl(e.target.value)}
+                          placeholder="https://lightroom.adobe.com/shares/..."
+                          className="bg-[#1f1f1f] text-white px-3 py-2 rounded-md border border-[#3a3a3a] outline-none focus:border-[#7363FF]"
+                          autoFocus
+                        />
+                        {lrImportStatus === 'error' && (
+                          <p className="text-[#FF7171] text-[12px]">{lrImportError}</p>
+                        )}
+                        <div className="flex flex-row justify-end gap-2 mt-2">
+                          <button
+                            type="button"
+                            onClick={() => setLightroomImportOpen(false)}
+                            className="px-3 py-1 text-[13px] text-[#a8a8a8] hover:text-white transition-colors"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => { const target = projectKey ?? taskKey; if (target) runLightroomImport(target); }}
+                            disabled={!lrImportUrl.trim() || (!projectKey && !taskKey)}
+                            className="px-3 py-1 text-[13px] bg-[#7363FF] text-white rounded-md hover:bg-[#8473ff] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                          >
+                            Import
+                          </button>
+                        </div>
+                      </>
+                    )}
+                    {lrImportStatus === 'resolving' && (
+                      <p className="text-[#a8a8a8] text-[13px]">Resolving share URL&hellip;</p>
+                    )}
+                    {lrImportStatus === 'importing' && (
+                      <>
+                        <p className="text-[#a8a8a8] text-[13px]">
+                          Importing &ldquo;{lrImportFolderName}&rdquo; &mdash; {lrImportProgress.current} of {lrImportProgress.total}&hellip;
+                        </p>
+                        <div className="h-1 bg-[#1f1f1f] rounded overflow-hidden">
+                          <div
+                            className="h-full bg-[#7363FF] transition-all duration-200"
+                            style={{ width: `${(lrImportProgress.current / Math.max(1, lrImportProgress.total)) * 100}%` }}
+                          />
+                        </div>
+                      </>
+                    )}
+                    {lrImportStatus === 'done' && (
+                      <>
+                        <p className="text-white text-[13px]">
+                          Imported {lrImportProgress.total} {lrImportProgress.total === 1 ? 'image' : 'images'} into &ldquo;{lrImportFolderName}&rdquo;.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => { setLightroomImportOpen(false); setLrImportStatus('idle'); setLrImportUrl(''); }}
+                          className="self-end px-3 py-1 text-[13px] text-[#a8a8a8] hover:text-white transition-colors"
+                        >
+                          Done
+                        </button>
+                      </>
+                    )}
                   </div>
                 </div>
               )}

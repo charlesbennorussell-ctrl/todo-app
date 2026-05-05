@@ -234,19 +234,66 @@ export async function getCatalogId(): Promise<string> {
   return json.id;
 }
 
-/** Resolve a https://lightroom.adobe.com/shares/<token> URL to an album id.
- *  This requires hitting the Adobe API to find the matching album in the
- *  user's catalogue (since the share token isn't directly an album id). */
-export async function resolveShareUrl(_shareUrl: string): Promise<{ catalogId: string; albumId: string; name: string } | null> {
-  // TODO: Adobe doesn't have a single "lookup share" endpoint. The two
-  // approaches are:
-  //   a) Walk the user's albums + check which one corresponds to the share
-  //      (slow if user has many albums)
-  //   b) Fetch the share page server-side via the proxy to extract the
-  //      catalog/album ids (fragile but fast)
-  // Will implement (a) once the proxy is deployed and we can test against
-  // a real catalogue.
+/** Resolve a Lightroom URL to its catalogId + albumId. Accepts:
+ *    - https://lightroom.adobe.com/shares/<shareId>           ← share-link URL
+ *    - https://lightroom.adobe.com/shares/<shareId>/...        ← share variants
+ *    - https://lightroom.adobe.com/libraries/<catalogId>/albums/<albumId>/...
+ *      (the URL you copy from your own LR web view of an album)
+ *
+ *  For share-link URLs, this calls /v2/catalogs/{cat}/assetshares/{shareId}
+ *  on the AUTHENTICATED user's catalog — which works for albums YOU shared.
+ *  Importing someone-else's shared album is not yet supported (would need
+ *  a server-side scrape of the public share page; left for a follow-up).
+ *  Returns null with a console warning if the URL doesn't match. */
+export async function resolveShareUrl(shareUrl: string): Promise<{ catalogId: string; albumId: string; name: string } | null> {
+  // Direct album URL: /libraries/<catId>/albums/<albumId>/...
+  const directMatch = shareUrl.match(/\/libraries\/([^/]+)\/albums\/([^/?#]+)/);
+  if (directMatch) {
+    const [, catalogId, albumId] = directMatch;
+    // Pull the album name in a separate call so the import status reads
+    // nicely ("Importing X from <album>").
+    const name = await fetchAlbumName(catalogId, albumId);
+    return { catalogId, albumId, name };
+  }
+  // Share-link URL: /shares/<shareId>(/...)? — share belongs to authenticated user.
+  const shareMatch = shareUrl.match(/\/shares\/([^/?#]+)/);
+  if (shareMatch) {
+    const [, shareId] = shareMatch;
+    try {
+      const catalogId = await getCatalogId();
+      const res = await proxyFetch(`/v2/catalogs/${catalogId}/assetshares/${shareId}`);
+      if (!res.ok) {
+        console.warn(`[lightroom] assetshares lookup failed: ${res.status}. The share may belong to a different Adobe account.`);
+        return null;
+      }
+      const json = await res.json() as { payload?: { albumId?: string; shareName?: string } };
+      const albumId = json.payload?.albumId;
+      if (!albumId) {
+        console.warn('[lightroom] share resource has no albumId in payload.');
+        return null;
+      }
+      const name = json.payload?.shareName || await fetchAlbumName(catalogId, albumId);
+      return { catalogId, albumId, name };
+    } catch (e) {
+      console.warn('[lightroom] share resolution failed:', e);
+      return null;
+    }
+  }
+  console.warn('[lightroom] URL does not match a Lightroom share or album pattern.');
   return null;
+}
+
+/** Look up an album's display name. Used to label the new folder we drop
+ *  the imported images into. Falls back to "Lightroom Import" on failure. */
+async function fetchAlbumName(catalogId: string, albumId: string): Promise<string> {
+  try {
+    const res = await proxyFetch(`/v2/catalogs/${catalogId}/albums/${albumId}`);
+    if (!res.ok) return 'Lightroom Import';
+    const json = await res.json() as { payload?: { name?: string } };
+    return json.payload?.name || 'Lightroom Import';
+  } catch {
+    return 'Lightroom Import';
+  }
 }
 
 /** List all assets in an album. Returns paginated results — caller iterates. */
