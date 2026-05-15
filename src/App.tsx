@@ -676,6 +676,16 @@ function SortableTaskItem({
   const [editing, setEditing] = useState(autoFocus);
   const [draft, setDraft] = useState(task.title);
   const titleRef = useRef<HTMLSpanElement>(null);
+  // Touch tap detection for entering edit mode. Click events on iOS fire
+  // even if the user moved up to ~10px during the touch — so relying on
+  // onClick alone meant a near-scroll attempt would unintentionally open
+  // the editor. We track touchstart position + time and only consider it
+  // a "tap" if the finger barely moved (≤ 5px) and the touch was brief
+  // (≤ 300ms). Anything beyond those thresholds is scroll-or-something-
+  // else and we leave the row alone — the iOS browser still gets to do
+  // its native scroll handling. Pure desktop is unaffected (this whole
+  // path is gated on TOUCH_DEVICE).
+  const touchTapRef = useRef<{ x: number; y: number; t: number } | null>(null);
   // "Fresh" = task was just created via + and has not yet received any user input. When the user
   // blurs out of an empty fresh task (clicks elsewhere) we start a 3-second fade-then-delete
   // timer. If they come back to it before the timer expires, we cancel the fade.
@@ -810,19 +820,39 @@ function SortableTaskItem({
       // Capture-phase pointerdown anywhere on the row aborts the fade-then-delete timer if
       // the user comes back to the task within the 3s window.
       onPointerDownCapture={fading ? cancelFade : undefined}
-      // Tap-to-edit on touch devices: the desktop UX is "single-click selects,
-      // double-click opens edit." iPhone doesn't have hover and double-tap is
-      // browser-reserved for zoom, so on touch a single tap means "I want
-      // this." We highlight (onSelect) AND flip the title into edit mode
-      // (setEditing(true)) so the keyboard pops up immediately, matching the
-      // iOS Notes / Reminders affordance.
-      onClick={
-        onSelect && !isDragOverlay
-          ? () => { onSelect(); if (TOUCH_DEVICE && onRename) setEditing(true); }
-          : (TOUCH_DEVICE && onRename && !isDragOverlay
-              ? () => setEditing(true)
-              : undefined)
-      }
+      // Desktop click → onSelect (highlight). Touch tap-to-edit is handled
+      // by onTouchStart / onTouchEnd below — the click event on iOS fires
+      // even after near-scrolls (movement up to ~10px), so we can't rely
+      // on it for the "enter edit mode" intent. We DO still call onSelect
+      // from onClick on touch (it's harmless and keeps the desktop +
+      // touch selection model aligned) — just not setEditing.
+      onClick={onSelect && !isDragOverlay ? () => onSelect() : undefined}
+      // Touch tap detection: record where + when the finger landed.
+      onTouchStart={TOUCH_DEVICE && !isDragOverlay ? (e) => {
+        const t = e.touches[0];
+        if (t) touchTapRef.current = { x: t.clientX, y: t.clientY, t: Date.now() };
+      } : undefined}
+      // On lift, confirm it was a real tap (≤ 5px movement, ≤ 300ms) and
+      // only then enter edit. Scrolls (more motion) and long-presses (the
+      // dnd-kit TouchSensor will have taken over by then) fall through
+      // untouched. e.target check skips taps on interactive children
+      // (checkbox button, trash button, etc.) which have their own handlers.
+      onTouchEnd={TOUCH_DEVICE && !isDragOverlay && onRename ? (e) => {
+        const start = touchTapRef.current;
+        touchTapRef.current = null;
+        if (!start) return;
+        const end = e.changedTouches[0];
+        if (!end) return;
+        const dx = Math.abs(end.clientX - start.x);
+        const dy = Math.abs(end.clientY - start.y);
+        const dt = Date.now() - start.t;
+        if (dx > 5 || dy > 5 || dt > 300) return; // scrolled or long-pressed → not a tap
+        // Skip if the target is an interactive child (button / input / etc.) —
+        // those already have their own handlers, no need to ALSO open edit.
+        const t = e.target as HTMLElement | null;
+        if (t && (t.closest('button') || t.closest('input') || t.closest('textarea'))) return;
+        setEditing(true);
+      } : undefined}
       onMouseEnter={!isDragging && !isDragOverlay ? () => setHovered(true) : undefined}
       onMouseMove={!isDragging && !isDragOverlay && !hovered ? () => setHovered(true) : undefined}
       onMouseLeave={!isDragging && !isDragOverlay ? () => setHovered(false) : undefined}
@@ -951,6 +981,15 @@ function SortableTaskItem({
             onPointerDown={(e) => {
               if (editing) { e.stopPropagation(); return; }
               if (!onRename) return;
+              // On TOUCH devices we DO NOT enter edit mode on pointerdown —
+              // pointerdown fires on touchstart, before iOS can decide whether
+              // the gesture is a tap, a scroll, or a long-press. We'd open the
+              // editor on every scroll attempt. The row's onTouchEnd handler
+              // (above) confirms a real tap (≤5px / ≤300ms) before opening
+              // the editor. The desktop pointerdown path stays — it's what
+              // enables drag-select on the first mouse-click, which still
+              // matters on a real mouse + keyboard setup.
+              if (TOUCH_DEVICE) return;
               // User came back to edit the title — cancel any pending sentence-case conversion
               // so it can't fire mid-type and clobber what they're about to write.
               onCancelPendingRename?.();
@@ -4706,6 +4745,27 @@ export default function App() {
     }
   }, [clients, setClients]);
 
+  // Touch tap-outside-to-blur. When the user has a task title in edit mode
+  // (its contentEditable element is focused, the iOS keyboard is up) and
+  // they tap on a different row, the row background, or anywhere else on
+  // the page, blur the active element so its onBlur runs — closing edit
+  // mode, dismissing the keyboard, freeing dnd-kit's TouchSensor to start
+  // a fresh drag on whatever they tapped next. Without this, iOS keeps
+  // focus on the original editable and the second tap is "wasted"
+  // re-focusing instead of starting the new interaction.
+  useEffect(() => {
+    if (!TOUCH_DEVICE) return;
+    const onDocTouchStart = (e: TouchEvent) => {
+      const active = document.activeElement;
+      if (!active || !(active instanceof HTMLElement)) return;
+      if (active.contentEditable !== 'true' && active.tagName !== 'INPUT' && active.tagName !== 'TEXTAREA') return;
+      const target = e.target as Node | null;
+      if (target && active.contains(target)) return;
+      active.blur();
+    };
+    document.addEventListener('touchstart', onDocTouchStart, { passive: true, capture: true });
+    return () => document.removeEventListener('touchstart', onDocTouchStart, true);
+  }, []);
   // Gesture disambiguation across mouse + touch + keyboard:
   //
   // MouseSensor (desktop) — distance:8 means a mouse-down + 8px of motion
