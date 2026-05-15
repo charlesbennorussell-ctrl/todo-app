@@ -5,7 +5,8 @@ import { Plus, X, List, FolderTree, SlidersHorizontal as SettingsIcon, Folder, T
 import {
   DndContext,
   KeyboardSensor,
-  PointerSensor,
+  MouseSensor,
+  TouchSensor,
   useSensor,
   useSensors,
   DragEndEvent,
@@ -26,6 +27,16 @@ import {
   useSortable,
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
+
+// Touch-primary device detection. Resolved once at module load (the answer
+// is stable per session) so we don't pay for matchMedia on every render.
+// Matches phones, finger-only tablets, etc. — devices where hover doesn't
+// exist and the pointer is "coarse" (a finger, not a precise mouse pointer).
+// Surfaces with both touch + mouse (some hybrids) resolve to false so they
+// stay on the desktop tap-to-select-then-double-click-to-edit affordance.
+const TOUCH_DEVICE = typeof window !== 'undefined'
+  && typeof window.matchMedia === 'function'
+  && window.matchMedia('(hover: none) and (pointer: coarse)').matches;
 import { useStorage, useMutation, useUndo, useRedo } from '@liveblocks/react/suspense';
 import { uploadFocusImage, deleteFocusImageBlob } from './supabase';
 import { getCachedImageUrl, getCachedImageUrlSync, evictCachedImage } from './imageCache';
@@ -781,7 +792,19 @@ function SortableTaskItem({
       // Capture-phase pointerdown anywhere on the row aborts the fade-then-delete timer if
       // the user comes back to the task within the 3s window.
       onPointerDownCapture={fading ? cancelFade : undefined}
-      onClick={onSelect && !isDragOverlay ? () => onSelect() : undefined}
+      // Tap-to-edit on touch devices: the desktop UX is "single-click selects,
+      // double-click opens edit." iPhone doesn't have hover and double-tap is
+      // browser-reserved for zoom, so on touch a single tap means "I want
+      // this." We highlight (onSelect) AND flip the title into edit mode
+      // (setEditing(true)) so the keyboard pops up immediately, matching the
+      // iOS Notes / Reminders affordance.
+      onClick={
+        onSelect && !isDragOverlay
+          ? () => { onSelect(); if (TOUCH_DEVICE && onRename) setEditing(true); }
+          : (TOUCH_DEVICE && onRename && !isDragOverlay
+              ? () => setEditing(true)
+              : undefined)
+      }
       onMouseEnter={!isDragging && !isDragOverlay ? () => setHovered(true) : undefined}
       onMouseMove={!isDragging && !isDragOverlay && !hovered ? () => setHovered(true) : undefined}
       onMouseLeave={!isDragging && !isDragOverlay ? () => setHovered(false) : undefined}
@@ -4653,8 +4676,25 @@ export default function App() {
     }
   }, [clients, setClients]);
 
+  // Gesture disambiguation across mouse + touch + keyboard:
+  //
+  // MouseSensor (desktop) — distance:8 means a mouse-down + 8px of motion
+  // starts a drag. Pure clicks (no motion) stay clicks and fire the
+  // existing onClick / onDoubleClick / onContextMenu handlers normally.
+  //
+  // TouchSensor (mobile) — delay:500 + tolerance:5 means a long-press
+  // starts a drag. If the finger moves more than 5px within the 500ms
+  // wait the sensor cancels — so a vertical swipe becomes a scroll (the
+  // browser keeps its native scroll handling), and a quick tap becomes a
+  // tap (browser fires click → existing handlers run). Long-press without
+  // movement crosses 500ms → drag activates and the tile lifts. This is
+  // the same pattern Apple's reorderable lists, Trello, and Todoist use.
+  //
+  // KeyboardSensor is unchanged — Tab to focus a card, Space to pick up,
+  // arrows to move, Space to drop.
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(MouseSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 500, tolerance: 5 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
   // BeforeDragging (vs Always): measure droppable rects ONCE at drag start, not on every render.
