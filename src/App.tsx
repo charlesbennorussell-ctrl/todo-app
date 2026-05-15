@@ -813,7 +813,14 @@ function SortableTaskItem({
         scale: isDragOverlay ? 1.02 : 1,
         // No visible fade for the 15-min "fresh-empty" delete countdown — the row stays full
         // opacity until silent deletion. Only isDragging fades the source while a drag is happening.
-        opacity: isDragging ? 0 : 1,
+        // Opacity hides the SOURCE while drag is active so it doesn't double-
+        // render under the floating DragOverlay clone. Critically gated on
+        // `!isDragOverlay` — the clone inside the overlay portal shares the
+        // same useSortable id, so isDragging is true for BOTH the source and
+        // the clone. Without the !isDragOverlay guard, the clone would fade
+        // to 0 too, which on iOS Safari can land mid-transition and show
+        // "text but no card" or the half-faded source ghosting the overlay.
+        opacity: isDragging && !isDragOverlay ? 0 : 1,
         // Background priority: drag overlay leaves the bg alone; selected wins over hover with
         // a 25% brighter wash (0.075 vs the 0.03 hover); hover wins over default; default is
         // transparent. Same 60ms in / 300ms out animation for all transitions.
@@ -827,7 +834,12 @@ function SortableTaskItem({
       }}
       transition={{
         scale: { duration: 0.18 },
-        opacity: isDragging ? { duration: 0.12, ease: "easeOut" } : { duration: 0 },
+        // Snap-to-invisible on touch (no fade) so the source never ghosts
+        // the overlay during the half-second iOS render handoff. Desktop
+        // can afford the fade since the mouse-drag pickup is instant.
+        opacity: isDragging && !isDragOverlay
+          ? (TOUCH_DEVICE ? { duration: 0 } : { duration: 0.12, ease: "easeOut" })
+          : { duration: 0 },
         backgroundColor: { duration: hovered ? 0.06 : 0.3, ease: [0.85, 0, 0.15, 1] },
       }}
     >
@@ -6041,7 +6053,24 @@ export default function App() {
     setActiveTaskIdState((e.active.data.current?.task as Task | undefined)?.id ?? String(e.active.id));
     setActiveType('task');
     const rect = e.active.rect.current.initial;
-    if (rect) { setActiveRectWidth(rect.width); setActiveRectHeight(rect.height); }
+    if (rect && rect.width > 0) {
+      setActiveRectWidth(rect.width); setActiveRectHeight(rect.height);
+    } else {
+      // iOS-Safari fast-path: TouchSensor's long-press activation can fire
+      // before dnd-kit's measuring loop has populated rect.current.initial.
+      // Fall back to a direct getBoundingClientRect() on the source row
+      // via its data-task-row attribute — without this the DragOverlay
+      // wrapper renders width:0 and you see only the text floating
+      // without the card backdrop.
+      const taskId = (e.active.data.current?.task as Task | undefined)?.id;
+      if (taskId) {
+        const el = document.querySelector(`[data-task-row="${taskId}"]`) as HTMLElement | null;
+        if (el) {
+          const r = el.getBoundingClientRect();
+          if (r.width > 0) { setActiveRectWidth(r.width); setActiveRectHeight(r.height); }
+        }
+      }
+    }
     // Calendar cards tag their useSortable data with calendarCellId; remember it so the overlay
     // and the column-offset effect can both branch on calendar vs list origin.
     const cellId = (e.active.data.current?.calendarCellId as string | undefined) || null;
@@ -8705,7 +8734,7 @@ export default function App() {
                   x: { type: "spring", stiffness: 320, damping: 34, mass: 0.7 },
                 }}
                 className="bg-[#3a3a3a] overflow-hidden"
-                style={{ width: activeRectWidth, height: activeRectHeight, willChange: 'transform' }}
+                style={{ width: activeRectWidth ?? '100%', height: activeRectHeight, willChange: 'transform' }}
               >
                 <CalendarCardBody task={activeTask} projects={projects} clients={clients} taskOrder={taskOrder} />
               </motion.div>
@@ -8722,7 +8751,7 @@ export default function App() {
                   x: { type: "spring", stiffness: 320, damping: 34, mass: 0.7 },
                 }}
                 className="bg-[#333333]"
-                style={{ width: activeRectWidth, willChange: 'transform' }}
+                style={{ width: activeRectWidth ?? '100%', willChange: 'transform' }}
               >
                 {/* Forward the SAME render-controlling props the source row uses
                     (taskOrder, density, hasFocusContent), otherwise the lifted
@@ -8758,7 +8787,7 @@ export default function App() {
               }}
               transition={{ scale: { type: "spring", stiffness: 600, damping: 30, mass: 0.4 } }}
               className="bg-[#333333] h-[37px] box-border flex flex-row gap-2 items-center px-[31px]"
-              style={{ width: activeRectWidth, willChange: 'transform' }}
+              style={{ width: activeRectWidth ?? '100%', willChange: 'transform' }}
             >
               <Folder size={12} className="text-[#656464]" />
               <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] text-white whitespace-nowrap">{activeProject.name}</span>
@@ -8777,7 +8806,7 @@ export default function App() {
                 x: { type: "spring", stiffness: 320, damping: 34, mass: 0.7 },
               }}
               className="bg-[#333333] h-[37px] box-border flex flex-row gap-2 items-center pl-[43px] pr-[31px]"
-              style={{ width: activeRectWidth, willChange: 'transform' }}
+              style={{ width: activeRectWidth ?? '100%', willChange: 'transform' }}
             >
               <LIndent />
               <TaskCheckbox completed={activeProjTask.completed} onToggle={() => {}} />
@@ -8800,7 +8829,7 @@ export default function App() {
               }}
               transition={{ scale: { type: "spring", stiffness: 600, damping: 30, mass: 0.4 } }}
               className="relative bg-[#1f1f1f] overflow-hidden"
-              style={{ width: activeRectWidth, height: activeRectHeight, willChange: 'transform' }}
+              style={{ width: activeRectWidth ?? '100%', height: activeRectHeight, willChange: 'transform' }}
             >
               <CachedImage
                 src={resolveImageSrc(activeDamImage)}
