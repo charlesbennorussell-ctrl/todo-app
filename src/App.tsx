@@ -753,9 +753,22 @@ function SortableTaskItem({
   // gets back transform/isDragging values describing the SOURCE row's reordering. Applying those to
   // the overlay clone makes it inherit the source's animation and can compound with the outer
   // overlay wrapper's transform â€” visible as a small vertical "jump". Neutralize them on the clone.
-  const style = isDragOverlay
+  // Three-way style switch for the source row's wrapper:
+  //   1. Inside the DragOverlay clone — neutralize the inherited transform /
+  //      transition so the clone doesn't compound the outer overlay's motion.
+  //   2. Source while being dragged — STRIP the dnd-kit transform (the
+  //      DragOverlay is the moving thing; the source should stay put in its
+  //      original slot) AND hide via `visibility: hidden`. Visibility is a
+  //      synchronous CSS property that iOS Safari respects immediately —
+  //      framer-motion's animate-opacity path was landing mid-transition on
+  //      touch and producing the "ghost behind the overlay" glitch.
+  //   3. Source in its normal state — apply dnd-kit's transform for
+  //      displacement-when-peers-are-dragged animation.
+  const style: React.CSSProperties = isDragOverlay
     ? { transform: undefined, transition: 'none' }
-    : { transform: CSS.Transform.toString(transform), transition: !isAnyDragging ? 'none' : `transform ${MOTION.base}ms ${MOTION.easeOut}` };
+    : (isDragging
+        ? { transform: undefined, transition: 'none', visibility: 'hidden' }
+        : { transform: CSS.Transform.toString(transform), transition: !isAnyDragging ? 'none' : `transform ${MOTION.base}ms ${MOTION.easeOut}` });
   const isScheduled = task.type === 'scheduled';
   const isNext = task.section === 'next' || task.section === 'tomorrow';
   const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID;
