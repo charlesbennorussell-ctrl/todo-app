@@ -7479,7 +7479,7 @@ export default function App() {
             </div>
             {/* Columns row — flex-1 + min-h-0 so children can shrink to fit and each column
                 can have its own overflow:auto scroller. */}
-            <div className="flex flex-row gap-0 flex-1 min-h-0 overflow-x-auto">
+            <div className="flex flex-row gap-0 flex-1 min-h-0 overflow-x-auto mobile-carousel">
               {LISTS.map(renderColumn)}
             </div>
           </div>
@@ -7496,7 +7496,7 @@ export default function App() {
             <div className="shrink-0">
               <TopHeader viewName="Projects" />
             </div>
-            <div className="flex flex-row gap-0 flex-1 min-h-0 overflow-x-auto">
+            <div className="flex flex-row gap-0 flex-1 min-h-0 overflow-x-auto mobile-carousel">
             {/* Sidebar: Resources (people) + Clients. Scrolls independently. */}
             <div className="flex-1 min-w-[280px] flex flex-col min-h-0 overflow-hidden">
               {/* Spacer matching the column-title row above each column (h-[37px] + mb=dcr) so
@@ -7629,7 +7629,7 @@ export default function App() {
               <div className="shrink-0">
                 <TopHeader viewName="Focus" />
               </div>
-              <div className="flex flex-row gap-0 flex-1 min-h-0 overflow-x-auto">
+              <div className="flex flex-row gap-0 flex-1 min-h-0 overflow-x-auto mobile-carousel">
                 {/* Column 1 — Dashboard */}
                 <div className="flex-1 min-w-[280px] flex flex-col min-h-0 overflow-hidden">
                   <div className="shrink-0 group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]" style={{ marginBottom: SPACING.dcr }}>

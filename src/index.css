@@ -30,6 +30,44 @@
 html, body, #root { height: 100%; margin: 0; }
 body { background: #282828; color: white; }
 
+/* iPhone-first column carousel.
+   On viewports ≤ 767px (Tailwind `md` breakpoint), the existing
+   horizontally-scrolling column rows (List view's Dashboard/Work/Projects/
+   Admin, Project view's Resources/Clients/Today/Tomorrow/Next, etc.) become
+   a one-column-at-a-time swipe carousel — each column takes the full
+   viewport width, scroll-snap locks the swipe onto exactly one page per
+   gesture, and the fixed TopHeader + bottom toolbar stay put because they
+   live OUTSIDE the .mobile-carousel container. The desktop multi-column
+   layout is untouched at ≥ 768px.
+   The !important overrides are required to beat the columns' existing
+   `flex-1 min-w-[280px]` Tailwind utilities. */
+@media (max-width: 767px) {
+  .mobile-carousel {
+    scroll-snap-type: x mandatory;
+    scroll-behavior: smooth;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+  }
+  .mobile-carousel > * {
+    flex-shrink: 0 !important;
+    flex-grow: 0 !important;
+    flex-basis: 100vw !important;
+    min-width: 100vw !important;
+    width: 100vw !important;
+    max-width: 100vw !important;
+    scroll-snap-align: start;
+    scroll-snap-stop: always;
+  }
+  /* iPhone safe-area: paint the dark background behind the notch + home
+     indicator when running as a standalone PWA. The bottom toolbar's 76px
+     padding stays; we add to it via env() so the toolbar clears the home
+     indicator on iPhone X-era and newer. */
+  body {
+    padding-top: env(safe-area-inset-top);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+}
+
 /* Disable text selection by default — dragging cards/columns shouldn't smear a selection across the page.
    Inputs, textareas, and contentEditable nodes opt back in so titles can still be edited. */
 html, body { user-select: none; -webkit-user-select: none; }
