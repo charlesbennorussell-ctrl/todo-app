@@ -622,9 +622,14 @@ const Displaced = memo(function Displaced({
         transform: offset ? `translate3d(0, ${offset}px, 0)` : undefined,
         marginTop: gap || undefined,
         transition: active ? DISPLACE_TRANSITION : 'none',
-        // Promote to its own compositor layer only while a drag is happening ï¿½
+        // Promote to its own compositor layer only while a drag is happening —
         // `will-change` is a strong hint and is wasteful when nothing is moving.
-        willChange: active ? 'transform, margin-top' : 'auto',
+        // CRITICAL: skip the promotion on TOUCH devices. iOS Safari leaves
+        // stale snapshots of will-change'd layers behind during transform
+        // updates, producing the "ghost doubling" of displaced peer rows.
+        // Desktop browsers handle the promotion cleanly so we keep the perf
+        // win there.
+        willChange: active && !TOUCH_DEVICE ? 'transform, margin-top' : 'auto',
       }}
     >
       {children}
