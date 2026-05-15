@@ -1,10 +1,27 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import { LiveblocksProvider, RoomProvider, ClientSideSuspense } from '@liveblocks/react/suspense';
 import App from './App';
+import MobileApp from './MobileApp';
 import './index.css';
 import './liveblocks.config';
 import { initialTasks, initialProjects, initialClients, initialPeople } from './data';
+
+// Mobile-vs-desktop router. matchMedia is reactive — if the user rotates an
+// iPad mid-session (or resizes a desktop browser into mobile-width), the app
+// swaps shells. 767px is the standard Tailwind `md` breakpoint, matching the
+// width where the desktop's 4-column layout starts feeling cramped.
+const MOBILE_BREAKPOINT = '(max-width: 767px)';
+function Shell() {
+  const [isMobile, setIsMobile] = useState<boolean>(() => typeof window !== 'undefined' && window.matchMedia(MOBILE_BREAKPOINT).matches);
+  useEffect(() => {
+    const mq = window.matchMedia(MOBILE_BREAKPOINT);
+    const onChange = (e: MediaQueryListEvent) => setIsMobile(e.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+  return isMobile ? <MobileApp /> : <App />;
+}
 
 const publicApiKey = import.meta.env.VITE_LIVEBLOCKS_PUBLIC_KEY as string | undefined;
 const roomId = (import.meta.env.VITE_ROOM_ID as string | undefined) || 'todo-app-v3';
@@ -48,7 +65,7 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
           }}
         >
           <ClientSideSuspense fallback={<Loading />}>
-            <App />
+            <Shell />
           </ClientSideSuspense>
         </RoomProvider>
       </LiveblocksProvider>

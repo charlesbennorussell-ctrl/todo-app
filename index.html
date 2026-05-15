@@ -2,8 +2,24 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Things</title>
+    <!-- viewport-fit=cover lets the iPhone notch area paint our dark
+         background instead of leaving white bars. user-scalable=no avoids
+         accidental pinch-zoom when swiping the page-stack horizontally. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no" />
+    <title>Ctrl-Project</title>
+    <!-- Theme color matches the app background so the iPhone status-bar
+         tint blends cleanly when running as a home-screen app. -->
+    <meta name="theme-color" content="#282828" />
+    <!-- iOS PWA meta: "Add to Home Screen" → opens full-screen without the
+         Safari chrome. apple-mobile-web-app-status-bar-style=black-translucent
+         lets our app paint behind the status bar (paired with the safe-area
+         padding handled in MobileApp). -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Ctrl-Project" />
+    <link rel="apple-touch-icon" href="/todo-app/icons/icon-192.png" />
+    <link rel="manifest" href="/todo-app/manifest.webmanifest" />
   </head>
   <body>
     <div id="root"></div>
