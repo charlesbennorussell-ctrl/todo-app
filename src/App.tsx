@@ -34,22 +34,48 @@ import { CSS } from '@dnd-kit/utilities';
 // exist and the pointer is "coarse" (a finger, not a precise mouse pointer).
 // Surfaces with both touch + mouse (some hybrids) resolve to false so they
 // stay on the desktop tap-to-select-then-double-click-to-edit affordance.
-const TOUCH_DEVICE = typeof window !== 'undefined'
-  && typeof window.matchMedia === 'function'
-  && window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+// Touch-primary detection. Liberal — true on ANY of: touchstart available,
+// maxTouchPoints > 0, hover-none pointer-coarse media query. Resolves once
+// at module load (the answer is stable per session). The matchMedia alone
+// returned false in some iPhone PWA configurations, which silently
+// disabled the whole touch UX path.
+const TOUCH_DEVICE = typeof window !== 'undefined' && (
+  ('ontouchstart' in window)
+  || ((navigator.maxTouchPoints || 0) > 0)
+  || (typeof window.matchMedia === 'function' && window.matchMedia('(hover: none) and (pointer: coarse)').matches)
+);
 
-// Touch UX guard — module-level timestamp of the last "blur the active
-// editable because the user tapped outside it" event. The row's onTouchEnd
-// handler checks this: if the tap that landed on a row just happened to be
-// the same touch that triggered the blur (within ~200ms), it does NOT
-// enter edit mode on the new row. The user gets an intermediate "nothing
-// selected" state — they can then either tap again to edit, or long-press
-// to drag. Matches the iOS Notes / Reminders convention where tapping
-// outside the editor "consumes" that tap to dismiss the keyboard, and a
-// fresh tap is required for the next intent. Long-presses are not affected
-// (they're caught by dnd-kit's TouchSensor delay, which fires on a longer
-// timeline than the 200ms guard).
+// Module-level flag toggled when the touch-outside-edit listener wants to
+// suppress the click that's about to follow. An always-on capture-phase
+// click handler (installed once on module load below) reads the flag and
+// stopImmediatePropagation + preventDefault when it's set. Always-on
+// avoids the addEventListener-race we had with the per-touch registration
+// pattern: there's no window where the click could fire before the
+// blocker is in place.
+let blockNextClick = false;
+let blockNextClickAt = 0;
+if (typeof document !== 'undefined') {
+  document.addEventListener('click', (e) => {
+    // Honor the flag only if it was set recently (< 800ms ago) — a longer
+    // gap means the user did something other than tap (long-press, scroll,
+    // lift-off-without-click) and we should let the next click through.
+    if (blockNextClick && Date.now() - blockNextClickAt < 800) {
+      blockNextClick = false;
+      e.stopImmediatePropagation();
+      e.preventDefault();
+      return;
+    }
+    blockNextClick = false;
+  }, { capture: true });
+}
+
+// Module-level timestamp of the most recent touch-outside-edit blur. The
+// row's onTouchEnd handler checks this to skip setEditing on the same
+// touch that just dismissed a previous editor (touchend fires before
+// click, so we can't rely on the click blocker alone for touchend
+// suppression).
 let recentEditBlurAt = 0;
+
 import { useStorage, useMutation, useUndo, useRedo } from '@liveblocks/react/suspense';
 import { uploadFocusImage, deleteFocusImageBlob } from './supabase';
 import { getCachedImageUrl, getCachedImageUrlSync, evictCachedImage } from './imageCache';
@@ -4770,20 +4796,20 @@ export default function App() {
     }
   }, [clients, setClients]);
 
-  // Touch tap-outside-to-blur. When the user has a task title in edit mode
-  // (its contentEditable element is focused, the iOS keyboard is up) and
-  // they tap on a different row, the row background, or anywhere else on
-  // the page, blur the active element so its onBlur runs — closing edit
-  // mode, dismissing the keyboard, freeing dnd-kit's TouchSensor to start
-  // a fresh drag on whatever they tapped next. Without this, iOS keeps
-  // focus on the original editable and the second tap is "wasted"
-  // re-focusing instead of starting the new interaction.
+  // Touch-outside-to-blur. Capture-phase document listener that detects
+  // when a touch lands outside the currently-editing element. When it
+  // does: (1) blurs that element (deferred to rAF so the iOS keyboard
+  // dismissal doesn't scramble dnd-kit's TouchSensor rect cache during
+  // its 500ms long-press wait), (2) stamps recentEditBlurAt so the
+  // row's onTouchEnd handler skips its setEditing call on this same
+  // touch, (3) sets blockNextClick so the always-on click handler at
+  // module-load suppresses the click that's about to follow — which is
+  // what stops the new card from getting onSelect → setSelectedTaskId.
+  // Editable detection uses isContentEditable (the DOM property, not the
+  // attribute) so it works regardless of whether React serializes
+  // contentEditable={true} as "true" or empty string.
   useEffect(() => {
     if (!TOUCH_DEVICE) return;
-    // Find any element that's ACTUALLY editable. Uses the DOM property
-    // isContentEditable rather than an attribute selector — React can
-    // serialize `contentEditable={true}` as either "true" or empty
-    // string depending on version, and we don't want to depend on which.
     const findEditable = (): HTMLElement | null => {
       const els = document.querySelectorAll('[contenteditable]');
       for (const el of els) {
@@ -4796,36 +4822,9 @@ export default function App() {
       if (!editable) return;
       const target = e.target as Node | null;
       if (target && editable.contains(target)) return;
-      // Stamp BEFORE the blur so the row's onTouchEnd guard sees it
-      // (onTouchEnd uses recentEditBlurAt to skip the setEditing call).
       recentEditBlurAt = Date.now();
-      // Block the click event that's about to follow this touchstart
-      // from reaching ANY handler. A one-shot capture-phase listener
-      // at document calls stopImmediatePropagation, which kills the
-      // event before it can propagate to React's event delegate at
-      // the root — so the new card's onClick (and therefore onSelect)
-      // never fires. This is the real fix: the previous time-based
-      // recentEditBlurAt guard inside onClick was missing because
-      // iOS click-event delay is variable + capped at 0-300ms+.
-      const blockClickOnce = (ev: MouseEvent) => {
-        ev.stopImmediatePropagation();
-        ev.preventDefault();
-        document.removeEventListener('click', blockClickOnce, true);
-        clearTimeout(autoCleanup);
-      };
-      document.addEventListener('click', blockClickOnce, { capture: true });
-      // Auto-cleanup if no click follows within 800ms (long-press,
-      // scroll, the user just lifted their finger off the screen).
-      const autoCleanup = setTimeout(() => {
-        document.removeEventListener('click', blockClickOnce, true);
-      }, 800);
-      // Defer the actual blur to the next animation frame. The blur
-      // dismisses the iOS keyboard, which kicks off a ~250ms layout-
-      // -shift animation. If we did this synchronously inside touchstart,
-      // dnd-kit's TouchSensor would still be registering the touch and
-      // the layout shift would scramble its rect measurements — long-
-      // press drag would either fail to activate or activate on the
-      // wrong target.
+      blockNextClick = true;
+      blockNextClickAt = Date.now();
       requestAnimationFrame(() => editable.blur());
     };
     document.addEventListener('touchstart', onDocTouchStart, { passive: true, capture: true });
