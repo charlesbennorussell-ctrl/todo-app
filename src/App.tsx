@@ -4780,31 +4780,52 @@ export default function App() {
   // re-focusing instead of starting the new interaction.
   useEffect(() => {
     if (!TOUCH_DEVICE) return;
+    // Find any element that's ACTUALLY editable. Uses the DOM property
+    // isContentEditable rather than an attribute selector — React can
+    // serialize `contentEditable={true}` as either "true" or empty
+    // string depending on version, and we don't want to depend on which.
+    const findEditable = (): HTMLElement | null => {
+      const els = document.querySelectorAll('[contenteditable]');
+      for (const el of els) {
+        if (el instanceof HTMLElement && el.isContentEditable) return el;
+      }
+      return null;
+    };
     const onDocTouchStart = (e: TouchEvent) => {
-      // Find the currently-editing element via DOM query, NOT via
-      // document.activeElement. iOS Safari clears the active element
-      // the instant the user touches a different element — so by the
-      // time this capture-phase listener runs, document.activeElement
-      // is already document.body and the previous check was returning
-      // early without ever stamping recentEditBlurAt. Querying for any
-      // contenteditable="true" finds the editor regardless of whether
-      // iOS has already blurred it from a focus-tracking standpoint.
-      const editable = document.querySelector('[contenteditable="true"]') as HTMLElement | null;
+      const editable = findEditable();
       if (!editable) return;
       const target = e.target as Node | null;
       if (target && editable.contains(target)) return;
-      // Stamp BEFORE the blur so the onClick / onTouchEnd guards see it
-      // even if the blur callback runs synchronously and triggers React
-      // re-renders that race the row handlers.
+      // Stamp BEFORE the blur so the row's onTouchEnd guard sees it
+      // (onTouchEnd uses recentEditBlurAt to skip the setEditing call).
       recentEditBlurAt = Date.now();
+      // Block the click event that's about to follow this touchstart
+      // from reaching ANY handler. A one-shot capture-phase listener
+      // at document calls stopImmediatePropagation, which kills the
+      // event before it can propagate to React's event delegate at
+      // the root — so the new card's onClick (and therefore onSelect)
+      // never fires. This is the real fix: the previous time-based
+      // recentEditBlurAt guard inside onClick was missing because
+      // iOS click-event delay is variable + capped at 0-300ms+.
+      const blockClickOnce = (ev: MouseEvent) => {
+        ev.stopImmediatePropagation();
+        ev.preventDefault();
+        document.removeEventListener('click', blockClickOnce, true);
+        clearTimeout(autoCleanup);
+      };
+      document.addEventListener('click', blockClickOnce, { capture: true });
+      // Auto-cleanup if no click follows within 800ms (long-press,
+      // scroll, the user just lifted their finger off the screen).
+      const autoCleanup = setTimeout(() => {
+        document.removeEventListener('click', blockClickOnce, true);
+      }, 800);
       // Defer the actual blur to the next animation frame. The blur
       // dismisses the iOS keyboard, which kicks off a ~250ms layout-
       // -shift animation. If we did this synchronously inside touchstart,
       // dnd-kit's TouchSensor would still be registering the touch and
       // the layout shift would scramble its rect measurements — long-
       // press drag would either fail to activate or activate on the
-      // wrong target. By the time the rAF fires, dnd-kit's touchstart
-      // path has already completed.
+      // wrong target.
       requestAnimationFrame(() => editable.blur());
     };
     document.addEventListener('touchstart', onDocTouchStart, { passive: true, capture: true });
