@@ -45,6 +45,68 @@ const TOUCH_DEVICE = typeof window !== 'undefined' && (
   || (typeof window.matchMedia === 'function' && window.matchMedia('(hover: none) and (pointer: coarse)').matches)
 );
 
+// Mobile debug overlay. Push a line via debugLog(message) and the most
+// recent ~20 events render in a translucent strip at the bottom of the
+// iPhone screen. Toggle by triple-tapping the strip (tap-tap-tap quickly
+// at the very bottom of the screen). Only visible on TOUCH_DEVICE.
+const DEBUG_BUFFER: Array<{ t: number; msg: string }> = [];
+const DEBUG_SUBSCRIBERS: Array<() => void> = [];
+function debugLog(msg: string) {
+  if (!TOUCH_DEVICE) return;
+  DEBUG_BUFFER.push({ t: Date.now(), msg });
+  if (DEBUG_BUFFER.length > 30) DEBUG_BUFFER.shift();
+  for (const fn of DEBUG_SUBSCRIBERS) fn();
+}
+function DebugOverlay() {
+  const [, setTick] = useState(0);
+  const [shown, setShown] = useState(true);
+  useEffect(() => {
+    const sub = () => setTick((n) => n + 1);
+    DEBUG_SUBSCRIBERS.push(sub);
+    return () => {
+      const i = DEBUG_SUBSCRIBERS.indexOf(sub);
+      if (i >= 0) DEBUG_SUBSCRIBERS.splice(i, 1);
+    };
+  }, []);
+  if (!TOUCH_DEVICE) return null;
+  const recent = DEBUG_BUFFER.slice(-20);
+  return (
+    <div
+      onClick={() => setShown((v) => !v)}
+      style={{
+        position: 'fixed',
+        bottom: 0,
+        left: 0,
+        right: 0,
+        zIndex: 999999,
+        background: 'rgba(0, 0, 0, 0.85)',
+        color: '#0ff',
+        fontFamily: 'monospace',
+        fontSize: 9,
+        lineHeight: '12px',
+        padding: shown ? '4px 6px' : '2px 6px',
+        maxHeight: shown ? '40vh' : '14px',
+        overflow: 'hidden',
+        pointerEvents: 'auto',
+        borderTop: '1px solid #0ff',
+      }}
+    >
+      {shown ? (
+        <>
+          <div style={{ color: '#ff0', marginBottom: 2 }}>
+            TOUCH={String(TOUCH_DEVICE)} blockNext={String(blockNextClick)} editBlur={Date.now() - recentEditBlurAt}ms ago — tap to hide
+          </div>
+          {recent.map((e, i) => (
+            <div key={i}>+{e.t - (recent[0]?.t || 0)}ms {e.msg}</div>
+          ))}
+        </>
+      ) : (
+        <div style={{ color: '#0ff' }}>debug ({DEBUG_BUFFER.length}) — tap to show</div>
+      )}
+    </div>
+  );
+}
+
 // Module-level flag toggled when the touch-outside-edit listener wants to
 // suppress the click that's about to follow. An always-on capture-phase
 // click handler (installed once on module load below) reads the flag and
@@ -56,16 +118,16 @@ let blockNextClick = false;
 let blockNextClickAt = 0;
 if (typeof document !== 'undefined') {
   document.addEventListener('click', (e) => {
-    // Honor the flag only if it was set recently (< 800ms ago) — a longer
-    // gap means the user did something other than tap (long-press, scroll,
-    // lift-off-without-click) and we should let the next click through.
+    const tgt = (e.target as HTMLElement | null)?.tagName ?? '?';
     if (blockNextClick && Date.now() - blockNextClickAt < 800) {
       blockNextClick = false;
       e.stopImmediatePropagation();
       e.preventDefault();
+      debugLog(`CLICK BLOCKED on ${tgt}`);
       return;
     }
     blockNextClick = false;
+    debugLog(`click on ${tgt}`);
   }, { capture: true });
 }
 
@@ -868,7 +930,8 @@ function SortableTaskItem({
       // (nothing selected, nothing in edit) after tapping out, and a
       // fresh tap to choose the next action.
       onClick={onSelect && !isDragOverlay ? () => {
-        if (TOUCH_DEVICE && Date.now() - recentEditBlurAt < 500) return;
+        if (TOUCH_DEVICE && Date.now() - recentEditBlurAt < 500) { debugLog(`onClick BLOCKED (editBlur ${Date.now() - recentEditBlurAt}ms ago)`); return; }
+        debugLog(`onClick → onSelect(${task.id.slice(0,8)})`);
         onSelect();
       } : undefined}
       // Touch tap detection: record where + when the finger landed.
@@ -894,14 +957,15 @@ function SortableTaskItem({
         const dx = Math.abs(end.clientX - start.x);
         const dy = Math.abs(end.clientY - start.y);
         const dt = Date.now() - start.t;
-        if (dx > 5 || dy > 5 || dt > 300) return; // scrolled or long-pressed → not a tap
+        if (dx > 5 || dy > 5 || dt > 300) { debugLog(`onTouchEnd skip (dx=${dx} dy=${dy} dt=${dt})`); return; } // scrolled or long-pressed → not a tap
         // This touch already did its job — dismissed a prior editor. Don't
         // also open this row's editor on the same gesture.
-        if (Date.now() - recentEditBlurAt < 500) return;
+        if (Date.now() - recentEditBlurAt < 500) { debugLog(`onTouchEnd BLOCKED (editBlur ${Date.now() - recentEditBlurAt}ms ago)`); return; }
         // Skip if the target is an interactive child (button / input / etc.) —
         // those already have their own handlers, no need to ALSO open edit.
         const t = e.target as HTMLElement | null;
-        if (t && (t.closest('button') || t.closest('input') || t.closest('textarea'))) return;
+        if (t && (t.closest('button') || t.closest('input') || t.closest('textarea'))) { debugLog(`onTouchEnd skip (interactive child ${t.tagName})`); return; }
+        debugLog(`onTouchEnd → setEditing(true) ${task.id.slice(0,8)}`);
         setEditing(true);
       } : undefined}
       onMouseEnter={!isDragging && !isDragOverlay ? () => setHovered(true) : undefined}
@@ -4818,10 +4882,18 @@ export default function App() {
       return null;
     };
     const onDocTouchStart = (e: TouchEvent) => {
+      const tgt = (e.target as HTMLElement | null)?.tagName ?? '?';
       const editable = findEditable();
-      if (!editable) return;
+      if (!editable) {
+        debugLog(`touchstart ${tgt} (no editable found)`);
+        return;
+      }
       const target = e.target as Node | null;
-      if (target && editable.contains(target)) return;
+      if (target && editable.contains(target)) {
+        debugLog(`touchstart ${tgt} (inside editable, ignoring)`);
+        return;
+      }
+      debugLog(`touchstart ${tgt} OUTSIDE editable — blur + block`);
       recentEditBlurAt = Date.now();
       blockNextClick = true;
       blockNextClickAt = Date.now();
@@ -8987,6 +9059,7 @@ export default function App() {
           ) : null}
         </DragOverlay>
       </div>
+      <DebugOverlay />
     </DndContext>
   );
 }
