@@ -4878,8 +4878,17 @@ export default function App() {
   // contentEditable={true} as "true" or empty string.
   useEffect(() => {
     if (!TOUCH_DEVICE) return;
+    // Scope the editable search to task titles ONLY. Earlier we walked
+    // every [contenteditable] on the page — but the BriefField component
+    // in Focus mode (and any future inline editor) is ALWAYS
+    // contentEditable, not gated on focus / edit state. That meant our
+    // listener saw "edit is active" on every touch and fired blur + block
+    // + deselect every time, even when the user was just tapping a row.
+    // [data-task-title] is set on every task-title span; combined with
+    // isContentEditable (true only when editing={true} flips the React
+    // prop) it uniquely identifies the row that's actually in edit mode.
     const findEditable = (): HTMLElement | null => {
-      const els = document.querySelectorAll('[contenteditable]');
+      const els = document.querySelectorAll('[data-task-title]');
       for (const el of els) {
         if (el instanceof HTMLElement && el.isContentEditable) return el;
       }
