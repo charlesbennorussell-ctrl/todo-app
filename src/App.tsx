@@ -1003,7 +1003,11 @@ function SortableTaskItem({
         opacity: isDragging && !isDragOverlay
           ? (TOUCH_DEVICE ? { duration: 0 } : { duration: 0.12, ease: "easeOut" })
           : { duration: 0 },
-        backgroundColor: { duration: hovered ? 0.06 : 0.3, ease: [0.85, 0, 0.15, 1] },
+        // Snappy bg-color transition on touch (60ms) — desktop keeps the
+        // gentle 300ms fade-out for non-hovered rows. The slow fade was
+        // making selection-switching on the iPhone look like multiple rows
+        // were highlighted at once during the cross-fade.
+        backgroundColor: { duration: hovered || TOUCH_DEVICE ? 0.06 : 0.3, ease: [0.85, 0, 0.15, 1] },
       }}
     >
       <div onDoubleClick={(e) => { if (onEdit && !editing) { e.stopPropagation(); onEdit(e); } }} onContextMenu={(e) => { if (onQuickEdit) { e.preventDefault(); e.stopPropagation(); onQuickEdit(e); } }} className={`relative box-border flex flex-row gap-2 h-[37px] items-center pr-[31px] w-full ${showIndent ? 'pl-[43px]' : 'pl-[31px]'}`}>
@@ -4893,10 +4897,14 @@ export default function App() {
         debugLog(`touchstart ${tgt} (inside editable, ignoring)`);
         return;
       }
-      debugLog(`touchstart ${tgt} OUTSIDE editable — blur + block`);
+      debugLog(`touchstart ${tgt} OUTSIDE editable — blur + block + deselect`);
       recentEditBlurAt = Date.now();
       blockNextClick = true;
       blockNextClickAt = Date.now();
+      // Also clear the highlighted selection — without this, the row that
+      // was being edited stays highlighted after you tap off, since the
+      // blur only exits edit mode and doesn't touch selectedTaskId.
+      setSelectedTaskId(null);
       requestAnimationFrame(() => editable.blur());
     };
     document.addEventListener('touchstart', onDocTouchStart, { passive: true, capture: true });
@@ -4920,7 +4928,7 @@ export default function App() {
   // arrows to move, Space to drop.
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 8 } }),
-    useSensor(TouchSensor, { activationConstraint: { delay: 500, tolerance: 5 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 10 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
   );
   // BeforeDragging (vs Always): measure droppable rects ONCE at drag start, not on every render.
