@@ -37,6 +37,19 @@ import { CSS } from '@dnd-kit/utilities';
 const TOUCH_DEVICE = typeof window !== 'undefined'
   && typeof window.matchMedia === 'function'
   && window.matchMedia('(hover: none) and (pointer: coarse)').matches;
+
+// Touch UX guard — module-level timestamp of the last "blur the active
+// editable because the user tapped outside it" event. The row's onTouchEnd
+// handler checks this: if the tap that landed on a row just happened to be
+// the same touch that triggered the blur (within ~200ms), it does NOT
+// enter edit mode on the new row. The user gets an intermediate "nothing
+// selected" state — they can then either tap again to edit, or long-press
+// to drag. Matches the iOS Notes / Reminders convention where tapping
+// outside the editor "consumes" that tap to dismiss the keyboard, and a
+// fresh tap is required for the next intent. Long-presses are not affected
+// (they're caught by dnd-kit's TouchSensor delay, which fires on a longer
+// timeline than the 200ms guard).
+let recentEditBlurAt = 0;
 import { useStorage, useMutation, useUndo, useRedo } from '@liveblocks/react/suspense';
 import { uploadFocusImage, deleteFocusImageBlob } from './supabase';
 import { getCachedImageUrl, getCachedImageUrlSync, evictCachedImage } from './imageCache';
@@ -837,6 +850,10 @@ function SortableTaskItem({
       // dnd-kit TouchSensor will have taken over by then) fall through
       // untouched. e.target check skips taps on interactive children
       // (checkbox button, trash button, etc.) which have their own handlers.
+      // The recentEditBlurAt guard skips entering edit on the same touch
+      // that just dismissed a previously-active editor — the user gets a
+      // clean "nothing selected" intermediate state, and a fresh tap is
+      // required to open this row's editor (or a long-press to drag it).
       onTouchEnd={TOUCH_DEVICE && !isDragOverlay && onRename ? (e) => {
         const start = touchTapRef.current;
         touchTapRef.current = null;
@@ -847,6 +864,9 @@ function SortableTaskItem({
         const dy = Math.abs(end.clientY - start.y);
         const dt = Date.now() - start.t;
         if (dx > 5 || dy > 5 || dt > 300) return; // scrolled or long-pressed → not a tap
+        // This touch already did its job — dismissed a prior editor. Don't
+        // also open this row's editor on the same gesture.
+        if (Date.now() - recentEditBlurAt < 200) return;
         // Skip if the target is an interactive child (button / input / etc.) —
         // those already have their own handlers, no need to ALSO open edit.
         const t = e.target as HTMLElement | null;
@@ -4762,6 +4782,11 @@ export default function App() {
       const target = e.target as Node | null;
       if (target && active.contains(target)) return;
       active.blur();
+      // Stamp the time so the row's onTouchEnd handler knows this touch
+      // already did its job (closing the previous edit). The user gets an
+      // intermediate "nothing selected" state — a fresh tap is required
+      // to either edit a different row OR start a drag.
+      recentEditBlurAt = Date.now();
     };
     document.addEventListener('touchstart', onDocTouchStart, { passive: true, capture: true });
     return () => document.removeEventListener('touchstart', onDocTouchStart, true);
