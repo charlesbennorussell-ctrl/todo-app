@@ -836,10 +836,15 @@ function SortableTaskItem({
       // Desktop click → onSelect (highlight). Touch tap-to-edit is handled
       // by onTouchStart / onTouchEnd below — the click event on iOS fires
       // even after near-scrolls (movement up to ~10px), so we can't rely
-      // on it for the "enter edit mode" intent. We DO still call onSelect
-      // from onClick on touch (it's harmless and keeps the desktop +
-      // touch selection model aligned) — just not setEditing.
-      onClick={onSelect && !isDragOverlay ? () => onSelect() : undefined}
+      // on it for the "enter edit mode" intent. The recentEditBlurAt
+      // guard also suppresses onSelect when the tap is the one that
+      // dismissed a previous editor — the user wants a clean idle state
+      // (nothing selected, nothing in edit) after tapping out, and a
+      // fresh tap to choose the next action.
+      onClick={onSelect && !isDragOverlay ? () => {
+        if (TOUCH_DEVICE && Date.now() - recentEditBlurAt < 200) return;
+        onSelect();
+      } : undefined}
       // Touch tap detection: record where + when the finger landed.
       onTouchStart={TOUCH_DEVICE && !isDragOverlay ? (e) => {
         const t = e.touches[0];
@@ -4781,12 +4786,20 @@ export default function App() {
       if (active.contentEditable !== 'true' && active.tagName !== 'INPUT' && active.tagName !== 'TEXTAREA') return;
       const target = e.target as Node | null;
       if (target && active.contains(target)) return;
-      active.blur();
-      // Stamp the time so the row's onTouchEnd handler knows this touch
-      // already did its job (closing the previous edit). The user gets an
-      // intermediate "nothing selected" state — a fresh tap is required
-      // to either edit a different row OR start a drag.
+      // Stamp BEFORE the blur so the onClick / onTouchEnd guards see it
+      // even if the blur callback runs synchronously and triggers React
+      // re-renders that race the row handlers.
       recentEditBlurAt = Date.now();
+      // Defer the actual blur to the next animation frame. The blur
+      // dismisses the iOS keyboard, which kicks off a ~250ms layout-
+      // -shift animation. If we did this synchronously inside touchstart,
+      // dnd-kit's TouchSensor would still be registering the touch and
+      // the layout shift would scramble its rect measurements — long-
+      // press drag would either fail to activate or activate on the
+      // wrong target. By the time the rAF fires, dnd-kit's touchstart
+      // path has already completed.
+      const el = active;
+      requestAnimationFrame(() => el.blur());
     };
     document.addEventListener('touchstart', onDocTouchStart, { passive: true, capture: true });
     return () => document.removeEventListener('touchstart', onDocTouchStart, true);
