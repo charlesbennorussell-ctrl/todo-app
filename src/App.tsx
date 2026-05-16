@@ -842,7 +842,7 @@ function SortableTaskItem({
       // (nothing selected, nothing in edit) after tapping out, and a
       // fresh tap to choose the next action.
       onClick={onSelect && !isDragOverlay ? () => {
-        if (TOUCH_DEVICE && Date.now() - recentEditBlurAt < 200) return;
+        if (TOUCH_DEVICE && Date.now() - recentEditBlurAt < 500) return;
         onSelect();
       } : undefined}
       // Touch tap detection: record where + when the finger landed.
@@ -871,7 +871,7 @@ function SortableTaskItem({
         if (dx > 5 || dy > 5 || dt > 300) return; // scrolled or long-pressed → not a tap
         // This touch already did its job — dismissed a prior editor. Don't
         // also open this row's editor on the same gesture.
-        if (Date.now() - recentEditBlurAt < 200) return;
+        if (Date.now() - recentEditBlurAt < 500) return;
         // Skip if the target is an interactive child (button / input / etc.) —
         // those already have their own handlers, no need to ALSO open edit.
         const t = e.target as HTMLElement | null;
@@ -4781,11 +4781,18 @@ export default function App() {
   useEffect(() => {
     if (!TOUCH_DEVICE) return;
     const onDocTouchStart = (e: TouchEvent) => {
-      const active = document.activeElement;
-      if (!active || !(active instanceof HTMLElement)) return;
-      if (active.contentEditable !== 'true' && active.tagName !== 'INPUT' && active.tagName !== 'TEXTAREA') return;
+      // Find the currently-editing element via DOM query, NOT via
+      // document.activeElement. iOS Safari clears the active element
+      // the instant the user touches a different element — so by the
+      // time this capture-phase listener runs, document.activeElement
+      // is already document.body and the previous check was returning
+      // early without ever stamping recentEditBlurAt. Querying for any
+      // contenteditable="true" finds the editor regardless of whether
+      // iOS has already blurred it from a focus-tracking standpoint.
+      const editable = document.querySelector('[contenteditable="true"]') as HTMLElement | null;
+      if (!editable) return;
       const target = e.target as Node | null;
-      if (target && active.contains(target)) return;
+      if (target && editable.contains(target)) return;
       // Stamp BEFORE the blur so the onClick / onTouchEnd guards see it
       // even if the blur callback runs synchronously and triggers React
       // re-renders that race the row handlers.
@@ -4798,8 +4805,7 @@ export default function App() {
       // press drag would either fail to activate or activate on the
       // wrong target. By the time the rAF fires, dnd-kit's touchstart
       // path has already completed.
-      const el = active;
-      requestAnimationFrame(() => el.blur());
+      requestAnimationFrame(() => editable.blur());
     };
     document.addEventListener('touchstart', onDocTouchStart, { passive: true, capture: true });
     return () => document.removeEventListener('touchstart', onDocTouchStart, true);
