@@ -498,23 +498,31 @@ function TopHeader({ viewName }: { viewName: string }) {
   );
 }
 
-function TaskCheckbox({ completed, onToggle }: { completed: boolean; onToggle: () => void }) {
-  // Completed state matches the faded row palette â€” fill + border collapse into the same muted
-  // mid-tone as the text (#383838), with a slightly lighter tick (#6a6a6a) and a chunkier
-  // 1.5-stroke so the check actually reads at this low contrast level.
+function TaskCheckbox({ completed, started = false, onToggle }: { completed: boolean; started?: boolean; onToggle: () => void }) {
+  // Three visual states (cycled by repeated clicks — see toggleTask):
+  //   pending   → empty box with grey 1.5px stroke
+  //   started   → solid mid-grey fill (no tick), reading as "in progress" / "I've begun this"
+  //   completed → solid dark fill + white-ish tick, the existing "done" look
+  // The started fill is intentionally LIGHTER than the completed fill so the eye can tell them
+  // apart at a glance — pending=#0 fill, started=#656464 fill (matches the idle stroke), and
+  // completed=#383838 fill (matches the faded text). Pre-2-stage tasks (no `started` property)
+  // default to pending — backwards-compatible with existing storage.
   const idleStroke = '#656464';
+  const startedFill = '#656464';
   const doneFill = '#383838';
   // Tick stroke is the page background color so the check reads as a cut-out shape from the
   // muted fill — same look as the original design, just on the dimmer fill.
   const tickStroke = '#282828';
+  const fill = completed ? doneFill : (started ? startedFill : 'transparent');
+  const border = completed ? doneFill : (started ? startedFill : idleStroke);
   return (
     // stopPropagation on pointerdown so a click on the checkbox doesn't bubble to the row's
     // {...listeners} and start a drag â€” toggling completion stays a click, not the start of a move.
     // -mt-[2px] lifts the checkbox so its TOP sits at the title's cap-height (top of capital
     // letters) and its bottom sits roughly at the baseline â€” visually "embedded" in the text line.
     <motion.div className="relative shrink-0 size-3 cursor-pointer -mt-[2px]" whileTap={{ scale: 0.9 }} onPointerDown={(e) => e.stopPropagation()} onClick={onToggle}>
-      <div className="absolute inset-0 rounded-[3.333px]" style={{ backgroundColor: completed ? doneFill : 'transparent' }}>
-        <div aria-hidden="true" className="absolute border-[1.5px] border-solid inset-0 pointer-events-none rounded-[3.333px]" style={{ borderColor: completed ? doneFill : idleStroke }} />
+      <div className="absolute inset-0 rounded-[3.333px]" style={{ backgroundColor: fill }}>
+        <div aria-hidden="true" className="absolute border-[1.5px] border-solid inset-0 pointer-events-none rounded-[3.333px]" style={{ borderColor: border }} />
       </div>
       {completed && (
         // y: 2 nudges the tick down 2px (must go through framer's animate prop — an inline
@@ -1025,7 +1033,7 @@ function SortableTaskItem({
             </svg>
           </div>
         )}
-        {!isScheduled && <TaskCheckbox completed={task.completed} onToggle={onToggle} />}
+        {!isScheduled && <TaskCheckbox completed={task.completed} started={task.started} onToggle={onToggle} />}
         {/* Title row — slot order is driven by the user's `taskOrder` setting.
             Density-driven slot filtering: client hidden at >=4, project hidden at >=6.
             shrink-0 keeps the title-row at content width; the title is NEVER squeezed.
@@ -1156,10 +1164,35 @@ function SortableTaskItem({
               // user hasn't come back to fill it in. No visual fade — the row stays normal until
               // it quietly disappears (and lands in Settings → Trash since onDelete soft-deletes).
               // 15 min gives plenty of time to step away and return.
+              //
+              // DEFENSIVE re-check at fire time: read the LIVE DOM textContent at the moment
+              // the timer fires, not just the value captured at blur. iOS predictive text
+              // sometimes doesn't fire keydown for replacement-text events, so `fresh` may
+              // stay true even after typing — and a stray re-render of {task.title} can briefly
+              // clobber the contenteditable's content if it's empty in props. Both of those
+              // were causing typed-then-trashed bugs ("tasks I never marked finished showing
+              // up in Trash"). The fire-time re-check makes the timer a no-op if anything
+              // got there in the meantime.
               if (fresh && !next && onDelete) {
                 setFading(true);
-                fadeTimerRef.current = setTimeout(() => { onDelete(); fadeTimerRef.current = null; }, 15 * 60 * 1000);
+                fadeTimerRef.current = setTimeout(() => {
+                  fadeTimerRef.current = null;
+                  const el = titleRef.current;
+                  const live = el ? (el.textContent || '').trim() : '';
+                  if (live) return; // user (or sync) put content there — keep the task
+                  onDelete();
+                }, 15 * 60 * 1000);
               }
+            }}
+            onInput={() => {
+              // Backstop for the keydown-based "user typed" detection. iOS Safari's predictive
+              // text, autocorrect-replace, dictation, and paste paths don't always fire keydown
+              // for each character (or fire only for the trigger key), so relying on keydown
+              // alone leaves `fresh` stuck at true even after the user has typed real content.
+              // onInput fires for ALL of those paths — flipping fresh false and cancelling any
+              // in-flight fade here closes the gap that was silently trashing typed tasks.
+              if (fresh) setFresh(false);
+              if (fading) cancelFade();
             }}
             onKeyDown={(e) => {
               // Stop ALL keystrokes from bubbling to the row's drag listeners while editing —
@@ -1821,6 +1854,8 @@ function SortableSubtaskRow({
       className="group relative h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px] hover:bg-white/[0.03] cursor-grab active:cursor-grabbing"
     >
       <div onPointerDown={(e) => e.stopPropagation()}>
+        {/* Sub-tasks use the legacy 2-state checkbox (the local Sub type doesn't carry a
+            `started` field). Cycling sub-tasks through 3 states is a separate refactor. */}
         <TaskCheckbox completed={sub.completed} onToggle={onToggle} />
       </div>
       <EditableText
@@ -3205,7 +3240,7 @@ function CalendarCardBody({ task, projects, clients, taskOrder = 'ptc' }: { task
     <div className="pl-[10px] pr-[10px] py-[6px] flex flex-row items-start gap-[10px]">
       {!isScheduled && (
         <div className="shrink-0 flex items-center justify-center pt-[3px]">
-          <TaskCheckbox completed={task.completed} onToggle={() => {}} />
+          <TaskCheckbox completed={task.completed} started={task.started} onToggle={() => {}} />
         </div>
       )}
       <div className="flex-1 min-w-0 flex flex-col gap-[2px]">
@@ -3282,7 +3317,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
         <div className="flex flex-row items-center gap-[10px]">
           {!isScheduled && (
             <div onPointerDown={(e) => e.stopPropagation()} className="shrink-0 flex items-center justify-center">
-              <TaskCheckbox completed={task.completed} onToggle={onToggle} />
+              <TaskCheckbox completed={task.completed} started={task.started} onToggle={onToggle} />
             </div>
           )}
           <div className="flex flex-row items-center gap-[4px] min-w-0">
@@ -4040,7 +4075,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
           const ctx = [cli?.short, proj?.name].filter(Boolean).join(' › ');
           return (
             <div key={t.id} className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px] hover:bg-white/[0.03]">
-              <TaskCheckbox completed={t.completed} onToggle={() => onToggleTask(t.id)} />
+              <TaskCheckbox completed={t.completed} started={t.started} onToggle={() => onToggleTask(t.id)} />
               {ctx && <p className={`${bodyFont} text-[#656464]`}>{ctx}</p>}
               {ctx && <Arrowhead />}
               <span className={`${bodyFont} ${t.completed ? 'text-[#656464] line-through' : 'text-white'}`}>{t.title || '(untitled)'}</span>
@@ -4164,7 +4199,7 @@ function ProjectTaskRow({ task, listId, onToggle, onRename, onDelete, onEdit, on
           </div>
         )}
         <LIndent />
-        {!isScheduled && <TaskCheckbox completed={task.completed} onToggle={onToggle} />}
+        {!isScheduled && <TaskCheckbox completed={task.completed} started={task.started} onToggle={onToggle} />}
         {/* Same density cascade as SortableTaskItem: project truncates, date short, arrow short,
             then hide client → assignees → project. Title and date always visible. */}
         <div className="flex flex-row items-center gap-[4px] min-w-0 overflow-hidden shrink-0">
@@ -4422,7 +4457,14 @@ function TaskQuickEdit({
 
         {/* Task preview row — same look as in the lists. Title is inline-editable. */}
         <div className="px-[31px] flex flex-row items-center gap-2">
-          {!isMilestone && <TaskCheckbox completed={task.completed} onToggle={() => apply({ completed: !task.completed })} />}
+          {!isMilestone && <TaskCheckbox completed={task.completed} started={task.started} onToggle={() => {
+            // Mirror toggleTask's 3-state cycle here so the quick-edit / edit modal
+            // checkbox behaves identically to the inline row checkbox. Goes through
+            // apply() so the existing patch-then-(maybe-close) flow is preserved.
+            if (task.completed) apply({ completed: false, completedDay: undefined, completedAt: undefined, started: false, startedAt: undefined, revivedAt: Date.now() });
+            else if (task.started) apply({ completed: true, completedDay: todayISO(), completedAt: Date.now(), revivedAt: undefined });
+            else apply({ started: true, startedAt: Date.now() });
+          }} />}
           <EditableText
             value={task.title}
             onChange={(v) => onUpdateTask(task.id, { title: v })}
@@ -4952,19 +4994,30 @@ export default function App() {
   const toggleTask = useCallback((id: string) => {
     setTasks((prev) => prev.map((t) => {
       if (t.id !== id) return t;
-      const nextCompleted = !t.completed;
-      // Stamp completedDay (today's boundary) + completedAt (epoch ms) when checking; clear both
-      // + stamp revivedAt when un-checking. completedDay drives the "completed clears at 4 AM"
-      // filter; completedAt drives the 15-second sink delay (the bucket sort treats a task as
-      // "still in place" until 15s after it was checked, giving the user time to undo without
-      // the row visibly jumping to the bottom).
-      if (nextCompleted) return { ...t, completed: true, completedDay: todayISO(), completedAt: Date.now(), revivedAt: undefined };
-      return { ...t, completed: false, completedDay: undefined, completedAt: undefined, revivedAt: Date.now() };
+      // Three-state cycle (the "2-stage checkbox"):
+      //   pending (started=false, completed=false)  → STARTED  (started=true, completed=false)
+      //   started                                   → COMPLETED (completed=true)
+      //   completed                                 → pending (full reset; gives an explicit "undo" path)
+      // Each transition stamps the matching *At so the bucket sort's 15s grace window applies
+      // identically to both started→sink and completed→sink. revivedAt is stamped when leaving
+      // completed so the recently-revived linger window matches the legacy behavior.
+      if (t.completed) {
+        // completed → pending. Wipes started too — full reset for the cleanest "undo" path.
+        return { ...t, completed: false, completedDay: undefined, completedAt: undefined, started: false, startedAt: undefined, revivedAt: Date.now() };
+      }
+      if (t.started) {
+        // started → completed. Stamp completed* fields; leave started=true so storage records
+        // the full journey, though the sort only cares about completed at this point.
+        return { ...t, completed: true, completedDay: todayISO(), completedAt: Date.now(), revivedAt: undefined };
+      }
+      // pending → started. No completedDay/completedAt yet — those are reserved for the
+      // final tier. startedAt drives the same 15s grace window as completedAt so the row
+      // doesn't visibly jump to the bottom mid-click.
+      return { ...t, started: true, startedAt: Date.now() };
     }));
-    // Force a re-render ~15.1s after a check so the just-completed task gets re-sorted to the
-    // bottom of its section once the grace window elapses. Bumps a counter that the sort memo
-    // depends on; no-op if the user un-completes inside the window (the sort just re-evaluates
-    // and finds nothing to move).
+    // Force a re-render ~15.1s after the click so the just-toggled task gets re-sorted to
+    // its tier once the grace window elapses. Bumps a counter that the sort memo depends on;
+    // no-op if the user re-cycles inside the window (the sort just re-evaluates).
     window.setTimeout(() => {
       setSortTick((n) => n + 1);
     }, 15100);
@@ -7088,18 +7141,26 @@ export default function App() {
         (m[k] ||= []).push(t);
       }
     }
-    // 15-second grace window: a task that was JUST checked off keeps its current
-    // position so the user has time to undo a misclick without the row visibly
-    // sliding away. After the window elapses, toggleTask's setTimeout bumps
-    // sortTick which re-runs this memo and the task drops to the bottom.
+    // 15-second grace window: a task that was JUST checked off (or just marked started)
+    // keeps its current position so the user has time to undo a misclick without the row
+    // visibly sliding away. After the window elapses, toggleTask's setTimeout bumps
+    // sortTick which re-runs this memo and the task drops to its tier.
     const COMPLETED_GRACE_MS = 15000;
     const now = Date.now();
     const isSunkCompleted = (t: Task) =>
       t.completed && (!t.completedAt || now - t.completedAt >= COMPLETED_GRACE_MS);
+    // Mirror sink logic for the started tier: a task is past the grace window when 15s have
+    // elapsed since startedAt. Once sunk it lives BELOW pending but ABOVE completed.
+    const isSunkStarted = (t: Task) =>
+      !t.completed && !!t.started && (!t.startedAt || now - t.startedAt >= COMPLETED_GRACE_MS);
+    // 3-tier sort key \u2014 pending = 0 (top), started = 1 (middle), completed = 2 (bottom).
+    // Within the grace window the task stays at tier 0 so it doesn't jump on click.
+    const tier = (t: Task) => isSunkCompleted(t) ? 2 : isSunkStarted(t) ? 1 : 0;
     for (const k of Object.keys(m)) {
       if (k.endsWith(':milestones')) {
-        // Completed milestones sink to the bottom (after grace) of the milestones bucket.
-        // Among the rest: deadline ascending, undated last, ties broken by title.
+        // Milestones don't have a "started" tier \u2014 they're date-anchored. Completed milestones
+        // sink to the bottom (after grace) of the milestones bucket. Among the rest: deadline
+        // ascending, undated last, ties broken by title.
         m[k].sort((a, b) => {
           const aSunk = isSunkCompleted(a);
           const bSunk = isSunkCompleted(b);
@@ -7110,13 +7171,13 @@ export default function App() {
           return a.title.localeCompare(b.title);
         });
       } else {
-        // Completed tasks (past grace window) sink to the bottom of their section.
-        // Among the rest (and within freshly-checked tasks): deadline ascending,
+        // 3-tier sort: pending \u2192 started \u2192 completed (each past their grace window).
+        // Within a tier (and within freshly-toggled tasks still in grace): deadline ascending,
         // undated tasks below dated, manual order as the final tiebreaker.
         m[k].sort((a, b) => {
-          const aSunk = isSunkCompleted(a);
-          const bSunk = isSunkCompleted(b);
-          if (aSunk !== bSunk) return aSunk ? 1 : -1;
+          const at = tier(a);
+          const bt = tier(b);
+          if (at !== bt) return at - bt;
           const ad = a.deadline;
           const bd = b.deadline;
           if (ad && bd) return ad === bd ? a.order - b.order : ad < bd ? -1 : 1;
@@ -7152,11 +7213,12 @@ export default function App() {
         });
       } else {
         // Dashboard aggregates carry over per-list bucket order, but post-grace
-        // completed tasks still sink to the bottom of the aggregate.
+        // started + completed tasks sink in the aggregate too (3-tier, matching
+        // the per-list sort above).
         agg.sort((a, b) => {
-          const aSunk = isSunkCompleted(a);
-          const bSunk = isSunkCompleted(b);
-          return aSunk === bSunk ? 0 : (aSunk ? 1 : -1);
+          const at = tier(a);
+          const bt = tier(b);
+          return at === bt ? 0 : at - bt;
         });
       }
       m[`dashboard:${s}`] = agg;
@@ -7293,7 +7355,7 @@ export default function App() {
         const metaColor = task.completed ? 'text-[#474747]' : isScheduled ? 'text-[#8465ff]' : 'text-[#656464]';
         return (
           <div key={`dash-${task.id}`} onDoubleClick={() => openEdit(task)} onContextMenu={(e) => { e.preventDefault(); openQuick(task); }} className="h-[37px] box-border flex flex-row gap-2 items-center px-[31px] w-full group hover:bg-white/[0.03]">
-            {!isScheduled && <TaskCheckbox completed={task.completed} onToggle={() => toggleTask(task.id)} />}
+            {!isScheduled && <TaskCheckbox completed={task.completed} started={task.started} onToggle={() => toggleTask(task.id)} />}
             <div className="flex flex-row items-center gap-[4px]">
               {/* Use the shared taskOrderSlots so dashboard milestones honor the user's chosen
                   meta order (cpt / tcp / ptc, etc.) — same as regular task rows do. */}
@@ -9040,7 +9102,7 @@ export default function App() {
               style={{ width: activeRectWidth ?? '100%', willChange: 'transform' }}
             >
               <LIndent />
-              <TaskCheckbox completed={activeProjTask.completed} onToggle={() => {}} />
+              <TaskCheckbox completed={activeProjTask.completed} started={activeProjTask.started} onToggle={() => {}} />
               <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap ${activeProjTask.completed ? 'text-[#474747]' : 'text-white'}`}>{activeProjTask.title}</span>
             </motion.div>
           ) : null}

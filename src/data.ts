@@ -36,6 +36,14 @@ export interface Task {
   // still listed in Settings → Trash so the user can revive it.
   trashed?: boolean;
   trashedAt?: number; // epoch ms (used to sort the Trash column newest-first)
+  // 2-stage checkbox intermediate state. `started` is the "I've begun this task" tier between
+  // pending and completed. Click 1 (pending→started) flips this true; click 2 (started→completed)
+  // flips `completed` true. The cycle continues: click 3 on a completed task resets to pending
+  // (clears both flags). Sort behavior mirrors completed — started tasks sink toward the bottom
+  // of their section after the 15-second grace window, but ABOVE completed tasks (3-tier sort:
+  // pending=0 → started=1 → completed=2).
+  started?: boolean;
+  startedAt?: number; // epoch ms — drives the started-grace window mirroring completedAt.
 }
 
 export interface Project { id: string; name: string; clientId?: string; list?: ListId; }
