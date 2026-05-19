@@ -256,10 +256,48 @@ function CustomScroll({
     mo.observe(el, { childList: true });
     const onScroll = () => update();
     el.addEventListener('scroll', onScroll, { passive: true });
-    // Wheel handler — direct scrollTop assignment with multiplier. Native
-    // scroll handles smoothing on the browser side; our amplification just
-    // makes each notch cover more distance. Skip horizontal-dominant deltas
-    // and Shift+wheel (browser uses those for horizontal scroll).
+    // ---- Locomotive-style buttery wheel scroll ----------------------------
+    // We intercept ONLY wheel events (preventDefault) and lerp scrollTop
+    // toward an accumulating target on every rAF. The container still has
+    // overflow-y:auto, so dnd-kit's "find ancestor scroll container" walk
+    // still resolves to this element and its auto-scroll-while-dragging
+    // mechanic keeps working — the previous attempt at transform-based
+    // virtual scroll broke that, see the rationale comment above CustomScroll.
+    //
+    // Touch / keyboard / scrollbar / dnd-kit auto-scroll all bypass this
+    // handler (they don't fire wheel events). When any of those move
+    // scrollTop directly, the lerp detects the external delta and re-syncs
+    // its target so we don't yank the user back to where the lerp wanted.
+    //
+    // LERP_FACTOR is the per-frame fraction of remaining distance we close.
+    // 0.18 lands around 4 frames to close 80% of the gap → buttery but
+    // snappy. Bump higher (0.25+) for snappier, lower (0.10) for syrupy.
+    const LERP_FACTOR = 0.18;
+    let target = el.scrollTop;
+    let rafId: number | null = null;
+    let lastSyncedTop = el.scrollTop;
+    const tick = () => {
+      rafId = null;
+      const current = el.scrollTop;
+      // External writer (dnd-kit auto-scroll, scrollbar drag, native
+      // smooth-scroll from arrow buttons) — yield: adopt their position as
+      // our new target and stop lerping until the next wheel event.
+      if (Math.abs(current - lastSyncedTop) > 0.5) {
+        target = current;
+        lastSyncedTop = current;
+        return;
+      }
+      const diff = target - current;
+      if (Math.abs(diff) < 0.5) {
+        el.scrollTop = target;
+        lastSyncedTop = el.scrollTop;
+        return;
+      }
+      const next = current + diff * LERP_FACTOR;
+      el.scrollTop = next;
+      lastSyncedTop = el.scrollTop;
+      rafId = requestAnimationFrame(tick);
+    };
     const onWheel = (e: WheelEvent) => {
       if (e.shiftKey) return;
       if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
@@ -267,7 +305,13 @@ function CustomScroll({
       let pixelDelta = e.deltaY;
       if (e.deltaMode === 1) pixelDelta *= CUSTOM_SCROLL_LINE_PX;
       else if (e.deltaMode === 2) pixelDelta *= el.clientHeight;
-      el.scrollTop += pixelDelta * CUSTOM_SCROLL_WHEEL_MULT;
+      // If target drifted way away from current (external writer moved us),
+      // re-anchor target to current before accumulating — otherwise the
+      // wheel input would warp us back to the pre-external position.
+      if (Math.abs(target - el.scrollTop) > 50) target = el.scrollTop;
+      const maxScroll = el.scrollHeight - el.clientHeight;
+      target = Math.max(0, Math.min(maxScroll, target + pixelDelta * CUSTOM_SCROLL_WHEEL_MULT));
+      if (rafId === null) rafId = requestAnimationFrame(tick);
     };
     el.addEventListener('wheel', onWheel, { passive: false });
     return () => {
@@ -275,6 +319,7 @@ function CustomScroll({
       mo.disconnect();
       el.removeEventListener('scroll', onScroll);
       el.removeEventListener('wheel', onWheel);
+      if (rafId !== null) cancelAnimationFrame(rafId);
     };
   }, [update]);
 
@@ -1426,7 +1471,7 @@ function SortableTaskItem({
   );
 }
 
-function SectionHeader({ title, onAdd, sticky }: { title: string; onAdd?: () => void; sticky?: 'date' | 'category' }) {
+function SectionHeader({ title, onAdd, sticky, tall }: { title: string; onAdd?: () => void; sticky?: 'date' | 'category'; tall?: boolean }) {
   // All section headers (Today, Inbox, Next, Milestones, …) render in the muted
   // grey-text tone — they're navigational labels, not highlighted state.
   //
@@ -1434,25 +1479,33 @@ function SectionHeader({ title, onAdd, sticky }: { title: string; onAdd?: () => 
   //   'date'     → top:0,  z-20. The outer layer in Dashboard (Today / Tomorrow / Next).
   //                Also used by single-layer views (per-list columns) where there's no
   //                category sub-tier.
-  //   'category' → top:37, z-20. The inner layer in Dashboard (Admin / Work / Projects).
-  //                Sits flush BELOW the date label, swapping as the user scrolls within
-  //                a date band. Scoped to its date band's wrapper div so it pops out
-  //                naturally when the user leaves the band.
+  //   'category' → top:74, z-20. The inner layer in Dashboard (Admin / Work / Projects).
+  //                Pinned at 74 (not 37) so it sits BELOW the date AND BELOW a 37px
+  //                carriage-return gap. The date wrapper extends its bg 37px past its
+  //                label (via `tall`) to fill that gap so scrolled rows don't bleed
+  //                through it.
+  //
+  // `tall` (only meaningful with sticky='date'): adds a 37px padding-bottom to the
+  // outer wrapper so the bg extends below the label by one row's height. Used on the
+  // Dashboard's Today/Tomorrow/Next dates that have a category tier underneath — the
+  // extended bg is the visible "carriage return" between the date and the category
+  // when both are stuck. The label stays in a 37px inner row (vertically centered)
+  // so its visual height is unchanged.
   //
   // Sticky elements need a SOLID backdrop (bg-[#282828], matching the page) so the
-  // task rows scrolling underneath don't bleed through the muted-text label. The
-  // backdrop also IS the "task-card equivalent block" requested — 37px tall, full row
-  // width, identical layout to a real row so the sticky band feels like a row that
-  // just happens to stay pinned.
+  // task rows scrolling underneath don't bleed through the muted-text label.
   const stickyClass = sticky === 'date'
     ? 'sticky top-0 z-20 bg-[#282828]'
     : sticky === 'category'
-      ? 'sticky top-[37px] z-20 bg-[#282828]'
+      ? 'sticky top-[74px] z-20 bg-[#282828]'
       : '';
+  const extension = tall ? 'pb-[37px]' : '';
   return (
-    <div className={`group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px] ${stickyClass}`}>
-      <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[#656464] text-[14px] whitespace-nowrap">{title}</p>
-      {onAdd && <AddPlus onClick={onAdd} />}
+    <div className={`w-full box-border ${stickyClass} ${extension}`}>
+      <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px]">
+        <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[#656464] text-[14px] whitespace-nowrap">{title}</p>
+        {onAdd && <AddPlus onClick={onAdd} />}
+      </div>
     </div>
   );
 }
@@ -7464,22 +7517,31 @@ export default function App() {
           //      When Today's band ends, both the date AND its category pop out together.
           <>
             <div>
-              <SectionHeader title="Today" sticky="date" />
-              {(['admin', 'work', 'projects'] as ListId[]).map((l) => {
-                const items = tasksByKey[`dashboard:list:${l}`] || [];
-                if (items.length === 0) return null;
-                return (
+              {/* `tall` extends the Today date's bg 37px past its label so the gap
+                  between the stuck date and the stuck category is filled with bg —
+                  preserves the "date → carriage return → category" rhythm even when
+                  both are pinned to the top of the column. */}
+              <SectionHeader title="Today" sticky="date" tall />
+              {(() => {
+                // Filter to visible categories first so we can identify the FIRST one
+                // and skip its Spacer (the Today header's tall bg already supplies the
+                // carriage return above it). Subsequent categories keep their Spacer to
+                // separate them from the previous category's last task card.
+                const visibleCats = (['admin', 'work', 'projects'] as ListId[])
+                  .map((l) => ({ list: l, items: tasksByKey[`dashboard:list:${l}`] || [] }))
+                  .filter((c) => c.items.length > 0);
+                return visibleCats.map((c, idx) => (
                   // Sub-wrapper scopes the category sticky so it releases at the band edge
                   // (next category takes over) and ultimately at the Today band's edge.
-                  <div key={`dash-list-${l}`}>
-                    <Spacer />
-                    <SectionHeader title={LIST_TITLES[l]} sticky="category" />
+                  <div key={`dash-list-${c.list}`}>
+                    {idx > 0 && <Spacer />}
+                    <SectionHeader title={LIST_TITLES[c.list]} sticky="category" />
                     {/* idPrefix isolates the dashboard's sortable ids from the per-list columns,
                         so the same task rendered in both places doesn't share a drag state. */}
-                    {bucket(items, `dash:${l}:`)}
+                    {bucket(c.items, `dash:${c.list}:`)}
                   </div>
-                );
-              })}
+                ));
+              })()}
             </div>
             {tomorrowEnabled && (tasksByKey['dashboard:tomorrow'] || []).length > 0 && (
               <div>
@@ -8043,16 +8105,21 @@ export default function App() {
                   {/* Mirror the main Dashboard column's sticky hierarchy: date band wraps its
                       categories so the date label pops out when the user scrolls past the band,
                       and each category is its own sub-wrapper so categories swap cleanly within
-                      a date. See the inline notes in renderColumn for the full rationale. */}
+                      a date. `tall` on the date extends its bg 37px past the label so the gap
+                      between the stuck date and the stuck category stays bg-filled. See the
+                      inline notes in renderColumn for the full rationale. */}
                   <div>
-                    <SectionHeader title="Today" sticky="date" />
-                    {todayItems.map(({ list, items }) => items.length === 0 ? null : (
-                      <div key={`focus-today-${list}`}>
-                        <Spacer />
-                        <SectionHeader title={LIST_TITLES[list]} sticky="category" />
-                        {renderBucket(items, `focus-dash:${list}:`)}
-                      </div>
-                    ))}
+                    <SectionHeader title="Today" sticky="date" tall />
+                    {(() => {
+                      const visibleCats = todayItems.filter((c) => c.items.length > 0);
+                      return visibleCats.map((c, idx) => (
+                        <div key={`focus-today-${c.list}`}>
+                          {idx > 0 && <Spacer />}
+                          <SectionHeader title={LIST_TITLES[c.list]} sticky="category" />
+                          {renderBucket(c.items, `focus-dash:${c.list}:`)}
+                        </div>
+                      ));
+                    })()}
                   </div>
                   {tomorrowItems.length > 0 && (
                     <div>
