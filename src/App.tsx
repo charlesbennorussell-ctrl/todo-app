@@ -1426,11 +1426,31 @@ function SortableTaskItem({
   );
 }
 
-function SectionHeader({ title, onAdd }: { title: string; onAdd?: () => void }) {
+function SectionHeader({ title, onAdd, sticky }: { title: string; onAdd?: () => void; sticky?: 'date' | 'category' }) {
   // All section headers (Today, Inbox, Next, Milestones, …) render in the muted
   // grey-text tone — they're navigational labels, not highlighted state.
+  //
+  // STICKY MODES (opt-in via the `sticky` prop — undefined = legacy flat behavior):
+  //   'date'     → top:0,  z-20. The outer layer in Dashboard (Today / Tomorrow / Next).
+  //                Also used by single-layer views (per-list columns) where there's no
+  //                category sub-tier.
+  //   'category' → top:37, z-20. The inner layer in Dashboard (Admin / Work / Projects).
+  //                Sits flush BELOW the date label, swapping as the user scrolls within
+  //                a date band. Scoped to its date band's wrapper div so it pops out
+  //                naturally when the user leaves the band.
+  //
+  // Sticky elements need a SOLID backdrop (bg-[#282828], matching the page) so the
+  // task rows scrolling underneath don't bleed through the muted-text label. The
+  // backdrop also IS the "task-card equivalent block" requested — 37px tall, full row
+  // width, identical layout to a real row so the sticky band feels like a row that
+  // just happens to stay pinned.
+  const stickyClass = sticky === 'date'
+    ? 'sticky top-0 z-20 bg-[#282828]'
+    : sticky === 'category'
+      ? 'sticky top-[37px] z-20 bg-[#282828]'
+      : '';
   return (
-    <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px]">
+    <div className={`group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px] ${stickyClass}`}>
       <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[#656464] text-[14px] whitespace-nowrap">{title}</p>
       {onAdd && <AddPlus onClick={onAdd} />}
     </div>
@@ -7431,56 +7451,76 @@ export default function App() {
           // Dashboard column: TODAY is split per list (admin/work/projects), NEXT is the same
           // aggregate the per-list columns show — surfacing Next here gives the user a
           // quick scan of what's coming without leaving the Dashboard column.
+          //
+          // STICKY HIERARCHY (two layers):
+          //   1. Date band (Today / Tomorrow / Next) — outer wrapper div, sticky 'date' header
+          //      pinned at top:0. The wrapper scopes the sticky element so when the user scrolls
+          //      past the entire band, the date label naturally pops up and out (CSS sticky
+          //      behavior — once the containing block's bottom passes the sticky top, the element
+          //      releases). The NEXT date band's header then takes over at top:0.
+          //   2. Category band (Admin / Work / Projects) — INSIDE the Today wrapper, each
+          //      category is its own sub-wrapper with a sticky 'category' header pinned at
+          //      top:37 (flush below the date). They swap as the user scrolls through Today.
+          //      When Today's band ends, both the date AND its category pop out together.
           <>
-            <SectionHeader title="Today" />
-            {(['admin', 'work', 'projects'] as ListId[]).map((l) => {
-              const items = tasksByKey[`dashboard:list:${l}`] || [];
-              if (items.length === 0) return null;
-              return (
-                <Fragment key={`dash-list-${l}`}>
-                  <Spacer />
-                  <SectionHeader title={LIST_TITLES[l]} />
-                  {/* idPrefix isolates the dashboard's sortable ids from the per-list columns,
-                      so the same task rendered in both places doesn't share a drag state. */}
-                  {bucket(items, `dash:${l}:`)}
-                </Fragment>
-              );
-            })}
+            <div>
+              <SectionHeader title="Today" sticky="date" />
+              {(['admin', 'work', 'projects'] as ListId[]).map((l) => {
+                const items = tasksByKey[`dashboard:list:${l}`] || [];
+                if (items.length === 0) return null;
+                return (
+                  // Sub-wrapper scopes the category sticky so it releases at the band edge
+                  // (next category takes over) and ultimately at the Today band's edge.
+                  <div key={`dash-list-${l}`}>
+                    <Spacer />
+                    <SectionHeader title={LIST_TITLES[l]} sticky="category" />
+                    {/* idPrefix isolates the dashboard's sortable ids from the per-list columns,
+                        so the same task rendered in both places doesn't share a drag state. */}
+                    {bucket(items, `dash:${l}:`)}
+                  </div>
+                );
+              })}
+            </div>
             {tomorrowEnabled && (tasksByKey['dashboard:tomorrow'] || []).length > 0 && (
-              <>
+              <div>
                 <Spacer />
-                <SectionHeader title="Tomorrow" />
+                <SectionHeader title="Tomorrow" sticky="date" />
                 {bucket(tasksByKey['dashboard:tomorrow'] || [], 'dash:tomorrow:')}
-              </>
+              </div>
             )}
             {(tasksByKey['dashboard:next'] || []).length > 0 && (
-              <>
+              <div>
                 <Spacer />
-                <SectionHeader title="Next" />
+                <SectionHeader title="Next" sticky="date" />
                 {bucket(tasksByKey['dashboard:next'] || [], 'dash:next:')}
-              </>
+              </div>
             )}
           </>
         ) : (
           // Headers live INSIDE their section's droppable so dropping ON the "Today" / "Next"
           // label (or anywhere in that section's empty space) lands in that section. Previously
           // the headers were free-standing siblings â€” drops on them fell through.
+          //
+          // Per-list columns have NO category sub-tier — there's only one date-level header per
+          // section. Each section's SectionDroppable wraps the header + cards and scopes the
+          // sticky behavior: the header sticks at top:0 within the section, then pops out when
+          // the user scrolls past the section's last card.
           <>
             {wrap('today', (
               <>
-                <SectionHeader title="Today" onAdd={() => addBlankTaskInSection(listId, 'today')} />
+                <SectionHeader title="Today" sticky="date" onAdd={() => addBlankTaskInSection(listId, 'today')} />
                 {bucket(tasksByKey[`${listId}:today`] || [])}
               </>
             ))}
             {tomorrowEnabled && wrap('tomorrow', (
               <>
-                <SectionHeader title="Tomorrow" onAdd={() => addBlankTaskInSection(listId, 'tomorrow')} />
+                <SectionHeader title="Tomorrow" sticky="date" onAdd={() => addBlankTaskInSection(listId, 'tomorrow')} />
                 {bucket(tasksByKey[`${listId}:tomorrow`] || [])}
               </>
             ))}
             {wrap('next', (
               <>
-                <SectionHeader title="Next" onAdd={() => addBlankTaskInSection(listId, 'next')} />
+                <SectionHeader title="Next" sticky="date" onAdd={() => addBlankTaskInSection(listId, 'next')} />
                 {/* When the Tomorrow toggle is OFF, tomorrow-tagged tasks visually appear here
                     inside Next. Their data still says section='tomorrow' so flipping the toggle
                     on restores them to the Tomorrow section without losing context. */}
@@ -8000,27 +8040,33 @@ export default function App() {
                     </p>
                   </div>
                   <CustomScroll>
-                  <SectionHeader title="Today" />
-                  {todayItems.map(({ list, items }) => items.length === 0 ? null : (
-                    <Fragment key={`focus-today-${list}`}>
-                      <Spacer />
-                      <SectionHeader title={LIST_TITLES[list]} />
-                      {renderBucket(items, `focus-dash:${list}:`)}
-                    </Fragment>
-                  ))}
+                  {/* Mirror the main Dashboard column's sticky hierarchy: date band wraps its
+                      categories so the date label pops out when the user scrolls past the band,
+                      and each category is its own sub-wrapper so categories swap cleanly within
+                      a date. See the inline notes in renderColumn for the full rationale. */}
+                  <div>
+                    <SectionHeader title="Today" sticky="date" />
+                    {todayItems.map(({ list, items }) => items.length === 0 ? null : (
+                      <div key={`focus-today-${list}`}>
+                        <Spacer />
+                        <SectionHeader title={LIST_TITLES[list]} sticky="category" />
+                        {renderBucket(items, `focus-dash:${list}:`)}
+                      </div>
+                    ))}
+                  </div>
                   {tomorrowItems.length > 0 && (
-                    <>
+                    <div>
                       <Spacer />
-                      <SectionHeader title="Tomorrow" />
+                      <SectionHeader title="Tomorrow" sticky="date" />
                       {renderBucket(tomorrowItems, 'focus-dash:tomorrow:')}
-                    </>
+                    </div>
                   )}
                   {nextItems.length > 0 && (
-                    <>
+                    <div>
                       <Spacer />
-                      <SectionHeader title="Next" />
+                      <SectionHeader title="Next" sticky="date" />
                       {renderBucket(nextItems, 'focus-dash:next:')}
-                    </>
+                    </div>
                   )}
                   </CustomScroll>
                 </div>
