@@ -7518,15 +7518,33 @@ export default function App() {
     if (!activeTask || !overTask || activeTask.id === task.id) return { displacementOffset: 0, insertionGap: 0 };
     // The same task can be rendered in multiple sortable contexts (e.g. dashboard sub-list AND its
     // owning per-list column). Each rendering passes its own idPrefix. Only animate the rendering
-    // whose context the active drag actually originated in â€” otherwise picking up a dashboard task
+    // whose context the active drag actually originated in — otherwise picking up a dashboard task
     // also displaces the per-list column's copy of it (visual duplicates, overlaps).
+    //
+    // Dashboard same-list cross-section drag: within the new list-first layout, the dashboard
+    // splits each list (work/admin/projects) into multiple SortableContexts by section
+    // (dash:work:today:, dash:work:tomorrow:, dash:next:work:). For displacement to keep
+    // working as the user drags from Tomorrow into Today within the same list, we treat all
+    // prefixes with the same dashboard LIST as one animation context — so a drag in
+    // dash:work:tomorrow: still animates targets in dash:work:today: (or dash:next:work:).
     const prefixOf = (id: string | null | undefined) => {
       if (!id) return '';
       const i = id.lastIndexOf(':');
       return i >= 0 ? id.substring(0, i + 1) : '';
     };
     const activePrefix = prefixOf(activeId);
-    if (activePrefix !== idPrefix) return { displacementOffset: 0, insertionGap: 0 };
+    const dashListOf = (prefix: string): string | null => {
+      if (!prefix.startsWith('dash:')) return null;
+      const parts = prefix.split(':'); // ['dash', list-or-'next', section-or-list, '']
+      if (parts[1] === 'next') return parts[2] || null;
+      return parts[1] || null;
+    };
+    const activeDashList = dashListOf(activePrefix);
+    const itemDashList = dashListOf(idPrefix);
+    const sameAnimContext = activeDashList !== null && itemDashList !== null
+      ? activeDashList === itemDashList
+      : activePrefix === idPrefix;
+    if (!sameAnimContext) return { displacementOffset: 0, insertionGap: 0 };
     const sameBucket = (x: Task, y: Task) => x.list === y.list && x.section === y.section;
     const inActiveBucket = sameBucket(activeTask, task);
     const inOverBucket = sameBucket(overTask, task);
