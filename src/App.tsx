@@ -1086,10 +1086,15 @@ function SortableTaskItem({
         {!isScheduled && <TaskCheckbox completed={task.completed} started={task.started} onToggle={onToggle} />}
         {/* Title row — slot order is driven by the user's `taskOrder` setting.
             Density-driven slot filtering: client hidden at >=4, project hidden at >=6.
-            shrink-0 keeps the title-row at content width; the title is NEVER squeezed.
+            min-w-0 + the title span's `truncate` lets the row shrink with ellipsis when
+            the column is narrower than the title (e.g. a 40-char title in a 280px
+            dashboard column at high density). The cascade still preserves what it can —
+            project truncates first, then meta hides — but when even the bare title
+            can't fit, the title ellipsizes rather than pushing the date off the right
+            edge of the column.
             -mr-2 cancels the outer row's gap-2, removing the redundant buffer between the
             trailing hit-zone and the assignee badge — the hit-zone itself provides the slack. */}
-        <div className="flex flex-row items-center gap-[4px] min-w-0 overflow-hidden shrink-0 -mr-2">
+        <div className="flex flex-row items-center gap-[4px] min-w-0 overflow-hidden -mr-2">
           {(() => {
             // Compute which meta slots are "active" given the current density. The slot helper
             // already arranges them by user-chosen order — we just suppress the ones the cascade
@@ -1305,13 +1310,17 @@ function SortableTaskItem({
                 }));
               }
             }}
-            className={`relative z-10 font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] outline-none whitespace-nowrap ${titleColor} ${onRename ? 'cursor-text pl-[7px] -ml-[7px]' : ''}`}
+            className={`relative z-10 font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] outline-none whitespace-nowrap min-w-0 overflow-hidden text-ellipsis ${titleColor} ${onRename ? 'cursor-text pl-[7px] -ml-[7px]' : ''}`}
             // Hotspot tolerance:
             //   left  — 7px padding offset by negative margin so text doesn't shift
             //   right — handled by an absolutely-positioned spacer rendered AFTER the span (see
             //           below). The right side can't use padding+negative-margin alone because
             //           the parent's overflow-hidden + DOM-order hit testing make later siblings
             //           (assignee badge, deadline arrow) win the overlap.
+            // min-w-0 + overflow-hidden + text-ellipsis: when the title row is squeezed
+            // (narrow column + long title that the density cascade can't trim further), the
+            // title ellipsizes instead of pushing the date off the right edge. Title fully
+            // visible when there's room; gracefully truncates when there isn't.
             // Empty / very-short titles still need a comfortable min-width (40px = ~5 chars).
             style={(task.title || '').length <= 1 ? { minWidth: '40px' } : undefined}
           >{task.title}</span>
@@ -4234,39 +4243,45 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
           <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Trash</p>
           <p className="text-[#666] text-[12px] ml-2">{trashedTasks.length}</p>
         </div>
-        {trashedTasks.length === 0 && (
-          <p className="px-[35px] text-[#666] text-[13px]">Empty.</p>
-        )}
-        {trashedTasks.map((t) => {
-          const proj = t.projectId ? projects.find((p) => p.id === t.projectId) : undefined;
-          const cli = (t.clientId ?? proj?.clientId) ? clients.find((c) => c.id === (t.clientId ?? proj?.clientId)) : undefined;
-          const ctx = [cli?.short, proj?.name].filter(Boolean).join(' › ');
-          return (
-            <div key={t.id} className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px] hover:bg-white/[0.03]">
-              {ctx && <p className={`${bodyFont} text-[#656464]`}>{ctx}</p>}
-              {ctx && <Arrowhead />}
-              <span className={`${bodyFont} text-white`}>{t.title || '(untitled)'}</span>
-              <button
-                type="button"
-                onClick={() => onUntrashTask(t.id)}
-                className="ml-auto p-1 opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity"
-                aria-label="Revive task"
-                title="Revive (un-trash)"
-              >
-                <ArrowUp size={14} />
-              </button>
-              <button
-                type="button"
-                onClick={() => onPurgeTask(t.id)}
-                className="-mr-[10px] p-1 opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-[#FF7171] transition-opacity"
-                aria-label="Permanently delete"
-                title="Permanently delete"
-              >
-                <X size={14} />
-              </button>
-            </div>
-          );
-        })}
+        {/* Internal scroll cap so a long trash history doesn't stretch the Settings page
+            into a forever-scroll. max-h is calc'd off the viewport so it grows with the
+            window. Native scrollbar (settings doesn't use the CustomScroll thumb to keep
+            this lightweight). */}
+        <div className="overflow-y-auto" style={{ maxHeight: 'calc(100vh - 260px)' }}>
+          {trashedTasks.length === 0 && (
+            <p className="px-[35px] text-[#666] text-[13px]">Empty.</p>
+          )}
+          {trashedTasks.map((t) => {
+            const proj = t.projectId ? projects.find((p) => p.id === t.projectId) : undefined;
+            const cli = (t.clientId ?? proj?.clientId) ? clients.find((c) => c.id === (t.clientId ?? proj?.clientId)) : undefined;
+            const ctx = [cli?.short, proj?.name].filter(Boolean).join(' › ');
+            return (
+              <div key={t.id} className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px] hover:bg-white/[0.03]">
+                {ctx && <p className={`${bodyFont} text-[#656464]`}>{ctx}</p>}
+                {ctx && <Arrowhead />}
+                <span className={`${bodyFont} text-white`}>{t.title || '(untitled)'}</span>
+                <button
+                  type="button"
+                  onClick={() => onUntrashTask(t.id)}
+                  className="ml-auto p-1 opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity"
+                  aria-label="Revive task"
+                  title="Revive (un-trash)"
+                >
+                  <ArrowUp size={14} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onPurgeTask(t.id)}
+                  className="-mr-[10px] p-1 opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-[#FF7171] transition-opacity"
+                  aria-label="Permanently delete"
+                  title="Permanently delete"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+            );
+          })}
+        </div>
       </div>
       {/* COMPLETED column — tasks that have been ticked off and are now hidden from the main
           views (4 AM cleared completions live here permanently; same-day completions appear too).
@@ -4277,23 +4292,27 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
           <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Completed</p>
           <p className="text-[#666] text-[12px] ml-2">{completedTasks.length}</p>
         </div>
-        {completedTasks.length === 0 && (
-          <p className="px-[35px] text-[#666] text-[13px]">Nothing checked off yet.</p>
-        )}
-        {completedTasks.map((t) => {
-          const proj = t.projectId ? projects.find((p) => p.id === t.projectId) : undefined;
-          const cli = (t.clientId ?? proj?.clientId) ? clients.find((c) => c.id === (t.clientId ?? proj?.clientId)) : undefined;
-          const ctx = [cli?.short, proj?.name].filter(Boolean).join(' › ');
-          return (
-            <div key={t.id} className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px] hover:bg-white/[0.03]">
-              <TaskCheckbox completed={t.completed} started={t.started} onToggle={() => onToggleTask(t.id)} />
-              {ctx && <p className={`${bodyFont} text-[#656464]`}>{ctx}</p>}
-              {ctx && <Arrowhead />}
-              <span className={`${bodyFont} ${t.completed ? 'text-[#656464] line-through' : 'text-white'}`}>{t.title || '(untitled)'}</span>
-              {t.completedDay && <p className="ml-auto text-[#666] text-[12px]">{t.completedDay}</p>}
-            </div>
-          );
-        })}
+        {/* Same scroll cap as Trash — long completion history doesn't blow out
+            the Settings page height. */}
+        <div className="overflow-y-auto" style={{ maxHeight: 'calc(100vh - 260px)' }}>
+          {completedTasks.length === 0 && (
+            <p className="px-[35px] text-[#666] text-[13px]">Nothing checked off yet.</p>
+          )}
+          {completedTasks.map((t) => {
+            const proj = t.projectId ? projects.find((p) => p.id === t.projectId) : undefined;
+            const cli = (t.clientId ?? proj?.clientId) ? clients.find((c) => c.id === (t.clientId ?? proj?.clientId)) : undefined;
+            const ctx = [cli?.short, proj?.name].filter(Boolean).join(' › ');
+            return (
+              <div key={t.id} className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px] hover:bg-white/[0.03]">
+                <TaskCheckbox completed={t.completed} started={t.started} onToggle={() => onToggleTask(t.id)} />
+                {ctx && <p className={`${bodyFont} text-[#656464]`}>{ctx}</p>}
+                {ctx && <Arrowhead />}
+                <span className={`${bodyFont} ${t.completed ? 'text-[#656464] line-through' : 'text-white'}`}>{t.title || '(untitled)'}</span>
+                {t.completedDay && <p className="ml-auto text-[#666] text-[12px]">{t.completedDay}</p>}
+              </div>
+            );
+          })}
+        </div>
       </div>
       </div>
     </div>
@@ -7054,14 +7073,33 @@ export default function App() {
     const a = tasks.find((t) => t.id === activeTaskId);
     const o = tasks.find((t) => t.id === overTaskId);
     if (!a || !o) { setActiveId(null); setActiveTaskIdState(null); setColumnOffset(0); pendingOffsetRef.current = 0; if (dwellTimerRef.current) { clearTimeout(dwellTimerRef.current); dwellTimerRef.current = null; } if (collapseTimerRef.current) { clearTimeout(collapseTimerRef.current); collapseTimerRef.current = null; } setSourceCollapsed(false); return; }
-    // Dashboard cards are horizontally locked: a drag from one dashboard sub-list (e.g. "dash:work:")
-    // can only resolve to drops within the SAME sub-list. Drops on a different sub-list, or on a
-    // per-list column's copy of the task, are ignored â€” no list-changing moves from the dashboard.
+    // Dashboard cards stay scoped to their LIST (work/admin/projects) — dragging
+    // ACROSS lists (e.g. Work today → Admin today) is blocked, but dragging
+    // ACROSS sections within the same list (Work today → Work tomorrow → Next/Work)
+    // is allowed so the user can re-date a task without leaving the dashboard.
+    //
+    // Prefix format:
+    //   dash:${list}:${section}:   ← inside a list block (Work/Admin/Projects)
+    //   dash:next:${list}:         ← inside the Next block (list lives in the 3rd slot)
+    // Per-list columns use bare task ids (no prefix). A dashboard task can never
+    // resolve to a non-dashboard drop target — the dashboard is "view-only" for
+    // list moves; the user must drag in the per-list column for that.
     const prefixOf = (id: string) => { const i = id.lastIndexOf(':'); return i >= 0 ? id.substring(0, i + 1) : ''; };
     const activePrefix = prefixOf(String(active.id));
     const overPrefix = prefixOf(String(over.id));
-    if (activePrefix.startsWith('dash:') && activePrefix !== overPrefix) {
-      setActiveId(null); setActiveTaskIdState(null); setActiveType(null); setActiveCalendarCellId(null); setColumnOffset(0); pendingOffsetRef.current = 0; if (dwellTimerRef.current) { clearTimeout(dwellTimerRef.current); dwellTimerRef.current = null; } if (collapseTimerRef.current) { clearTimeout(collapseTimerRef.current); collapseTimerRef.current = null; } setSourceCollapsed(false); return;
+    const dashListOf = (prefix: string): string | null => {
+      if (!prefix.startsWith('dash:')) return null;
+      const parts = prefix.split(':'); // e.g. ['dash', 'work', 'today', ''] or ['dash', 'next', 'work', '']
+      if (parts[1] === 'next') return parts[2] || null;
+      return parts[1] || null;
+    };
+    const activeDashList = dashListOf(activePrefix);
+    const overDashList = dashListOf(overPrefix);
+    if (activeDashList !== null) {
+      // Source is a dashboard task — enforce: target must also be dashboard AND same list.
+      if (overDashList === null || activeDashList !== overDashList) {
+        setActiveId(null); setActiveTaskIdState(null); setActiveType(null); setActiveCalendarCellId(null); setColumnOffset(0); pendingOffsetRef.current = 0; if (dwellTimerRef.current) { clearTimeout(dwellTimerRef.current); dwellTimerRef.current = null; } if (collapseTimerRef.current) { clearTimeout(collapseTimerRef.current); collapseTimerRef.current = null; } setSourceCollapsed(false); return;
+      }
     }
     // Project view 2: when dropping a task onto another task that lives in a project bucket
     // (over.id has the `proj2:${listId}:${projectId}:` prefix), also reparent the dragged
