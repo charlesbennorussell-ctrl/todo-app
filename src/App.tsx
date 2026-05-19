@@ -7613,63 +7613,96 @@ export default function App() {
         <CustomScroll>
         {(tasksByKey[`${listId}:inbox`] || []).length > 0 && wrap('inbox', bucket(tasksByKey[`${listId}:inbox`] || []))}
         {listId === 'dashboard' ? (
-          // Dashboard column: TODAY is split per list (admin/work/projects), NEXT is the same
-          // aggregate the per-list columns show — surfacing Next here gives the user a
-          // quick scan of what's coming without leaving the Dashboard column.
+          // Dashboard column — list-first hierarchy (user-requested reorganization):
           //
-          // STICKY HIERARCHY (two layers):
-          //   1. Date band (Today / Tomorrow / Next) — outer wrapper div, sticky 'date' header
-          //      pinned at top:0. The wrapper scopes the sticky element so when the user scrolls
-          //      past the entire band, the date label naturally pops up and out (CSS sticky
-          //      behavior — once the containing block's bottom passes the sticky top, the element
-          //      releases). The NEXT date band's header then takes over at top:0.
-          //   2. Category band (Admin / Work / Projects) — INSIDE the Today wrapper, each
-          //      category is its own sub-wrapper with a sticky 'category' header pinned at
-          //      top:37 (flush below the date). They swap as the user scrolls through Today.
-          //      When Today's band ends, both the date AND its category pop out together.
-          <>
-            <div>
-              {/* `tall` extends the Today date's bg 37px past its label so the gap
-                  between the stuck date and the stuck category is filled with bg —
-                  preserves the "date → carriage return → category" rhythm even when
-                  both are pinned to the top of the column. */}
-              <SectionHeader title="Today" sticky="date" tall />
-              {(() => {
-                // Filter to visible categories first so we can identify the FIRST one
-                // and skip its Spacer (the Today header's tall bg already supplies the
-                // carriage return above it). Subsequent categories keep their Spacer to
-                // separate them from the previous category's last task card.
-                const visibleCats = (['admin', 'work', 'projects'] as ListId[])
-                  .map((l) => ({ list: l, items: tasksByKey[`dashboard:list:${l}`] || [] }))
-                  .filter((c) => c.items.length > 0);
-                return visibleCats.map((c, idx) => (
-                  // Sub-wrapper scopes the category sticky so it releases at the band edge
-                  // (next category takes over) and ultimately at the Today band's edge.
-                  <div key={`dash-list-${c.list}`}>
+          //   Work (tall date-tier)            ┐
+          //     Today                          │  ← per-list block: WORK list's today
+          //       <work today tasks>           │     + tomorrow tasks, both filtered to
+          //     (space)                        │     the current user.
+          //     Tomorrow                       │
+          //       <work tomorrow tasks>        ┘
+          //   (space)
+          //   Admin (tall date-tier)           ┐
+          //     Today                          │  ← same shape, ADMIN list's tasks
+          //     Tomorrow                       ┘
+          //   (space)
+          //   Projects (tall date-tier)        ┐
+          //     Today                          │  ← same shape, PROJECTS list's tasks
+          //     Tomorrow                       ┘
+          //   (space)
+          //   Next (tall date-tier)            ┐
+          //     Work                           │  ← cross-list aggregate of NEXT-section
+          //       <work next tasks>            │     tasks, broken down by list
+          //     Admin                          │
+          //       <admin next tasks>           │
+          //     Projects                       │
+          //       <projects next tasks>        ┘
+          //
+          // The sticky overlay reads data-sticky-tier on each SectionHeader: the
+          // list labels (Work/Admin/Projects/Next) are tier='date' tall, the inner
+          // date/list labels are tier='category' at top:74 flush below.
+          (() => {
+            // Inline assignee filter — dashboard scopes to tasks assigned to the
+            // current user (or unassigned, which default to "everyone's").
+            const forMe = (xs: Task[]) => xs.filter((t) => t.assignees.length === 0 || t.assignees.includes(currentUserShort));
+            const orderedLists = ['work', 'admin', 'projects'] as ListId[];
+            // Build per-list bundles up-front so we know which list blocks are
+            // empty (skipped) vs visible (rendered) — needed for the Spacer
+            // between-block logic to skip dead spacers.
+            const blocks = orderedLists.map((list) => {
+              const today = forMe(tasksByKey[`${list}:today`] || []);
+              const tomorrow = tomorrowEnabled ? forMe(tasksByKey[`${list}:tomorrow`] || []) : [];
+              // When tomorrow is OFF, tomorrow-tagged tasks fall through into
+              // next — mirrors the per-list column's tomorrow→next merge.
+              const next = forMe(tomorrowEnabled
+                ? (tasksByKey[`${list}:next`] || [])
+                : [...(tasksByKey[`${list}:tomorrow`] || []), ...(tasksByKey[`${list}:next`] || [])]);
+              return { list, today, tomorrow, next };
+            });
+            const listBlocks = blocks.filter((b) => b.today.length + b.tomorrow.length > 0);
+            const nextBlocks = blocks.filter((b) => b.next.length > 0);
+            return (
+              <>
+                {/* Per-list blocks: Work, then Admin, then Projects (skipping any
+                    list with no today/tomorrow tasks). */}
+                {listBlocks.map((b, idx) => (
+                  <div key={`dash-list-${b.list}`}>
                     {idx > 0 && <Spacer />}
-                    <SectionHeader title={LIST_TITLES[c.list]} sticky="category" />
-                    {/* idPrefix isolates the dashboard's sortable ids from the per-list columns,
-                        so the same task rendered in both places doesn't share a drag state. */}
-                    {bucket(c.items, `dash:${c.list}:`)}
+                    <SectionHeader title={LIST_TITLES[b.list]} sticky="date" tall />
+                    {b.today.length > 0 && (
+                      <>
+                        <SectionHeader title="Today" sticky="category" />
+                        {bucket(b.today, `dash:${b.list}:today:`)}
+                      </>
+                    )}
+                    {b.today.length > 0 && b.tomorrow.length > 0 && <Spacer />}
+                    {b.tomorrow.length > 0 && (
+                      <>
+                        <SectionHeader title="Tomorrow" sticky="category" />
+                        {bucket(b.tomorrow, `dash:${b.list}:tomorrow:`)}
+                      </>
+                    )}
                   </div>
-                ));
-              })()}
-            </div>
-            {tomorrowEnabled && (tasksByKey['dashboard:tomorrow'] || []).length > 0 && (
-              <div>
-                <Spacer />
-                <SectionHeader title="Tomorrow" sticky="date" />
-                {bucket(tasksByKey['dashboard:tomorrow'] || [], 'dash:tomorrow:')}
-              </div>
-            )}
-            {(tasksByKey['dashboard:next'] || []).length > 0 && (
-              <div>
-                <Spacer />
-                <SectionHeader title="Next" sticky="date" />
-                {bucket(tasksByKey['dashboard:next'] || [], 'dash:next:')}
-              </div>
-            )}
-          </>
+                ))}
+                {/* Next block at the bottom — same shape as the list blocks but
+                    with the categories swapped: Next is the date label, the
+                    sub-sections are the lists (Work/Admin/Projects). */}
+                {nextBlocks.length > 0 && (
+                  <div>
+                    {listBlocks.length > 0 && <Spacer />}
+                    <SectionHeader title="Next" sticky="date" tall />
+                    {nextBlocks.map((b, idx) => (
+                      <Fragment key={`dash-next-${b.list}`}>
+                        {idx > 0 && <Spacer />}
+                        <SectionHeader title={LIST_TITLES[b.list]} sticky="category" />
+                        {bucket(b.next, `dash:next:${b.list}:`)}
+                      </Fragment>
+                    ))}
+                  </div>
+                )}
+              </>
+            );
+          })()
         ) : (
           // Headers live INSIDE their section's droppable so dropping ON the "Today" / "Next"
           // label (or anywhere in that section's empty space) lands in that section. Previously
