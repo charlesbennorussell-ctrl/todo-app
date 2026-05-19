@@ -1579,45 +1579,71 @@ function StickyOverlay({ scrollElRef }: { scrollElRef: React.RefObject<HTMLDivEl
   }, [scrollElRef]);
 
   const dateHeight = active.dateTall ? 74 : 37;
+  const bgHeight = (active.date ? dateHeight : 0) + (active.category ? 37 : 0);
   // pointer-events-none: the overlay is a visual layer only; clicks pass
   // through to whatever scrolls beneath. z-30 sits above task rows (z-10) but
   // below the drag overlay (z-50).
+  //
+  // LAYERED STRUCTURE (bottom → top):
+  //   1. bg layer    — single always-opaque bg-[#282828] rect covering the full
+  //                    overlay zone (date height + 37 for category if active).
+  //                    NEVER animates opacity, so the backdrop is always 100%
+  //                    opaque. Earlier we combined bg + label in one motion.div
+  //                    per slot, but during AnimatePresence crossfade BOTH the
+  //                    outgoing and incoming overlays carried bg at fading
+  //                    opacity — alpha blending peaked at ~75% combined opacity
+  //                    around the midpoint, letting underlying text bleed
+  //                    through as a "ghost." Splitting bg out fixes it.
+  //   2. date label  — separate motion.div inside an AnimatePresence; crossfades
+  //                    text only, bg-transparent so it doesn't interact with
+  //                    the bg layer's opacity.
+  //   3. category    — same pattern, sits below the date.
   return (
     <div className="absolute top-0 left-0 right-[14px] pointer-events-none z-30">
-      <AnimatePresence>
-        {active.date && (
-          <motion.div
-            key={`d-${active.date}`}
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            // Buttery ease-out-expo, slightly longer than typical UI feedback so
-            // the swap feels like a deliberate transition rather than a flicker.
-            transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
-            className="absolute top-0 left-0 right-0 bg-[#282828] box-border w-full"
-            style={{ height: dateHeight }}
-          >
-            <div className="h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px]">
+      {/* Always-opaque backdrop — covers the entire overlay area in one go so
+          no fade-related alpha gaps appear. */}
+      {bgHeight > 0 && (
+        <div
+          className="absolute top-0 left-0 right-0 bg-[#282828]"
+          style={{ height: bgHeight }}
+        />
+      )}
+      {/* Date label slot — crossfade in place, no bg. */}
+      <div className="absolute top-0 left-0 right-0 h-[37px]">
+        <AnimatePresence>
+          {active.date && (
+            <motion.div
+              key={`d-${active.date}`}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              // Buttery ease-out-expo, slightly longer than typical UI feedback
+              // so the swap feels like a deliberate transition, not a flicker.
+              transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
+              className="absolute inset-0 box-border flex flex-row gap-2 items-center px-[31px]"
+            >
               <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[#656464] text-[14px] whitespace-nowrap">{active.date}</p>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-      <AnimatePresence>
-        {active.category && (
-          <motion.div
-            key={`c-${active.category}`}
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
-            className="absolute left-0 right-0 bg-[#282828] box-border h-[37px] w-full flex flex-row gap-2 items-center px-[31px]"
-            style={{ top: dateHeight }}
-          >
-            <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[#656464] text-[14px] whitespace-nowrap">{active.category}</p>
-          </motion.div>
-        )}
-      </AnimatePresence>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
+      {/* Category label slot — sits flush below the date (top = dateHeight). */}
+      <div className="absolute left-0 right-0 h-[37px]" style={{ top: dateHeight }}>
+        <AnimatePresence>
+          {active.category && (
+            <motion.div
+              key={`c-${active.category}`}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
+              className="absolute inset-0 box-border flex flex-row gap-2 items-center px-[31px]"
+            >
+              <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[#656464] text-[14px] whitespace-nowrap">{active.category}</p>
+            </motion.div>
+          )}
+        </AnimatePresence>
+      </div>
     </div>
   );
 }
