@@ -364,6 +364,11 @@ function CustomScroll({
       >
         {children}
       </div>
+      {/* Sticky label overlay — pinned at the top of the column, crossfades date
+          and category labels by opacity as the user scrolls. Inert if the
+          children don't include any [data-sticky-tier] elements. Sits OVER the
+          inner scroll element so labels stay fixed while content scrolls. */}
+      <StickyOverlay scrollElRef={ref} />
       {hasOverflow && (
         <>
           {/* Up triangle */}
@@ -1475,37 +1480,144 @@ function SectionHeader({ title, onAdd, sticky, tall }: { title: string; onAdd?: 
   // All section headers (Today, Inbox, Next, Milestones, …) render in the muted
   // grey-text tone — they're navigational labels, not highlighted state.
   //
-  // STICKY MODES (opt-in via the `sticky` prop — undefined = legacy flat behavior):
-  //   'date'     → top:0,  z-20. The outer layer in Dashboard (Today / Tomorrow / Next).
-  //                Also used by single-layer views (per-list columns) where there's no
-  //                category sub-tier.
-  //   'category' → top:74, z-20. The inner layer in Dashboard (Admin / Work / Projects).
-  //                Pinned at 74 (not 37) so it sits BELOW the date AND BELOW a 37px
-  //                carriage-return gap. The date wrapper extends its bg 37px past its
-  //                label (via `tall`) to fill that gap so scrolled rows don't bleed
-  //                through it.
+  // STICKY BEHAVIOR (when `sticky` is set):
+  // The inline header still scrolls naturally with the content — it's NOT
+  // position:sticky any more. Instead, the parent CustomScroll renders a single
+  // StickyOverlay over the top of the column showing the "currently active"
+  // date and category labels, switching them via opacity crossfade (no vertical
+  // motion). The inline label here scrolls up under the overlay's solid backdrop,
+  // hidden by it. Data attrs tell the overlay what to render:
+  //   data-sticky-tier  → 'date' | 'category'
+  //   data-sticky-label → the label text
+  //   data-sticky-tall  → 'true' if this date should reserve a 37px carriage-return
+  //                       gap below its label (only the dashboard's Today/etc.).
   //
-  // `tall` (only meaningful with sticky='date'): adds a 37px padding-bottom to the
-  // outer wrapper so the bg extends below the label by one row's height. Used on the
-  // Dashboard's Today/Tomorrow/Next dates that have a category tier underneath — the
-  // extended bg is the visible "carriage return" between the date and the category
-  // when both are stuck. The label stays in a 37px inner row (vertically centered)
-  // so its visual height is unchanged.
-  //
-  // Sticky elements need a SOLID backdrop (bg-[#282828], matching the page) so the
-  // task rows scrolling underneath don't bleed through the muted-text label.
-  const stickyClass = sticky === 'date'
-    ? 'sticky top-0 z-20 bg-[#282828]'
-    : sticky === 'category'
-      ? 'sticky top-[74px] z-20 bg-[#282828]'
-      : '';
+  // `tall` (only meaningful with sticky='date'): adds a 37px padding-bottom to
+  // the outer wrapper so the inline header reserves the same vertical space the
+  // sticky overlay will occupy when this date is active. Keeps the natural-flow
+  // layout identical to before the overlay was introduced.
+  const dataAttrs: Record<string, string | undefined> = sticky
+    ? { 'data-sticky-tier': sticky, 'data-sticky-label': title, 'data-sticky-tall': tall ? 'true' : undefined }
+    : {};
   const extension = tall ? 'pb-[37px]' : '';
   return (
-    <div className={`w-full box-border ${stickyClass} ${extension}`}>
+    <div {...dataAttrs} className={`w-full box-border ${extension}`}>
       <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px]">
         <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[#656464] text-[14px] whitespace-nowrap">{title}</p>
         {onAdd && <AddPlus onClick={onAdd} />}
       </div>
+    </div>
+  );
+}
+
+// StickyOverlay — sits inside CustomScroll's outer wrapper (above the inner
+// scroll element). Driven by data attributes on SectionHeader: queries
+// [data-sticky-tier="date"] and [data-sticky-tier="category"] to find the
+// "currently active" labels based on scroll position, then renders them in
+// fixed slots with an AnimatePresence opacity crossfade. The labels never
+// move vertically — they fade in/out in place as the scroll position
+// transitions between bands.
+//
+// Active date    = the LATEST [data-sticky-tier="date"] whose top is at-or-above
+//                  the container top. (Most recently scrolled past = currently
+//                  "in" that band.)
+// Active category = the LATEST [data-sticky-tier="category"] within the active
+//                  date's wrapper element whose top is at-or-above the container
+//                  top + dateHeight (37 or 74). Categories are scoped to their
+//                  date wrapper so they auto-clear when the date band ends.
+function StickyOverlay({ scrollElRef }: { scrollElRef: React.RefObject<HTMLDivElement | null> }) {
+  const [active, setActive] = useState<{ date: string | null; dateTall: boolean; category: string | null }>({ date: null, dateTall: false, category: null });
+
+  useEffect(() => {
+    const el = scrollElRef.current;
+    if (!el) return;
+    let rafId = 0;
+    const compute = () => {
+      rafId = 0;
+      const containerRect = el.getBoundingClientRect();
+      const containerTop = containerRect.top;
+      const dateEls = Array.from(el.querySelectorAll<HTMLElement>('[data-sticky-tier="date"]'));
+      let activeDateEl: HTMLElement | null = null;
+      for (const dEl of dateEls) {
+        // +1 tolerance for subpixel scroll positions (the lerp sometimes lands
+        // at 0.5px which would otherwise flicker on/off near the boundary).
+        if (dEl.getBoundingClientRect().top <= containerTop + 1) activeDateEl = dEl;
+      }
+      const nextDate = activeDateEl?.dataset.stickyLabel || null;
+      const nextDateTall = activeDateEl?.dataset.stickyTall === 'true';
+      let nextCategory: string | null = null;
+      if (activeDateEl) {
+        // Scope categories to the active date's wrapper so Tomorrow/Next bands
+        // (which have no categories) cleanly clear the category slot.
+        const wrapper = activeDateEl.parentElement;
+        if (wrapper) {
+          const catEls = Array.from(wrapper.querySelectorAll<HTMLElement>('[data-sticky-tier="category"]'));
+          const catThreshold = containerTop + (nextDateTall ? 74 : 37);
+          for (const cEl of catEls) {
+            if (cEl.getBoundingClientRect().top <= catThreshold + 1) nextCategory = cEl.dataset.stickyLabel || null;
+          }
+        }
+      }
+      setActive((prev) => (prev.date === nextDate && prev.dateTall === nextDateTall && prev.category === nextCategory ? prev : { date: nextDate, dateTall: nextDateTall, category: nextCategory }));
+    };
+    const schedule = () => {
+      if (rafId) return;
+      rafId = requestAnimationFrame(compute);
+    };
+    compute();
+    el.addEventListener('scroll', schedule, { passive: true });
+    const ro = new ResizeObserver(schedule);
+    ro.observe(el);
+    const mo = new MutationObserver(schedule);
+    mo.observe(el, { childList: true, subtree: true });
+    return () => {
+      el.removeEventListener('scroll', schedule);
+      ro.disconnect();
+      mo.disconnect();
+      if (rafId) cancelAnimationFrame(rafId);
+    };
+  }, [scrollElRef]);
+
+  const dateHeight = active.dateTall ? 74 : 37;
+  // pointer-events-none: the overlay is a visual layer only; clicks pass
+  // through to whatever scrolls beneath. z-30 sits above task rows (z-10) but
+  // below the drag overlay (z-50).
+  return (
+    <div className="absolute top-0 left-0 right-[14px] pointer-events-none z-30">
+      <AnimatePresence>
+        {active.date && (
+          <motion.div
+            key={`d-${active.date}`}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            // Buttery ease-out-expo, slightly longer than typical UI feedback so
+            // the swap feels like a deliberate transition rather than a flicker.
+            transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
+            className="absolute top-0 left-0 right-0 bg-[#282828] box-border w-full"
+            style={{ height: dateHeight }}
+          >
+            <div className="h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px]">
+              <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[#656464] text-[14px] whitespace-nowrap">{active.date}</p>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+      <AnimatePresence>
+        {active.category && (
+          <motion.div
+            key={`c-${active.category}`}
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
+            className="absolute left-0 right-0 bg-[#282828] box-border h-[37px] w-full flex flex-row gap-2 items-center px-[31px]"
+            style={{ top: dateHeight }}
+          >
+            <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[#656464] text-[14px] whitespace-nowrap">{active.category}</p>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
