@@ -1,10 +1,10 @@
 // Tauri 2 entry point. Kept intentionally minimal — the entire app lives in
 // the React/Vite codebase and is loaded from the hosted URL configured in
 // tauri.conf.json. The Rust shell opens the main window and owns one native
-// feature: the PIP quick-view. A global shortcut (Ctrl+Win+Space, falling
-// back to Ctrl+Alt+Space if the OS refuses the first) toggles a tall, narrow,
-// always-on-top window pointed at the hosted app with ?pip=1 — the web side
-// sees the flag and renders only the daily Dashboard stack.
+// feature: the PIP quick-view. A global shortcut (Ctrl+Space, falling back to
+// Ctrl+Win+Space then Ctrl+Alt+Space if the OS refuses) toggles a tall,
+// narrow, always-on-top window pointed at the hosted app with ?pip=1 — the
+// web side sees the flag and renders only the daily Dashboard stack.
 
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
@@ -77,17 +77,24 @@ pub fn run() {
                         })
                         .build(),
                 )?;
-                // Primary combo: Ctrl+Win+Space ("control command space" — Win
-                // maps to Cmd on macOS builds). Some Windows setups reserve it
-                // for IME switching, so fall back to Ctrl+Alt+Space.
+                // Primary combo: Ctrl+Space (user-confirmed free on their setup).
+                // Fallback chain if the OS reserves it: Ctrl+Win+Space, then
+                // Ctrl+Alt+Space.
                 let shortcuts = app.global_shortcut();
-                if let Err(primary_err) = shortcuts.register("ctrl+super+space") {
-                    eprintln!(
-                        "[pip] ctrl+super+space registration failed ({primary_err}); trying ctrl+alt+space"
-                    );
-                    if let Err(fallback_err) = shortcuts.register("ctrl+alt+space") {
-                        eprintln!("[pip] ctrl+alt+space registration also failed: {fallback_err}");
+                let combos = ["ctrl+space", "ctrl+super+space", "ctrl+alt+space"];
+                let mut registered = None;
+                for combo in combos {
+                    match shortcuts.register(combo) {
+                        Ok(()) => {
+                            registered = Some(combo);
+                            break;
+                        }
+                        Err(e) => eprintln!("[pip] {combo} registration failed: {e}"),
                     }
+                }
+                match registered {
+                    Some(combo) => eprintln!("[pip] toggle shortcut registered: {combo}"),
+                    None => eprintln!("[pip] no toggle shortcut could be registered"),
                 }
             }
             Ok(())

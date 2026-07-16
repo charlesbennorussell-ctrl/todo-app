@@ -1498,7 +1498,7 @@ function SortableTaskItem({
   );
 }
 
-function SectionHeader({ title, onAdd, sticky, tall }: { title: string; onAdd?: () => void; sticky?: 'date' | 'category'; tall?: boolean }) {
+function SectionHeader({ title, onAdd, sticky, tall, accent }: { title: string; onAdd?: () => void; sticky?: 'date' | 'category'; tall?: boolean; accent?: boolean }) {
   // All section headers (Today, Inbox, Next, Milestones, …) render in the muted
   // grey-text tone — they're navigational labels, not highlighted state.
   //
@@ -1518,14 +1518,17 @@ function SectionHeader({ title, onAdd, sticky, tall }: { title: string; onAdd?: 
   // the outer wrapper so the inline header reserves the same vertical space the
   // sticky overlay will occupy when this date is active. Keeps the natural-flow
   // layout identical to before the overlay was introduced.
+  // `accent` renders the label in milestone purple instead of the muted grey — used by the
+  // focus page's mini-calendar for the "(Today)" band, matching the week calendar's today
+  // header. Carried through to the sticky overlay via data-sticky-accent.
   const dataAttrs: Record<string, string | undefined> = sticky
-    ? { 'data-sticky-tier': sticky, 'data-sticky-label': title, 'data-sticky-tall': tall ? 'true' : undefined }
+    ? { 'data-sticky-tier': sticky, 'data-sticky-label': title, 'data-sticky-tall': tall ? 'true' : undefined, 'data-sticky-accent': accent ? 'true' : undefined }
     : {};
   const extension = tall ? 'pb-[37px]' : '';
   return (
     <div {...dataAttrs} className={`w-full box-border ${extension}`}>
       <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px]">
-        <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[#656464] text-[14px] whitespace-nowrap">{title}</p>
+        <p className={`font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap ${accent ? 'text-[#8465ff]' : 'text-[#656464]'}`}>{title}</p>
         {onAdd && <AddPlus onClick={onAdd} />}
       </div>
     </div>
@@ -1548,7 +1551,7 @@ function SectionHeader({ title, onAdd, sticky, tall }: { title: string; onAdd?: 
 //                  top + dateHeight (37 or 74). Categories are scoped to their
 //                  date wrapper so they auto-clear when the date band ends.
 function StickyOverlay({ scrollElRef }: { scrollElRef: React.RefObject<HTMLDivElement | null> }) {
-  const [active, setActive] = useState<{ date: string | null; dateTall: boolean; category: string | null }>({ date: null, dateTall: false, category: null });
+  const [active, setActive] = useState<{ date: string | null; dateTall: boolean; dateAccent: boolean; category: string | null }>({ date: null, dateTall: false, dateAccent: false, category: null });
 
   useEffect(() => {
     const el = scrollElRef.current;
@@ -1567,6 +1570,7 @@ function StickyOverlay({ scrollElRef }: { scrollElRef: React.RefObject<HTMLDivEl
       }
       const nextDate = activeDateEl?.dataset.stickyLabel || null;
       const nextDateTall = activeDateEl?.dataset.stickyTall === 'true';
+      const nextDateAccent = activeDateEl?.dataset.stickyAccent === 'true';
       let nextCategory: string | null = null;
       if (activeDateEl) {
         // Scope categories to the active date's wrapper so Tomorrow/Next bands
@@ -1580,7 +1584,7 @@ function StickyOverlay({ scrollElRef }: { scrollElRef: React.RefObject<HTMLDivEl
           }
         }
       }
-      setActive((prev) => (prev.date === nextDate && prev.dateTall === nextDateTall && prev.category === nextCategory ? prev : { date: nextDate, dateTall: nextDateTall, category: nextCategory }));
+      setActive((prev) => (prev.date === nextDate && prev.dateTall === nextDateTall && prev.dateAccent === nextDateAccent && prev.category === nextCategory ? prev : { date: nextDate, dateTall: nextDateTall, dateAccent: nextDateAccent, category: nextCategory }));
     };
     const schedule = () => {
       if (rafId) return;
@@ -1644,7 +1648,7 @@ function StickyOverlay({ scrollElRef }: { scrollElRef: React.RefObject<HTMLDivEl
               transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
               className="absolute inset-0 box-border flex flex-row gap-2 items-center px-[31px]"
             >
-              <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[#656464] text-[14px] whitespace-nowrap">{active.date}</p>
+              <p className={`font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap ${active.dateAccent ? 'text-[#8465ff]' : 'text-[#656464]'}`}>{active.date}</p>
             </motion.div>
           )}
         </AnimatePresence>
@@ -7772,19 +7776,16 @@ export default function App() {
                   <div key={`dash-list-${b.list}`}>
                     {idx > 0 && <Spacer />}
                     <SectionHeader title={LIST_TITLES[b.list]} sticky="date" tall />
-                    {b.today.length > 0 && (
-                      <>
-                        <SectionHeader title="Today" sticky="category" />
-                        {bucket(b.today, `dash:${b.list}:today:`)}
-                      </>
-                    )}
-                    {b.today.length > 0 && b.tomorrow.length > 0 && <Spacer />}
-                    {b.tomorrow.length > 0 && (
-                      <>
-                        <SectionHeader title="Tomorrow" sticky="category" />
-                        {bucket(b.tomorrow, `dash:${b.list}:tomorrow:`)}
-                      </>
-                    )}
+                    {/* Today + Tomorrow consolidated into ONE chunk per list — a single
+                        "Today / Tomorrow" header with the tasks stacked day-ordered
+                        (todays first, then tomorrows). The separate sub-headers were
+                        reading as noise. Day membership stays visible through the row
+                        tone: tomorrow rows render in the dimmer next-tier grey. One
+                        merged SortableContext (prefix dash:<list>:days:) so drags flow
+                        across the day boundary; drops resolve the section from the
+                        target row, same as before. */}
+                    <SectionHeader title="Today / Tomorrow" sticky="category" />
+                    {bucket([...b.today, ...b.tomorrow], `dash:${b.list}:days:`)}
                   </div>
                 ))}
                 {/* Next block at the bottom — same shape as the list blocks but
@@ -8477,9 +8478,14 @@ export default function App() {
                       const mine = (t: Task) => t.assignees.length === 0 || t.assignees.includes(currentUserShort);
                       return [0, 1, 2].map((off) => {
                         const iso = isoPlus(off);
-                        const label = off === 0 ? 'Today' : off === 1 ? 'Tomorrow' : (() => {
+                        // Band labels use the week calendar's day-header format — "Thu 16
+                        // (Today)" / "Fri 17" / "Sat 18" — with today's band in the same
+                        // milestone purple the calendar uses for its today column.
+                        const label = (() => {
                           const [y, m, d] = iso.split('-').map(Number);
-                          return new Date(y, m - 1, d).toLocaleDateString('en-US', { weekday: 'long' });
+                          const dt = new Date(y, m - 1, d);
+                          const base = `${dt.toLocaleDateString('en-US', { weekday: 'short' })} ${dt.getDate()}`;
+                          return off === 0 ? `${base} (Today)` : base;
                         })();
                         // Day membership mirrors the list's mental model, not just raw
                         // deadlines (most tasks here are undated section-bucketed):
@@ -8510,7 +8516,7 @@ export default function App() {
                         return (
                           <div key={`focus-cal-${iso}`}>
                             {off > 0 && <Spacer />}
-                            <SectionHeader title={label} sticky="date" />
+                            <SectionHeader title={label} sticky="date" accent={off === 0} />
                             {items.length > 0
                               ? renderReadonlyBucket(items, iso)
                               : (
