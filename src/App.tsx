@@ -5940,6 +5940,9 @@ export default function App() {
   // click on any thumbnail enters 1-up; single-click on the 1-up image exits back to whatever
   // grid/tile view was active. Stays inline (no fullscreen lightbox modal).
   const [focusOneUpImageId, setFocusOneUpImageId] = useState<string | null>(null);
+  // Focus page left panel drill-down: null = master list of all projects; a project id =
+  // that project's task list with a back arrow to return to the master list.
+  const [focusProjectId, setFocusProjectId] = useState<string | null>(null);
   // Drag-over state for the References column. When the user drags a file from
   // outside the app onto the column AND there are already images visible, we
   // overlay an "Add Images" sheet on top of the gallery so they can pick a
@@ -7853,12 +7856,12 @@ export default function App() {
     if (b.id === PERSONAL_CLIENT_ID) return 1;
     return a.name.localeCompare(b.name);
   }), [clients]);
-  const renderProjectGroupedColumn = (listId: ListId) => {
-    // Render a sortable bucket of tasks with the project-view-2 visual flags. Same wiring as
-    // list view's renderBucket. The third arg toggles the LIndent ⌐ prefix — true for tasks
-    // under a project header, false for the orphan tasks at the column top (no parent to indent
-    // under, so the indent reads as visual noise).
-    const renderProjectBucket = (list: Task[], idPrefix: string, indent: boolean) => (
+  // Render a sortable bucket of tasks with the project-view-2 visual flags. Same wiring as
+  // list view's renderBucket. The third arg toggles the LIndent ⌐ prefix — true for tasks
+  // under a project header, false for orphan/loose lists (no parent to indent under, so the
+  // indent reads as visual noise). App-scope (not inside renderProjectGroupedColumn) because
+  // the focus page's single-project drill-down reuses it for its task list.
+  const renderProjectBucket = (list: Task[], idPrefix: string, indent: boolean) => (
       <SortableContext items={list.map((t) => `${idPrefix}${t.id}`)} strategy={verticalListSortingStrategy}>
         <AnimatePresence>
           {list.map((task, index) => {
@@ -7897,6 +7900,8 @@ export default function App() {
         </AnimatePresence>
       </SortableContext>
     );
+
+  const renderProjectGroupedColumn = (listId: ListId) => {
     // Gather all tasks visible in this list (across all sections — Project View 2 doesn't carve
     // by today/tomorrow/next, it carves by client > project). Milestones (type === 'scheduled')
     // are included too so they live UNDER their project header in project view, not as a separate
@@ -8348,12 +8353,100 @@ export default function App() {
                 <TopHeader viewName="Focus" />
               </div>
               <div className="flex flex-row gap-0 flex-1 min-h-0 w-full max-w-[1240px] min-[1530px]:max-w-[1740px] mx-auto">
-                {/* Column 0 — Projects overview (project-grouped, same renderer as Project
-                    view). Two-column redesign: Projects on the left, the daily Dashboard
-                    stack on the right, the pair centered on the page (max-w + mx-auto).
+                {/* Column 0 — Projects panel: a flat master list of every project; clicking
+                    one drills into that project's tasks, and the back chevron in the title
+                    row returns to the master list (focusProjectId drives the two states).
                     Information + References are parked behind FOCUS_SHOW_INFO /
                     FOCUS_SHOW_REFERENCES while ctrl-assets takes over reference handling. */}
-                {renderProjectGroupedColumn('projects')}
+                {(() => {
+                  const drill = focusProjectId ? projects.find((p) => p.id === focusProjectId) : undefined;
+                  if (drill) {
+                    const drillClient = drill.clientId ? clients.find((c) => c.id === drill.clientId) : undefined;
+                    // Same membership rule as project view 2: explicit projectId, plus the
+                    // milestone-title inference (a scheduled task under the same client whose
+                    // title matches the project name reads as that project's milestone).
+                    const drillName = (drill.name || '').trim().toLowerCase();
+                    const projTasks = visibleTasks.filter((t) => {
+                      if (t.projectId === drill.id) return true;
+                      return !t.projectId && t.type === 'scheduled' && !!t.clientId && t.clientId === drill.clientId
+                        && t.title.trim().toLowerCase() === drillName;
+                    });
+                    // Milestones first (the project's headline goals), then todos by section
+                    // (today → tomorrow → next → inbox) with manual order inside each.
+                    const sectionRank: Record<SectionId, number> = { today: 0, tomorrow: 1, next: 2, inbox: 3 };
+                    const detailTasks = [
+                      ...projTasks.filter((t) => t.type === 'scheduled'),
+                      ...projTasks.filter((t) => t.type !== 'scheduled')
+                        .sort((a, b) => (sectionRank[a.section] - sectionRank[b.section]) || a.order - b.order),
+                    ];
+                    return (
+                      <div className="flex-1 min-w-[280px] flex flex-col min-h-0 overflow-hidden">
+                        {/* Title row: back chevron sits in the 35px gutter (absolute) so the
+                            breadcrumb text stays aligned with the other column titles. */}
+                        <div className="relative shrink-0 group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]" style={{ marginBottom: SPACING.dcr }}>
+                          <button
+                            type="button"
+                            onClick={() => setFocusProjectId(null)}
+                            aria-label="Back to projects"
+                            className="absolute left-[8px] top-1/2 -translate-y-1/2 p-1 text-[#656464] hover:text-white transition-colors"
+                          >
+                            <ChevronLeft size={16} />
+                          </button>
+                          <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">
+                            {drillClient?.short ? <>{drillClient.short}<Arrowhead /></> : null}{drill.name || 'Untitled'}
+                          </p>
+                          <AddPlus onClick={() => addTaskToProject(drill.id, drill.list ?? 'projects')} />
+                        </div>
+                        <CustomScroll>
+                          {detailTasks.length > 0
+                            ? renderProjectBucket(detailTasks, `proj2:${drill.list ?? 'projects'}:${drill.id}:`, false)
+                            : (
+                              <div className="h-[37px] box-border flex flex-row items-center px-[31px] w-full">
+                                <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap text-[#474747]">No tasks yet</p>
+                              </div>
+                            )}
+                        </CustomScroll>
+                      </div>
+                    );
+                  }
+                  // Master list — every project, grouped by the proj2 client order (Personal
+                  // first, then alphabetical), clientless projects at the bottom. Each row:
+                  // client short (grey) › project name (white) + visible-task count.
+                  const rows: Array<{ p: Project; client?: Client }> = [];
+                  for (const c of proj2SortedClients) {
+                    for (const p of projects.filter((pp) => pp.clientId === c.id)) rows.push({ p, client: c });
+                  }
+                  for (const p of projects.filter((pp) => !pp.clientId || !clients.some((c) => c.id === pp.clientId))) rows.push({ p });
+                  return (
+                    <div className="flex-1 min-w-[280px] flex flex-col min-h-0 overflow-hidden">
+                      <div className="shrink-0 group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]" style={{ marginBottom: SPACING.dcr }}>
+                        <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">Projects</p>
+                      </div>
+                      <CustomScroll>
+                        {rows.map(({ p, client: c }) => {
+                          const count = visibleTasks.filter((t) => t.projectId === p.id).length;
+                          return (
+                            <button
+                              key={p.id}
+                              type="button"
+                              onClick={() => setFocusProjectId(p.id)}
+                              className="group h-[37px] w-full text-left box-border flex flex-row gap-2 items-center px-[31px] hover:bg-white/[0.03] transition-colors"
+                            >
+                              <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap text-[#656464]">
+                                {c?.short || (c && c.id === PERSONAL_CLIENT_ID ? 'Personal' : '')}
+                              </span>
+                              <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis text-white">
+                                {p.name || 'Untitled'}
+                              </span>
+                              {count > 0 && <span className="text-[#474747] text-[12px]">{count}</span>}
+                              <ChevronRight size={14} className="ml-auto text-[#5e5e5e] opacity-0 group-hover:opacity-100 transition-opacity" />
+                            </button>
+                          );
+                        })}
+                      </CustomScroll>
+                    </div>
+                  );
+                })()}
                 {/* Column 1 — the daily Dashboard stack. Same renderer as the list view's
                     Dashboard column (list-first hierarchy: Work/Admin/Projects → Today/
                     Tomorrow, then Next → per-list) so the two stay in lockstep — and the
