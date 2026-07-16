@@ -1,6 +1,6 @@
 [package]
 name = "ctrl-project"
-version = "0.1.59"
+version = "0.1.60"
 description = "Ctrl-Project — todo + project planner"
 authors = ["benno"]
 edition = "2021"
@@ -21,6 +21,12 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = [] }
 serde_json = "1"
 serde = { version = "1", features = ["derive"] }
+
+# Desktop-only: global shortcut (Ctrl+Win+Space) that toggles the PIP
+# quick-view window. The plugin doesn't build for mobile targets, hence the
+# cfg-gated dependency table (mirrors the plugin's own install docs).
+[target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
+tauri-plugin-global-shortcut = "2"
 
 [features]
 # Enabled at packaging time; the dev build skips it.

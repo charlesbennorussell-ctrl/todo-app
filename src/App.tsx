@@ -45,6 +45,19 @@ const TOUCH_DEVICE = typeof window !== 'undefined' && (
   || (typeof window.matchMedia === 'function' && window.matchMedia('(hover: none) and (pointer: coarse)').matches)
 );
 
+// PIP (picture-in-picture) mode. The Tauri shell opens a second always-on-top
+// window at <app-url>?pip=1 via a global shortcut (Ctrl+Win+Space). When the
+// flag is present the app renders ONLY the daily Dashboard stack — no nav, no
+// other views — sized for a tall narrow window floating over other apps.
+const PIP_MODE = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('pip');
+
+// Focus-page column toggles. References (the DAM gallery) + Information are
+// PARKED, not deleted — the external ctrl-assets app is taking over reference
+// handling and a bridge between the two apps is planned. Flip these back to
+// true to resurrect the columns exactly as they were.
+const FOCUS_SHOW_INFO = false;
+const FOCUS_SHOW_REFERENCES = false;
+
 // Mobile debug overlay. Push a line via debugLog(message) and the most
 // recent ~20 events render in a translucent strip at the bottom of the
 // iPhone screen. Toggle by triple-tapping the strip (tap-tap-tap quickly
@@ -8163,7 +8176,20 @@ export default function App() {
         </div>
       )}
       <div className="relative h-screen bg-[#282828] overflow-hidden">
-        {mode === 'dashboard' && (
+        {/* PIP quick-view: the whole app collapses to the daily Dashboard stack.
+            Opened by the Tauri shell in a tall, narrow, always-on-top window at
+            ?pip=1 (global shortcut Ctrl+Win+Space). No TopHeader, no BottomBar —
+            renderColumn('dashboard') brings its own "Dashboard — <name>" title,
+            checkboxes, drag, and live Liveblocks sync, so edits made here land
+            in the main window instantly. */}
+        {PIP_MODE && (
+          <div className="h-full flex flex-col" style={{ paddingTop: 18, paddingBottom: 12 }}>
+            <div className="flex flex-row flex-1 min-h-0">
+              {renderColumn('dashboard')}
+            </div>
+          </div>
+        )}
+        {!PIP_MODE && mode === 'dashboard' && (
           <div className="h-full flex flex-col" style={{ paddingTop: SPACING.topMargin, paddingBottom: 76 }}>
             <div className="shrink-0">
               <TopHeader viewName="List" />
@@ -8175,7 +8201,7 @@ export default function App() {
             </div>
           </div>
         )}
-        {mode === 'projectView' && (
+        {!PIP_MODE && mode === 'projectView' && (
           // PROJECT VIEW — built from list view's renderColumn, grouping tasks by project.
           // Inherits ALL of list view's working drag mechanics 1:1 (renderBucket, SortableTaskItem,
           // getAnimationProps, the existing DragOverlay path). The only diff is the column body
@@ -8232,7 +8258,7 @@ export default function App() {
         )}
         {/* Legacy ProjectViewMode removed — `mode === 'projectView'` now renders the new
             project view above (built off list view's drag tech). */}
-        {mode === 'calendar' && (
+        {!PIP_MODE && mode === 'calendar' && (
           <WeekCalendarMode
             tasks={calendarTasks}
             projects={projects}
@@ -8252,7 +8278,7 @@ export default function App() {
             taskOrder={taskOrder}
           />
         )}
-        {mode === 'focus' && (() => {
+        {!PIP_MODE && mode === 'focus' && (() => {
           // Project Focus mode — three-column dashboard pinned to a single project.
           //   Col 1: the user's Dashboard (Today + Tomorrow), same renderer as list view.
           //   Col 2: "<Project Name> — Information", with an editable Brief block and a
@@ -8309,10 +8335,6 @@ export default function App() {
           const projectFolders = projectKey ? focusImageFolders[projectKey] || [] : [];
           const taskFolders = taskKey ? focusImageFolders[taskKey] || [] : [];
           const taskTitleForNotes = (selectedTask?.title || 'Task').trim() || 'Task';
-          const dashTodayKey = (l: ListId) => `dashboard:list:${l}` as const;
-          const todayItems = (['admin', 'work', 'projects'] as ListId[]).map((l) => ({ list: l, items: tasksByKey[dashTodayKey(l)] || [] }));
-          const tomorrowItems = tasksByKey['dashboard:tomorrow'] || [];
-          const nextItems = tasksByKey['dashboard:next'] || [];
           return (
             // Focus mode: fixed TopHeader, fixed column titles, each column body scrolls
             // independently. Same pattern as List / Project / Calendar.
@@ -8320,55 +8342,25 @@ export default function App() {
               <div className="shrink-0">
                 <TopHeader viewName="Focus" />
               </div>
-              <div className="flex flex-row gap-0 flex-1 min-h-0 overflow-x-auto mobile-carousel">
-                {/* Column 1 — Dashboard */}
-                <div className="flex-1 min-w-[280px] flex flex-col min-h-0 overflow-hidden">
-                  <div className="shrink-0 group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]" style={{ marginBottom: SPACING.dcr }}>
-                    <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">
-                      Dashboard — {people.find((p) => p.short === currentUserShort)?.name || currentUserShort}
-                    </p>
-                  </div>
-                  <CustomScroll>
-                  {/* Mirror the main Dashboard column's sticky hierarchy: date band wraps its
-                      categories so the date label pops out when the user scrolls past the band,
-                      and each category is its own sub-wrapper so categories swap cleanly within
-                      a date. `tall` on the date extends its bg 37px past the label so the gap
-                      between the stuck date and the stuck category stays bg-filled. See the
-                      inline notes in renderColumn for the full rationale. */}
-                  <div>
-                    <SectionHeader title="Today" sticky="date" tall />
-                    {(() => {
-                      const visibleCats = todayItems.filter((c) => c.items.length > 0);
-                      return visibleCats.map((c, idx) => (
-                        <div key={`focus-today-${c.list}`}>
-                          {idx > 0 && <Spacer />}
-                          <SectionHeader title={LIST_TITLES[c.list]} sticky="category" />
-                          {renderBucket(c.items, `focus-dash:${c.list}:`)}
-                        </div>
-                      ));
-                    })()}
-                  </div>
-                  {tomorrowItems.length > 0 && (
-                    <div>
-                      <Spacer />
-                      <SectionHeader title="Tomorrow" sticky="date" />
-                      {renderBucket(tomorrowItems, 'focus-dash:tomorrow:')}
-                    </div>
-                  )}
-                  {nextItems.length > 0 && (
-                    <div>
-                      <Spacer />
-                      <SectionHeader title="Next" sticky="date" />
-                      {renderBucket(nextItems, 'focus-dash:next:')}
-                    </div>
-                  )}
-                  </CustomScroll>
-                </div>
+              <div className="flex flex-row gap-0 flex-1 min-h-0 w-full max-w-[1240px] mx-auto">
+                {/* Column 0 — Projects overview (project-grouped, same renderer as Project
+                    view). Two-column redesign: Projects on the left, the daily Dashboard
+                    stack on the right, the pair centered on the page (max-w + mx-auto).
+                    Information + References are parked behind FOCUS_SHOW_INFO /
+                    FOCUS_SHOW_REFERENCES while ctrl-assets takes over reference handling. */}
+                {renderProjectGroupedColumn('projects')}
+                {/* Column 1 — the daily Dashboard stack. Same renderer as the list view's
+                    Dashboard column (list-first hierarchy: Work/Admin/Projects → Today/
+                    Tomorrow, then Next → per-list) so the two stay in lockstep — and the
+                    same column the PIP window shows. Replaces the old bespoke focus-dash
+                    markup that still used the date-first layout. */}
+                {renderColumn('dashboard')}
                 {/* Column 2 — Project / Task Information (Brief + Integrations).
                     Title sits in the same row as the Dashboard column header so the three
                     columns share a single top-aligned header line. The header reads
                     "<Client> ⌧ <Project> — Information" when a project is in play, or
                     "<Task Title> — Information" for an unprojected task. */}
+                {FOCUS_SHOW_INFO && (
                 <div className="flex-1 min-w-[280px] flex flex-col min-h-0 overflow-hidden">
                   <div className="shrink-0 group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]" style={{ marginBottom: SPACING.dcr }}>
                     <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">
@@ -8504,6 +8496,7 @@ export default function App() {
                   </CustomScroll>
                   )}
                 </div>
+                )}
                 {/* Column 3 — References. Twice the width of the Dashboard / Information
                     columns (flex-[2]) since reference cards are a richer visual surface and
                     benefit from the extra horizontal real estate. Two drop zones (project,
@@ -8517,6 +8510,7 @@ export default function App() {
                         DIRECTLY (gallery uses h-full and ResizeObserver to fit exactly,
                         no scrollbar); for Small / Medium / Large it wraps the gallery in
                         a CustomScroll so the rows can overflow and scroll. */}
+                {FOCUS_SHOW_REFERENCES && (
                 <div
                   className="flex-[2] min-w-[280px] flex flex-col min-h-0 overflow-hidden relative"
                   // External-file drag tracking. We keep a counter ref because moving
@@ -9121,6 +9115,7 @@ export default function App() {
                   {/* Lightbox removed — single-click on any tile now toggles inline 1-up
                       view via FocusDamViewer's onOneUpToggle. */}
                 </div>
+                )}
               </div>
               {/* Lightroom import dialog. State machine:
                   - idle: URL input + Import button
@@ -9239,7 +9234,7 @@ export default function App() {
             </div>
           );
         })()}
-        {mode === 'settings' && (
+        {!PIP_MODE && mode === 'settings' && (
           <SettingsMode
             people={people}
             newId={newId}
@@ -9270,7 +9265,7 @@ export default function App() {
           />
         )}
 
-        <BottomBar mode={mode} onSetMode={setMode} onAdd={addAndEditTask} />
+        {!PIP_MODE && <BottomBar mode={mode} onSetMode={setMode} onAdd={addAndEditTask} />}
 
         <AnimatePresence>
           {pendingTrash && (
