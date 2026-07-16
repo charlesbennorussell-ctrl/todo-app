@@ -7622,7 +7622,12 @@ export default function App() {
     </>
   );
 
-  const renderReadonlyBucket = (list: Task[]) => (
+  // omitDeadlineIso: the focus page's mini-calendar bands are already grouped BY day, so a
+  // per-row chip matching the band's own day ("Today" inside the Today band) is noise — pass
+  // the band's iso to suppress exactly those. Chips for OTHER days still render, which is
+  // how an overdue task inside Today keeps its red late date. Dashboard-milestones callsite
+  // passes nothing and keeps all dates.
+  const renderReadonlyBucket = (list: Task[], omitDeadlineIso?: string) => (
     <>
       {list.map((task) => {
         const project = task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
@@ -7653,7 +7658,7 @@ export default function App() {
               })()}
             </div>
             {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} />)}
-            {task.deadline && (
+            {task.deadline && task.deadline !== omitDeadlineIso && (
               <>
                 {!isScheduled && <DeadlineArrow dim={task.completed} />}
                 <p className={`font-['NB_International:Regular',sans-serif] text-[14.333px] whitespace-nowrap ${task.completed ? 'text-[#474747]' : isScheduled ? 'text-[#8465ff]' : isLateDeadline(task.deadline) ? 'text-[#FF7171]' : isNext ? 'text-[#a8a8a8]' : 'text-white'}`}>{formatDeadline(task.deadline)}</p>
@@ -8342,7 +8347,7 @@ export default function App() {
               <div className="shrink-0">
                 <TopHeader viewName="Focus" />
               </div>
-              <div className="flex flex-row gap-0 flex-1 min-h-0 w-full max-w-[1240px] mx-auto">
+              <div className="flex flex-row gap-0 flex-1 min-h-0 w-full max-w-[1240px] min-[1530px]:max-w-[1740px] mx-auto">
                 {/* Column 0 — Projects overview (project-grouped, same renderer as Project
                     view). Two-column redesign: Projects on the left, the daily Dashboard
                     stack on the right, the pair centered on the page (max-w + mx-auto).
@@ -8355,6 +8360,77 @@ export default function App() {
                     same column the PIP window shows. Replaces the old bespoke focus-dash
                     markup that still used the date-first layout. */}
                 {renderColumn('dashboard')}
+                {/* Column 2 — mini day-calendar: Today / Tomorrow / day-after as stacked
+                    bands on the right end. WIDE WINDOWS ONLY (hidden below 1530px — the
+                    desktop app window is 1800 wide so it shows there; the 520px PIP and
+                    half-snapped windows fall back to the two-column layout). Deadline-
+                    driven: each band lists the tasks + milestones due that day, personal-
+                    scoped like the dashboard (yours + unassigned; milestones always).
+                    Rows reuse renderReadonlyBucket — live checkbox, double-click edit,
+                    right-click quick-edit — with the per-row date chip hidden since the
+                    band header already says the day. */}
+                <div className="hidden min-[1530px]:flex flex-1 min-w-[280px] flex-col min-h-0 overflow-hidden">
+                  <div className="shrink-0 group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]" style={{ marginBottom: SPACING.dcr }}>
+                    <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">Calendar</p>
+                  </div>
+                  <CustomScroll>
+                    {(() => {
+                      const isoPlus = (days: number) => {
+                        const d = new Date();
+                        d.setHours(d.getHours() - 4); // same 4 AM day boundary as todayISO()
+                        d.setDate(d.getDate() + days);
+                        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+                      };
+                      const mine = (t: Task) => t.assignees.length === 0 || t.assignees.includes(currentUserShort);
+                      return [0, 1, 2].map((off) => {
+                        const iso = isoPlus(off);
+                        const label = off === 0 ? 'Today' : off === 1 ? 'Tomorrow' : (() => {
+                          const [y, m, d] = iso.split('-').map(Number);
+                          return new Date(y, m - 1, d).toLocaleDateString('en-US', { weekday: 'long' });
+                        })();
+                        // Day membership mirrors the list's mental model, not just raw
+                        // deadlines (most tasks here are undated section-bucketed):
+                        //   Today    → due today + OVERDUE todos (late work is still
+                        //              today's plate) + undated section-'today' todos
+                        //   Tomorrow → due tomorrow + undated section-'tomorrow' todos
+                        //   Day 3    → dated-that-day only (no section maps to +2)
+                        // Milestones stay strictly date-pinned (an expired milestone
+                        // lingering in visibleTasks shouldn't crowd Today's band).
+                        const inDay = (t: Task): boolean => {
+                          if (t.type === 'scheduled') return t.deadline === iso;
+                          if (!mine(t)) return false;
+                          if (t.deadline === iso) return true;
+                          if (off === 0) {
+                            if (t.deadline && t.deadline < iso && !t.completed) return true; // overdue
+                            return !t.deadline && t.section === 'today';
+                          }
+                          if (off === 1) return !t.deadline && t.section === 'tomorrow';
+                          return false;
+                        };
+                        const items = visibleTasks
+                          .filter(inDay)
+                          .sort((a, b) =>
+                            ((a.type === 'scheduled' ? 0 : 1) - (b.type === 'scheduled' ? 0 : 1))
+                            // Late tasks float above on-time ones within Today, oldest first.
+                            || ((a.deadline || '￿') < (b.deadline || '￿') ? -1 : (a.deadline || '￿') > (b.deadline || '￿') ? 1 : 0)
+                            || a.order - b.order);
+                        return (
+                          <div key={`focus-cal-${iso}`}>
+                            {off > 0 && <Spacer />}
+                            <SectionHeader title={label} sticky="date" />
+                            {items.length > 0
+                              ? renderReadonlyBucket(items, iso)
+                              : (
+                                <div className="h-[37px] box-border flex flex-row items-center px-[31px] w-full">
+                                  <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap text-[#474747]">Nothing due</p>
+                                </div>
+                              )}
+                          </div>
+                        );
+                      });
+                    })()}
+                  </CustomScroll>
+                </div>
                 {/* Column 2 — Project / Task Information (Brief + Integrations).
                     Title sits in the same row as the Dashboard column header so the three
                     columns share a single top-aligned header line. The header reads
