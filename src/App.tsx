@@ -1698,8 +1698,10 @@ function Spacer() { return <div className="h-[37px] shrink-0 w-full" />; }
 // via the `edge:project:<id>` / `edge:person:<short>` droppable ids.
 function EdgeDropRow({ id, children }: { id: string; children: React.ReactNode }) {
   const { setNodeRef, isOver } = useDroppable({ id });
+  // isOver → strong purple wash: signals "drop here and the task moves to this project /
+  // gets this assignee." Purple matches the app's accent for project/assignment actions.
   return (
-    <div ref={setNodeRef} className={`h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px] transition-colors ${isOver ? 'bg-white/[0.10]' : 'hover:bg-white/[0.03]'}`}>
+    <div ref={setNodeRef} className={`h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px] transition-colors ${isOver ? 'bg-[#8465ff]/30' : 'hover:bg-white/[0.04]'}`}>
       {children}
     </div>
   );
@@ -1718,6 +1720,16 @@ function ProjectsHeaderDropZone() {
       <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">Projects{isOver ? ' — drop to un-nest' : ''}</p>
     </div>
   );
+}
+
+// Full-area droppable behind the assign tray's content. Its job is to MASK the columns
+// underneath: while the tray is open and a task is dragged over ANY part of it (headers,
+// gaps, not just a row), calendarCollision returns this edge hit, so the sortables beneath
+// the tray never see `over` and stop displacing/reacting. Specific rows (edge:project /
+// edge:person) still win over this for the actual assignment (see calendarCollision).
+function TrayMask() {
+  const { setNodeRef } = useDroppable({ id: 'edge:__mask__' });
+  return <div ref={setNodeRef} className="absolute inset-0 -z-10" aria-hidden />;
 }
 
 // A project row in the focus-page filter panel: draggable (drag onto another to nest it) AND
@@ -6300,17 +6312,22 @@ export default function App() {
   // click on any thumbnail enters 1-up; single-click on the 1-up image exits back to whatever
   // grid/tile view was active. Stays inline (no fullscreen lightbox modal).
   const [focusOneUpImageId, setFocusOneUpImageId] = useState<string | null>(null);
-  // Focus page left panel drill-down: null = master list of all projects; a project id =
-  // that project's task list with a back arrow to return to the master list.
+  // Focus page left panel filter: focusProjectId narrows to ONE project; focusClientId narrows
+  // to ALL of a client's tasks (clicking a client header). Project wins over client when both
+  // are set. Clicking a client filters + expands its accordion; then clicking a sub-project
+  // narrows to just that project.
   const [focusProjectId, setFocusProjectId] = useState<string | null>(null);
+  const [focusClientId, setFocusClientId] = useState<string | null>(null);
   // Edge assign rails: which slide-out drawer is open. Both sides now show the SAME
   // unified tray (Assign To people on top, Assign Project below). 'left' | 'right' just
   // records which edge pulled it out. Opened by hovering/clicking the thin edge bars or by
   // dragging a task card into the edge zones; drops on drawer rows reassign.
   const [edgeDrawer, setEdgeDrawer] = useState<'left' | 'right' | null>(null);
   // Client groups expanded in the edge tray's project list (default collapsed — the tray
-  // shows client headers; click one to reveal its projects). Keyed by client id.
+  // shows client headers; click one to reveal its projects, OR linger over one). Keyed by id.
   const [edgeExpandedClients, setEdgeExpandedClients] = useState<Set<string>>(new Set());
+  // Dwell timer for "linger over a client header → its accordion opens" in the tray.
+  const trayHoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Same collapse model for the focus page's left project-filter panel — client headers
   // collapse the "sub-projects" so the user scans the big picture and expands on demand.
   const [focusExpandedClients, setFocusExpandedClients] = useState<Set<string>>(new Set());
@@ -8256,7 +8273,7 @@ export default function App() {
   // project's tasks — the focus page's left-panel project filter drives this. Callers that
   // use Array.map must wrap in a lambda (`LISTS.map((l) => renderColumn(l))`) so map's index
   // isn't accidentally passed as the filter.
-  const renderColumn = (listId: ListId, filterProjectId?: string | null) => {
+  const renderColumn = (listId: ListId, filterProjectId?: string | null, filterClientId?: string | null) => {
     // Dashboard tasks are now draggable too â€” using the same renderBucket as the per-list columns.
     // Reordering within a sub-list (admin/work/projects) updates order; dragging across sub-lists
     // moves the task to the target's list (handled by handleCrossSectionMove).
@@ -8289,7 +8306,10 @@ export default function App() {
         {/* Independent per-column scroll. Inbox + Today/Tomorrow/Next sections live here.
             CustomScroll supplies the fixed-size pill thumb (the native scrollbar is hidden). */}
         <CustomScroll>
-        {(tasksByKey[`${listId}:inbox`] || []).length > 0 && wrap('inbox', bucket(tasksByKey[`${listId}:inbox`] || []))}
+        {/* Inbox only surfaces in the per-list columns. The dashboard's list-first structure is
+            Today/Tomorrow → Next; the aggregated inbox isn't part of it and, being outside the
+            scoped block, would leak past the project/client filter — so skip it here. */}
+        {listId !== 'dashboard' && (tasksByKey[`${listId}:inbox`] || []).length > 0 && wrap('inbox', bucket(tasksByKey[`${listId}:inbox`] || []))}
         {listId === 'dashboard' ? (
           // Dashboard column — list-first hierarchy (user-requested reorganization):
           //
@@ -8323,9 +8343,14 @@ export default function App() {
             // Inline assignee filter — dashboard scopes to tasks assigned to the
             // current user (or unassigned, which default to "everyone's").
             const forMe = (xs: Task[]) => xs.filter((t) => t.assignees.length === 0 || t.assignees.includes(currentUserShort));
-            // Project scope — the focus page's left-panel filter. Applied after
-            // forMe so an active filter narrows every bucket to one project.
-            const scope = (xs: Task[]) => (filterProjectId ? xs.filter((t) => t.projectId === filterProjectId) : xs);
+            // Left-panel filter — narrow to ONE project, else to ALL of a client's tasks
+            // (a task's client = its explicit clientId, else its project's clientId). Applied
+            // after forMe so the filter narrows every bucket.
+            const clientOf = (t: Task) => t.clientId ?? (t.projectId ? projects.find((p) => p.id === t.projectId)?.clientId : undefined);
+            const scope = (xs: Task[]) =>
+              filterProjectId ? xs.filter((t) => t.projectId === filterProjectId)
+              : filterClientId ? xs.filter((t) => clientOf(t) === filterClientId)
+              : xs;
             // Universal section sequence (Settings) drives the block order here too.
             const orderedLists = listSequence;
             // Build per-list bundles up-front so we know which list blocks are
@@ -8664,8 +8689,15 @@ export default function App() {
     // Edge assign drawers win over everything, in EVERY mode — without this the calendar
     // branch below filters collisions down to cal-cell hits and the drawers would be
     // unreachable drop targets while in calendar view.
-    const edgeHit = collisions.find((c) => String(c.id).startsWith('edge:'));
-    if (edgeHit) return [edgeHit];
+    // Assign tray wins over everything while a task is over it. Prefer a SPECIFIC row
+    // (edge:project / edge:person → real assignment) over the full-area mask (edge:__mask__
+    // → just suppresses the columns underneath), so dropping on a row assigns while dropping
+    // in a gap/header simply does nothing instead of leaking to the columns below.
+    const edgeHits = collisions.filter((c) => String(c.id).startsWith('edge:'));
+    if (edgeHits.length) {
+      const specific = edgeHits.find((c) => c.id !== 'edge:__mask__');
+      return [specific || edgeHits[0]];
+    }
     if (mode !== 'calendar') return collisions;
     const activeCellId = args.active.data.current?.calendarCellId as string | undefined;
     const activeTask = args.active.data.current?.task as Task | undefined;
@@ -8795,7 +8827,11 @@ export default function App() {
           </div>
         </div>
       )}
-      <div className="relative h-screen bg-[#282828] overflow-hidden">
+      {/* pl-[22px] carves a permanent gutter on the far left for the assign rail, so the rail
+          lives in its OWN space and never overlaps a column. Fixed overlays (rail, tray, nav,
+          modals) are position:fixed → unaffected by this padding; only the flowing mode views
+          shift right into place. PIP has no rail, so no gutter there. */}
+      <div className={`relative h-screen bg-[#282828] overflow-hidden ${PIP_MODE ? '' : 'pl-[22px]'}`}>
         {/* PIP quick-view: the whole app collapses to the daily Dashboard stack.
             Opened by the Tauri shell in a tall, narrow, always-on-top window at
             ?pip=1 (global shortcut Ctrl+Win+Space). No TopHeader, no BottomBar —
@@ -8999,8 +9035,9 @@ export default function App() {
                   // sequence (Work / Projects / Admin), then deadline within — matching how
                   // everything else on the page is ordered.
                   const listRank = (t: Task) => { const idx = listSequence.indexOf(effectiveListFor(t)); return idx < 0 ? 99 : idx; };
+                  const clientOfM = (t: Task) => t.clientId ?? (t.projectId ? projects.find((p) => p.id === t.projectId)?.clientId : undefined);
                   const topMilestones = visibleTasks
-                    .filter((t) => t.type === 'scheduled' && (!focusProjectId || t.projectId === focusProjectId))
+                    .filter((t) => t.type === 'scheduled' && (focusProjectId ? t.projectId === focusProjectId : focusClientId ? clientOfM(t) === focusClientId : true))
                     .sort((a, b) => {
                       if (listRank(a) !== listRank(b)) return listRank(a) - listRank(b);
                       const ad = a.deadline || '￿';
@@ -9037,7 +9074,7 @@ export default function App() {
                           active={focusProjectId === p.id}
                           expandable={kids.length > 0}
                           expanded={expanded}
-                          onClick={() => setFocusProjectId(focusProjectId === p.id ? null : p.id)}
+                          onClick={() => { setFocusClientId(null); setFocusProjectId(focusProjectId === p.id ? null : p.id); }}
                           onToggleExpand={() => setFocusExpandedProjects((prev) => { const n = new Set(prev); n.has(p.id) ? n.delete(p.id) : n.add(p.id); return n; })}
                         />
                         {expanded && kids.map((k) => renderNode(k, undefined, depth + 1))}
@@ -9060,19 +9097,35 @@ export default function App() {
                           const clientTop = projects.filter((pp) => pp.clientId === c.id && isTopLevel(pp));
                           if (clientTop.length === 0) return null;
                           const expanded = focusExpandedClients.has(c.id);
-                          const hasActive = projects.some((p) => p.clientId === c.id && p.id === focusProjectId);
+                          const clientActive = focusClientId === c.id && !focusProjectId;
+                          const hasActive = clientActive || projects.some((p) => p.clientId === c.id && p.id === focusProjectId);
                           return (
                             <Fragment key={c.id}>
+                              {/* Click a client → FILTER the dashboard to all its tasks AND open
+                                  its accordion. Clicking the active client again clears the
+                                  filter. Picking a sub-project then narrows to that project. */}
                               <button
                                 type="button"
-                                onClick={() => setFocusExpandedClients((prev) => { const n = new Set(prev); n.has(c.id) ? n.delete(c.id) : n.add(c.id); return n; })}
-                                className="group h-[37px] w-full text-left box-border flex flex-row gap-2 items-center px-[31px] hover:bg-white/[0.03] transition-colors"
+                                onClick={() => {
+                                  setFocusProjectId(null);
+                                  setFocusClientId((cur) => (cur === c.id ? null : c.id));
+                                  setFocusExpandedClients((prev) => { const n = new Set(prev); n.add(c.id); return n; });
+                                }}
+                                className={`group h-[37px] w-full text-left box-border flex flex-row gap-2 items-center px-[31px] transition-colors ${clientActive ? 'bg-white/[0.075]' : 'hover:bg-white/[0.03]'}`}
                               >
-                                <ChevronRight size={12} className={`text-[#5e5e5e] transition-transform ${expanded ? 'rotate-90' : ''}`} />
+                                <span
+                                  role="button"
+                                  tabIndex={-1}
+                                  onClick={(e) => { e.stopPropagation(); setFocusExpandedClients((prev) => { const n = new Set(prev); n.has(c.id) ? n.delete(c.id) : n.add(c.id); return n; }); }}
+                                  className="shrink-0 -ml-[2px] p-[2px] text-[#5e5e5e] hover:text-white transition-colors cursor-pointer"
+                                >
+                                  <ChevronRight size={12} className={`transition-transform ${expanded ? 'rotate-90' : ''}`} />
+                                </span>
                                 <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis ${hasActive ? 'text-[#8465ff]' : 'text-white'}`}>
                                   {c.name || (c.id === PERSONAL_CLIENT_ID ? 'Personal' : c.short)}
                                 </span>
                                 <span className="text-[#474747] text-[12px]">{clientTop.length}</span>
+                                {clientActive && <X size={14} className="ml-auto text-[#a8a8a8]" />}
                               </button>
                               {expanded && clientTop.map((p) => renderNode(p, c, 1))}
                             </Fragment>
@@ -9092,7 +9145,7 @@ export default function App() {
                     Tomorrow, then Next → per-list) so the two stay in lockstep — and the
                     same column the PIP window shows. When a project is selected in the
                     left panel, the whole stack narrows to that project's tasks. */}
-                {renderColumn('dashboard', focusProjectId)}
+                {renderColumn('dashboard', focusProjectId, focusClientId)}
                 {/* Columns 4–6 — the calendar unpacked into THREE side-by-side columns:
                     Today, Tomorrow, Next. Same engine as the calendar view
                     (focusStripCells ← computeCalendarDistribution over calendarTasks),
@@ -9108,15 +9161,18 @@ export default function App() {
                   const dayBands = (isos: string[], colKey: string, section: SectionId) => listSequence.map((listId) => {
                     const bandLabel = LIST_TITLES[listId];
                     const isoSet = new Set(isos);
+                    // Filter helper — project narrows to one, else client narrows to all its tasks.
+                    const clientOfT = (t: Task) => t.clientId ?? (t.projectId ? projects.find((p) => p.id === t.projectId)?.clientId : undefined);
+                    const passesFilter = (t: Task) => focusProjectId ? t.projectId === focusProjectId : focusClientId ? clientOfT(t) === focusClientId : true;
                     const bucketAll = isos.flatMap((iso) => focusStripCells[`${iso}:${listId}`] || []);
-                    const bucket = focusProjectId ? bucketAll.filter((t) => t.projectId === focusProjectId) : bucketAll;
+                    const bucket = bucketAll.filter(passesFilter);
                     // Milestones dated inside this column's window, band-matched by
                     // effective list (project's pinned list wins over the task's own) —
                     // same rule as WeekCalendarMode's dayMilestones, over the same
                     // calendarTasks set the calendar itself receives.
                     const bandMilestones = calendarTasks.filter((t) => {
                       if (t.type !== 'scheduled' || !t.deadline || !isoSet.has(t.deadline)) return false;
-                      if (focusProjectId && t.projectId !== focusProjectId) return false;
+                      if (!passesFilter(t)) return false;
                       if (t.projectId) {
                         const proj = projects.find((p) => p.id === t.projectId);
                         if (proj?.list) return proj.list === listId;
@@ -10126,88 +10182,99 @@ export default function App() {
             below. On the Projects view the LEFT edge belongs to the existing
             Resources/Clients tray, so only the right rail shows there. */}
         {!PIP_MODE && mode !== 'settings' && mode !== 'projectView' && (() => {
-          // LEFT-ONLY tray (the right rail is gone — one tray, on the left). The trigger is a
-          // SHORT centered handle rather than a full-height edge strip, so its hotspot no longer
-          // covers (and intercepts clicks on) the whole left column.
+          // Assign rail + tray. The rail is a FULL-HEIGHT lighter bar living in the far-left
+          // gutter (the pl-[22px] on the wrapper reserves the space) — ONLY the bar is the
+          // hotspot, so it never overlaps or intercepts a column. Hover/click the bar (or drag
+          // a task into the left edge) → the tray slides out, OPAQUE, masking the columns
+          // underneath (TrayMask + calendarCollision keep the drag from leaking below). Drop a
+          // task on a person → assignee added; on a project → the task MOVES to that project.
           const trayOpen = edgeDrawer === 'left';
-          const unifiedTray = () => (
-            <div
-              onMouseLeave={() => setEdgeDrawer((d) => (d === 'left' ? null : d))}
-              // top-[70px] lands the tray's top edge halfway between the header row and the
-              // column titles. bottom clears the nav. No rounding. 320px wide.
-              className={`fixed left-0 border-r top-[70px] bottom-[92px] w-[320px] z-40 bg-[#1f1f1f] border-[#333333] flex flex-col transition-transform duration-200 ease-out ${trayOpen ? 'translate-x-0' : '-translate-x-full'}`}
-            >
-              {/* Assign To — people. */}
-              <div className="shrink-0 h-[37px] flex items-center px-[31px]">
-                <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Assign To</p>
-              </div>
-              <div className="shrink-0">
-                {people.map((per) => (
-                  <EdgeDropRow key={per.id} id={`edge:person:${per.short}`}>
-                    <AssigneeBadge letter={per.short || '?'} tone="todo" />
-                    <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis text-white">{per.name}</span>
-                  </EdgeDropRow>
-                ))}
-              </div>
-              {/* Two-line-space breather before the Assign Project section. */}
-              <div className="shrink-0 h-[74px]" aria-hidden />
-              <div className="shrink-0 h-[37px] flex items-center px-[31px]">
-                <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Assign Project</p>
-              </div>
-              {/* Projects grouped by client, COLLAPSED — client header rows expand to
-                  reveal their projects (drop targets). Clientless projects list flat. */}
-              <CustomScroll>
-                {proj2SortedClients.map((c) => {
-                  const clientProjects = projects.filter((p) => p.clientId === c.id);
-                  if (clientProjects.length === 0) return null;
-                  const expanded = edgeExpandedClients.has(c.id);
-                  return (
-                    <Fragment key={c.id}>
-                      <button
-                        type="button"
-                        onClick={() => setEdgeExpandedClients((prev) => { const n = new Set(prev); n.has(c.id) ? n.delete(c.id) : n.add(c.id); return n; })}
-                        className="group h-[37px] w-full text-left box-border flex flex-row gap-2 items-center px-[31px] hover:bg-white/[0.03] transition-colors"
-                      >
-                        <ChevronRight size={12} className={`text-[#5e5e5e] transition-transform ${expanded ? 'rotate-90' : ''}`} />
-                        <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis text-white">{c.name || c.short}</span>
-                        <span className="text-[#474747] text-[12px]">{clientProjects.length}</span>
-                      </button>
-                      {expanded && clientProjects.map((p) => (
-                        <EdgeDropRow key={p.id} id={`edge:project:${p.id}`}>
-                          <span className="pl-[20px] font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis text-white">{p.name || 'Untitled'}</span>
-                        </EdgeDropRow>
-                      ))}
-                    </Fragment>
-                  );
-                })}
-                {projects.filter((p) => !p.clientId || !clients.some((c) => c.id === p.clientId)).map((p) => (
-                  <EdgeDropRow key={p.id} id={`edge:project:${p.id}`}>
-                    <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis text-white">{p.name || 'Untitled'}</span>
-                  </EdgeDropRow>
-                ))}
-              </CustomScroll>
-            </div>
-          );
+          const hoverExpand = (cid: string) => {
+            if (trayHoverTimerRef.current) clearTimeout(trayHoverTimerRef.current);
+            trayHoverTimerRef.current = setTimeout(() => {
+              setEdgeExpandedClients((prev) => { const n = new Set(prev); n.add(cid); return n; });
+            }, 300);
+          };
+          const cancelHoverExpand = () => { if (trayHoverTimerRef.current) { clearTimeout(trayHoverTimerRef.current); trayHoverTimerRef.current = null; } };
           return (
             <>
-              {/* Left trigger — a SHORT handle centered vertically on the left edge, so its
-                  hover/click hotspot no longer runs the full height of the left column. Only
-                  the small tab intercepts; the rest of the column is fully clickable. */}
+              {/* Rail — full-height, lighter, in its own gutter. Chevron centered. */}
               <div
                 onMouseEnter={() => setEdgeDrawer('left')}
-                className="fixed left-0 top-1/2 -translate-y-1/2 z-40 flex items-center"
+                className="fixed left-0 top-[104px] bottom-[84px] w-[22px] z-40 flex items-center justify-center"
               >
                 <button
                   type="button"
-                  onClick={() => setEdgeDrawer((d) => (d === 'left' ? null : 'left'))}
-                  className="h-[72px] w-[14px] bg-white/[0.06] hover:bg-white/[0.12] transition-colors flex items-center justify-center"
+                  // Click opens (same as hover); the tray's onMouseLeave closes it when the
+                  // cursor leaves. No toggle — avoids the "stuck" ambiguity.
+                  onClick={() => setEdgeDrawer('left')}
+                  className="h-full w-full bg-white/[0.08] hover:bg-white/[0.14] transition-colors flex items-center justify-center"
                   aria-label="Assign drawer"
                   title="Assign project / person"
                 >
-                  <ChevronRight size={12} className="text-[#8a8a8a] shrink-0" />
+                  <ChevronRight size={12} className="text-[#a8a8a8] shrink-0" />
                 </button>
               </div>
-              {unifiedTray()}
+              {/* Tray — opaque, opens from just right of the rail (left-[22px]). Its first row
+                  aligns with the column content (top-[104px]). TrayMask covers the whole area
+                  so a drag over any part of it stops affecting the columns below. */}
+              <div
+                onMouseLeave={() => { setEdgeDrawer((d) => (d === 'left' ? null : d)); cancelHoverExpand(); }}
+                className={`fixed left-[22px] border-r top-[104px] bottom-[84px] w-[320px] z-40 bg-[#1f1f1f] border-[#333333] flex flex-col transition-transform duration-200 ease-out ${trayOpen ? 'translate-x-0' : '-translate-x-[342px]'}`}
+              >
+                <TrayMask />
+                {/* Assign To — people. */}
+                <div className="shrink-0 h-[37px] flex items-center px-[31px]">
+                  <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Assign To</p>
+                </div>
+                <div className="shrink-0">
+                  {people.map((per) => (
+                    <EdgeDropRow key={per.id} id={`edge:person:${per.short}`}>
+                      <AssigneeBadge letter={per.short || '?'} tone="todo" />
+                      <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis text-white">{per.name}</span>
+                    </EdgeDropRow>
+                  ))}
+                </div>
+                {/* Two-line-space breather before the Assign Project section. */}
+                <div className="shrink-0 h-[74px]" aria-hidden />
+                <div className="shrink-0 h-[37px] flex items-center px-[31px]">
+                  <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Assign Project</p>
+                </div>
+                {/* Projects grouped by client, COLLAPSED — client headers expand on click OR on
+                    linger (300ms hover). Clientless projects list flat. */}
+                <CustomScroll>
+                  {proj2SortedClients.map((c) => {
+                    const clientProjects = projects.filter((p) => p.clientId === c.id);
+                    if (clientProjects.length === 0) return null;
+                    const expanded = edgeExpandedClients.has(c.id);
+                    return (
+                      <Fragment key={c.id}>
+                        <button
+                          type="button"
+                          onMouseEnter={() => hoverExpand(c.id)}
+                          onMouseLeave={cancelHoverExpand}
+                          onClick={() => { cancelHoverExpand(); setEdgeExpandedClients((prev) => { const n = new Set(prev); n.has(c.id) ? n.delete(c.id) : n.add(c.id); return n; }); }}
+                          className="group h-[37px] w-full text-left box-border flex flex-row gap-2 items-center px-[31px] hover:bg-white/[0.03] transition-colors"
+                        >
+                          <ChevronRight size={12} className={`text-[#5e5e5e] transition-transform ${expanded ? 'rotate-90' : ''}`} />
+                          <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis text-white">{c.name || c.short}</span>
+                          <span className="text-[#474747] text-[12px]">{clientProjects.length}</span>
+                        </button>
+                        {expanded && clientProjects.map((p) => (
+                          <EdgeDropRow key={p.id} id={`edge:project:${p.id}`}>
+                            <span className="pl-[20px] font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis text-white">{p.name || 'Untitled'}</span>
+                          </EdgeDropRow>
+                        ))}
+                      </Fragment>
+                    );
+                  })}
+                  {projects.filter((p) => !p.clientId || !clients.some((c) => c.id === p.clientId)).map((p) => (
+                    <EdgeDropRow key={p.id} id={`edge:project:${p.id}`}>
+                      <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis text-white">{p.name || 'Untitled'}</span>
+                    </EdgeDropRow>
+                  ))}
+                </CustomScroll>
+              </div>
             </>
           );
         })()}
