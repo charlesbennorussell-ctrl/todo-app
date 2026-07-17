@@ -51,7 +51,11 @@ export interface Client { id: string; name: string; short: string; }
 export interface Person { id: string; name: string; short: string; }
 
 export const LIST_TITLES: Record<ListId, string> = { dashboard: 'Dashboard', work: 'Work', projects: 'Projects', admin: 'Admin' };
-export const LISTS: ListId[] = ['dashboard', 'work', 'projects', 'admin'];
+// List view shows THREE columns — the Dashboard column was removed from the
+// main board (it lives on in PIP quick-view via renderColumn('dashboard'),
+// which doesn't read this array). 'dashboard' stays in ListId/LIST_TITLES
+// for the PIP title and the app mode of the same name.
+export const LISTS: ListId[] = ['work', 'projects', 'admin'];
 
 // Id of the special "Personal" client. Tasks under this client are scoped to their assignees
 // only — they never show on anyone else's dashboard, list, or project view.

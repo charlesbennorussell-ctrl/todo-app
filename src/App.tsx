@@ -1808,7 +1808,9 @@ function AddModal({
   const initialProject = editingTask?.projectId ? projects.find((p) => p.id === editingTask.projectId) : undefined;
   const [tab, setTab] = useState<'task' | 'project' | 'client'>('task');
   const [title, setTitle] = useState(editingTask?.title ?? '');
-  const [list, setList] = useState<ListId>(editingTask?.list ?? defaultList ?? 'dashboard');
+  // Default for new tasks is 'work' — 'dashboard' is no longer a visible
+  // column in list view, so tasks defaulting there would be invisible.
+  const [list, setList] = useState<ListId>(editingTask?.list ?? defaultList ?? 'work');
   const [section, setSection] = useState<SectionId>(editingTask?.section ?? 'today');
   const [isMilestone, setIsMilestone] = useState<boolean>(editingTask?.type === 'scheduled');
   // Prefer the task's explicit clientId; fall back to the client owning its project.
@@ -3458,6 +3460,85 @@ const CAL_LISTS: { id: ListId; label: string }[] = [
   { id: 'projects', label: 'Projects' },
 ];
 
+// Per-day caps shared by the week calendar and the focus page's mini-calendar strip:
+//   CAL_TASKS_PER_DAY (9)              — global cap on total slots (mandatory + queue)
+//   CAL_QUEUE_CAP_PER_LIST_PER_DAY (3) — per-list cap on queue auto-fill per day
+// Mandatory tasks (deadlined / today / tomorrow placed) are exempt from both caps.
+const CAL_TASKS_PER_DAY = 9;
+const CAL_QUEUE_CAP_PER_LIST_PER_DAY = 3;
+
+// The calendar's day-distribution, extracted from WeekCalendarMode so the focus page's
+// mini-calendar strip renders EXACTLY what the week calendar's day columns show. Returns a
+// map keyed '<iso>:<listId>' → tasks for `horizonDays` days starting at todayAnchor
+// (midnight-anchored). Semantics preserved verbatim:
+//   - mandatory per list = deadline===day todos, plus section-'today' on today and
+//     section-'tomorrow' on tomorrow
+//   - queue fillers (next/inbox, undated, uncompleted) only for day 3+ — today and
+//     tomorrow are sealed during the day (their fill happens at the 4 AM refill)
+//   - global day budget CAL_TASKS_PER_DAY, per-list band cap
+//     CAL_QUEUE_CAP_PER_LIST_PER_DAY, weekends queue-fill only the projects list
+function computeCalendarDistribution(tasks: Task[], todayAnchor: Date, horizonDays: number): Record<string, Task[]> {
+  const map: Record<string, Task[]> = {};
+  const todayIso = `${todayAnchor.getFullYear()}-${String(todayAnchor.getMonth() + 1).padStart(2, '0')}-${String(todayAnchor.getDate()).padStart(2, '0')}`;
+  const tomorrowAnchor = addDaysToDate(todayAnchor, 1);
+  const tomorrowIso = `${tomorrowAnchor.getFullYear()}-${String(tomorrowAnchor.getMonth() + 1).padStart(2, '0')}-${String(tomorrowAnchor.getDate()).padStart(2, '0')}`;
+  // Per-list queues + their cursors. Queues advance independently per list.
+  const queues: Record<string, Task[]> = {};
+  const queueIdxs: Record<string, number> = {};
+  for (const listId of CAL_LISTS.map((c) => c.id)) {
+    queues[listId] = tasks.filter((t) =>
+      t.list === listId &&
+      (t.section === 'next' || t.section === 'inbox') &&
+      !t.deadline &&
+      t.type !== 'scheduled' &&
+      !t.completed
+    ).sort((a, b) => a.order - b.order);
+    queueIdxs[listId] = 0;
+  }
+  for (let off = 0; off < horizonDays; off++) {
+    const d = addDaysToDate(todayAnchor, off);
+    const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const isTodayOrTomorrow = iso === todayIso || iso === tomorrowIso;
+    // Pass 1 — collect mandatory per list, sum the total.
+    const mandatoryByList: Record<string, Task[]> = {};
+    let totalMandatory = 0;
+    for (const listId of CAL_LISTS.map((c) => c.id)) {
+      const m: Task[] = [];
+      m.push(...tasks.filter((t) =>
+        t.list === listId && t.deadline === iso && t.type !== 'scheduled'
+      ).sort((a, b) => a.order - b.order));
+      if (iso === todayIso) {
+        m.push(...tasks.filter((t) =>
+          t.list === listId && t.section === 'today' && !t.deadline && t.type !== 'scheduled'
+        ).sort((a, b) => a.order - b.order));
+      }
+      if (iso === tomorrowIso) {
+        m.push(...tasks.filter((t) =>
+          t.list === listId && t.section === 'tomorrow' && !t.deadline && t.type !== 'scheduled'
+        ).sort((a, b) => a.order - b.order));
+      }
+      mandatoryByList[listId] = m;
+      totalMandatory += m.length;
+    }
+    // Pass 2 — assign queue fillers per list (today/tomorrow sealed; Wed+ real-time).
+    let dayBudget = Math.max(0, CAL_TASKS_PER_DAY - totalMandatory);
+    for (const listId of CAL_LISTS.map((c) => c.id)) {
+      const m = mandatoryByList[listId];
+      const skipQueueForWeekend = listId !== 'projects' && (d.getDay() === 0 || d.getDay() === 6);
+      const listFillerCap = Math.max(0, CAL_QUEUE_CAP_PER_LIST_PER_DAY - m.length);
+      let slotsLeft = Math.min(dayBudget, listFillerCap);
+      if (skipQueueForWeekend) slotsLeft = 0;
+      if (isTodayOrTomorrow) slotsLeft = 0;
+      const queue = queues[listId];
+      const fillers = queue.slice(queueIdxs[listId], queueIdxs[listId] + slotsLeft);
+      queueIdxs[listId] += fillers.length;
+      dayBudget -= fillers.length;
+      map[`${iso}:${listId}`] = [...m, ...fillers];
+    }
+  }
+  return map;
+}
+
 // Presentational body of a calendar card ï¿½ no drag wiring, no callbacks. Shared between the
 // live CalendarCard and the DragOverlay so the floating ghost matches the source pixel-for-pixel.
 function CalendarCardBody({ task, projects, clients, taskOrder = 'ptc' }: { task: Task; projects: Project[]; clients: Client[]; taskOrder?: TaskOrder }) {
@@ -3632,89 +3713,12 @@ function WeekCalendarMode({
 
   const todayAnchor = useMemo(() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; }, []);
   const dayOffsetFromToday = (d: Date) => Math.round((d.getTime() - todayAnchor.getTime()) / 86400000);
-  // Per-day caps:
-  //   TASKS_PER_DAY (9)              — global cap on total slots (mandatory + queue)
-  //   QUEUE_CAP_PER_LIST_PER_DAY (3) — every day caps queue auto-fill at 3 PER list
-  // Mandatory tasks (deadlined / today / tomorrow placed) are exempt from both caps.
-  const TASKS_PER_DAY = 9;
-  const QUEUE_CAP_PER_LIST_PER_DAY = 3;
-
   const isWeekendDate = (x: Date) => x.getDay() === 0 || x.getDay() === 6;
 
-  // Pre-compute the distribution for a horizon (today through ~12 weeks) so each cell render is
-  // an O(1) map lookup. Recomputes only when the task list changes.
-  // The cap is GLOBAL per day: at most TASKS_PER_DAY (8) items total across all lists. Once the
-  // day's mandatory count reaches the cap, no queue fillers are added for ANY list.
-  const distributionByCell = useMemo(() => {
-    const map: Record<string, Task[]> = {};
-    const HORIZON_DAYS = 84; // ~12 weeks
-    const todayIso = (() => { const d = todayAnchor; return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; })();
-    const tomorrowAnchor = addDaysToDate(todayAnchor, 1);
-    const tomorrowIso = `${tomorrowAnchor.getFullYear()}-${String(tomorrowAnchor.getMonth()+1).padStart(2,'0')}-${String(tomorrowAnchor.getDate()).padStart(2,'0')}`;
-    // Per-list queues + their cursors. queues advance independently per list.
-    const queues: Record<string, Task[]> = {};
-    const queueIdxs: Record<string, number> = {};
-    for (const listId of CAL_LISTS.map((c) => c.id)) {
-      queues[listId] = tasks.filter((t) =>
-        t.list === listId &&
-        (t.section === 'next' || t.section === 'inbox') &&
-        !t.deadline &&
-        t.type !== 'scheduled' &&
-        !t.completed
-      ).sort((a, b) => a.order - b.order);
-      queueIdxs[listId] = 0;
-    }
-    for (let off = 0; off < HORIZON_DAYS; off++) {
-      const d = addDaysToDate(todayAnchor, off);
-      const iso = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
-      const isTodayOrTomorrow = iso === todayIso || iso === tomorrowIso;
-      // Pass 1 — collect mandatory per list, sum the total.
-      const mandatoryByList: Record<string, Task[]> = {};
-      let totalMandatory = 0;
-      for (const listId of CAL_LISTS.map((c) => c.id)) {
-        const m: Task[] = [];
-        m.push(...tasks.filter((t) =>
-          t.list === listId && t.deadline === iso && t.type !== 'scheduled'
-        ).sort((a, b) => a.order - b.order));
-        if (iso === todayIso) {
-          m.push(...tasks.filter((t) =>
-            t.list === listId && t.section === 'today' && !t.deadline && t.type !== 'scheduled'
-          ).sort((a, b) => a.order - b.order));
-        }
-        if (iso === tomorrowIso) {
-          m.push(...tasks.filter((t) =>
-            t.list === listId && t.section === 'tomorrow' && !t.deadline && t.type !== 'scheduled'
-          ).sort((a, b) => a.order - b.order));
-        }
-        mandatoryByList[listId] = m;
-        totalMandatory += m.length;
-      }
-      // Pass 2 — assign queue fillers per list. TODAY and TOMORROW are STABLE during the day:
-      // their queue auto-fill happens once at the 4 AM refill (see App's refillNow), and after
-      // that the cells just show whatever's stored as deadlined / today / tomorrow. Wed+ is
-      // real-time and re-distributes on every change.
-      // Caps for Wed+:
-      //   - GLOBAL day budget (TASKS_PER_DAY - totalMandatory) — mandatory >= 8 → no fillers
-      //   - per-list slot budget: max 3 visible per band (mandatory + queue)
-      //   - weekend rule for non-Projects lists
-      let dayBudget = Math.max(0, TASKS_PER_DAY - totalMandatory);
-      for (const listId of CAL_LISTS.map((c) => c.id)) {
-        const m = mandatoryByList[listId];
-        const skipQueueForWeekend = listId !== 'projects' && (d.getDay() === 0 || d.getDay() === 6);
-        const listFillerCap = Math.max(0, QUEUE_CAP_PER_LIST_PER_DAY - m.length);
-        let slotsLeft = Math.min(dayBudget, listFillerCap);
-        if (skipQueueForWeekend) slotsLeft = 0;
-        // Today / Tomorrow are sealed during the day — no real-time queue auto-fill.
-        if (isTodayOrTomorrow) slotsLeft = 0;
-        const queue = queues[listId];
-        const fillers = queue.slice(queueIdxs[listId], queueIdxs[listId] + slotsLeft);
-        queueIdxs[listId] += fillers.length;
-        dayBudget -= fillers.length;
-        map[`${iso}:${listId}`] = [...m, ...fillers];
-      }
-    }
-    return map;
-  }, [tasks, todayAnchor]);
+  // Distribution lives in computeCalendarDistribution (module scope — shared verbatim with
+  // the focus page's mini-calendar strip). 84-day horizon ≈ 12 weeks; each cell render is an
+  // O(1) map lookup. Recomputes only when the task list changes.
+  const distributionByCell = useMemo(() => computeCalendarDistribution(tasks, todayAnchor, 84), [tasks, todayAnchor]);
 
   // (Auto-promotion of queue tasks into today/tomorrow happens ONCE per day inside the 4 AM
   //  refill effect in App. During the day today + tomorrow stay stable; only Wed+ continues to
@@ -7368,6 +7372,18 @@ export default function App() {
     [tasks, currentUserShort]
   );
 
+  // Focus-page mini-calendar cells — the SAME distribution the week calendar computes,
+  // over a 3-day horizon (today / tomorrow / day-after). Keyed '<iso>:<listId>'. Feeds on
+  // calendarTasks (NOT raw tasks) because that's exactly what WeekCalendarMode receives —
+  // trashed tasks stripped, Personal-client tasks scoped to the current user. Midnight
+  // anchor matches the calendar's own (not the 4 AM todayISO boundary) so the strip and the
+  // calendar view never disagree about which day a task sits in.
+  const focusStripCells = useMemo(() => {
+    const anchor = new Date();
+    anchor.setHours(0, 0, 0, 0);
+    return computeCalendarDistribution(calendarTasks, anchor, 3);
+  }, [calendarTasks]);
+
   // Settings → Trash column: every soft-deleted task (newest first by trashedAt). Personal
   // scoping still applies — other users don't see your trashed Personal items.
   const trashedTasks = useMemo(
@@ -8469,61 +8485,69 @@ export default function App() {
                   </div>
                   <CustomScroll>
                     {(() => {
-                      const isoPlus = (days: number) => {
-                        const d = new Date();
-                        d.setHours(d.getHours() - 4); // same 4 AM day boundary as todayISO()
-                        d.setDate(d.getDate() + days);
-                        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-                      };
-                      const mine = (t: Task) => t.assignees.length === 0 || t.assignees.includes(currentUserShort);
+                      // PULLED FROM THE CALENDAR VIEW. The strip's three days render exactly
+                      // what the week calendar's day columns render: same distribution
+                      // (focusStripCells ← computeCalendarDistribution: deadlined todos +
+                      // today/tomorrow sections; day 3 gets queue fillers), same band
+                      // structure (Admin / Work / Projects with grey labels), same
+                      // CalendarCards (checkbox, two-line meta, drag, hover +/delete).
+                      // Empty bands are skipped to keep the digest tight.
+                      const stripAnchor = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; })();
                       return [0, 1, 2].map((off) => {
-                        const iso = isoPlus(off);
-                        // Band labels use the week calendar's day-header format — "Thu 16
-                        // (Today)" / "Fri 17" / "Sat 18" — with today's band in the same
-                        // milestone purple the calendar uses for its today column.
-                        const label = (() => {
-                          const [y, m, d] = iso.split('-').map(Number);
-                          const dt = new Date(y, m - 1, d);
-                          const base = `${dt.toLocaleDateString('en-US', { weekday: 'short' })} ${dt.getDate()}`;
-                          return off === 0 ? `${base} (Today)` : base;
-                        })();
-                        // Day membership mirrors the list's mental model, not just raw
-                        // deadlines (most tasks here are undated section-bucketed):
-                        //   Today    → due today + OVERDUE todos (late work is still
-                        //              today's plate) + undated section-'today' todos
-                        //   Tomorrow → due tomorrow + undated section-'tomorrow' todos
-                        //   Day 3    → dated-that-day only (no section maps to +2)
-                        // Milestones stay strictly date-pinned (an expired milestone
-                        // lingering in visibleTasks shouldn't crowd Today's band).
-                        const inDay = (t: Task): boolean => {
-                          if (t.type === 'scheduled') return t.deadline === iso;
-                          if (!mine(t)) return false;
-                          if (t.deadline === iso) return true;
-                          if (off === 0) {
-                            if (t.deadline && t.deadline < iso && !t.completed) return true; // overdue
-                            return !t.deadline && t.section === 'today';
-                          }
-                          if (off === 1) return !t.deadline && t.section === 'tomorrow';
-                          return false;
-                        };
-                        const items = visibleTasks
-                          .filter(inDay)
-                          .sort((a, b) =>
-                            ((a.type === 'scheduled' ? 0 : 1) - (b.type === 'scheduled' ? 0 : 1))
-                            // Late tasks float above on-time ones within Today, oldest first.
-                            || ((a.deadline || '￿') < (b.deadline || '￿') ? -1 : (a.deadline || '￿') > (b.deadline || '￿') ? 1 : 0)
-                            || a.order - b.order);
+                        const d = addDaysToDate(stripAnchor, off);
+                        const iso = dateToISO(d);
+                        const label = `${d.toLocaleDateString('en-US', { weekday: 'short' })} ${d.getDate()}${off === 0 ? ' (Today)' : ''}`;
                         return (
                           <div key={`focus-cal-${iso}`}>
                             {off > 0 && <Spacer />}
                             <SectionHeader title={label} sticky="date" accent={off === 0} />
-                            {items.length > 0
-                              ? renderReadonlyBucket(items, iso)
-                              : (
-                                <div className="h-[37px] box-border flex flex-row items-center px-[31px] w-full">
-                                  <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap text-[#474747]">Nothing due</p>
+                            {CAL_LISTS.map(({ id: listId, label: bandLabel }) => {
+                              const bucket = focusStripCells[`${iso}:${listId}`] || [];
+                              // Milestones pinned to this day, band-matched by effective
+                              // list (the project's pinned list wins over the task's own)
+                              // — same rule as WeekCalendarMode's dayMilestones, over the
+                              // same calendarTasks set the calendar itself receives.
+                              const dayMilestones = calendarTasks.filter((t) => {
+                                if (t.type !== 'scheduled' || t.deadline !== iso) return false;
+                                if (t.projectId) {
+                                  const proj = projects.find((p) => p.id === t.projectId);
+                                  if (proj?.list) return proj.list === listId;
+                                }
+                                return t.list === listId;
+                              }).sort((a, b) => a.title.localeCompare(b.title));
+                              if (bucket.length === 0 && dayMilestones.length === 0) return null;
+                              const cellId = `cal:${iso}:${listId}`;
+                              const cellTasks = [...dayMilestones, ...bucket];
+                              return (
+                                <div key={listId} className="pb-[24px] last:pb-0">
+                                  {/* Band label — same treatment as the calendar's in-column
+                                      category labels (grey, 20px row, 16px inset). */}
+                                  <div className="h-[20px] px-[16px] flex items-center mb-[6px]">
+                                    <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap text-[#5e5e5e]">{bandLabel}</p>
+                                  </div>
+                                  <SortableContext items={cellTasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
+                                    {cellTasks.map((t) => (
+                                      <CalendarCard
+                                        key={t.id}
+                                        task={t}
+                                        cellId={cellId}
+                                        onToggle={() => toggleTask(t.id)}
+                                        onRename={(title) => renameTask(t.id, title)}
+                                        onDelete={() => deleteTask(t.id)}
+                                        onEdit={() => openEdit(t)}
+                                        onQuickEdit={() => openQuick(t)}
+                                        onAddSibling={() => addSiblingTask(t)}
+                                        isAnyDragging={!!activeTask}
+                                        categoryDimmed={!!activeTask && activeTask.list !== listId}
+                                        projects={projects}
+                                        clients={clients}
+                                        taskOrder={taskOrder}
+                                      />
+                                    ))}
+                                  </SortableContext>
                                 </div>
-                              )}
+                              );
+                            })}
                           </div>
                         );
                       });
