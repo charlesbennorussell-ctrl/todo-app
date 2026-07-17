@@ -45,7 +45,7 @@ fn toggle_pip(app: &AppHandle) {
         PIP_LABEL,
         WebviewUrl::External(PIP_URL.parse().expect("PIP_URL is a valid URL")),
     )
-    .title("Ctrl-Project — Quick View")
+    .title("Ctrl-Project — Quick Dashboard")
     .inner_size(width, height)
     .position(x, y)
     .always_on_top(true)

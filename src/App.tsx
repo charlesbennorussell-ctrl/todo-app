@@ -4055,7 +4055,7 @@ function WeekCalendarMode({
                         <p className={`${bodyFont} text-[#5e5e5e]`}>Scheduled</p>
                       </div>
                       {highlights.map((t) => (
-                        <div key={`nw-${t.id}`} className="opacity-70">
+                        <div key={`nw-${t.id}`} className="mx-[6px] mb-[4px] bg-white/[0.03] opacity-70">
                           <CalendarCardBody task={t} projects={projects} clients={clients} taskOrder={taskOrder} />
                         </div>
                       ))}
@@ -4069,7 +4069,7 @@ function WeekCalendarMode({
                         <p className={`${bodyFont} text-[#5e5e5e]`}>Queue</p>
                       </div>
                       {queueRemainder.map((t) => (
-                        <div key={`nwq-${t.id}`} className="opacity-70">
+                        <div key={`nwq-${t.id}`} className="mx-[6px] mb-[4px] bg-white/[0.03] opacity-70">
                           <CalendarCardBody task={t} projects={projects} clients={clients} taskOrder={taskOrder} />
                         </div>
                       ))}
@@ -4204,7 +4204,7 @@ function BackupSection({
   );
 }
 
-function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePersonShort, onDeletePerson, currentUserShort, onSetCurrentUser, taskOrder, onSetTaskOrder, listSequence, onSetListSequence, tomorrowEnabled, onSetTomorrowEnabled, caseMode, onSetCaseMode, trashedTasks, completedTasks, projects, clients, onUntrashTask, onPurgeTask, onToggleTask, liveBackupAt, dailyBackupAt, onDownloadBackup, onRestoreFromFile, onRestoreFromSlot }: {
+function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePersonShort, onDeletePerson, currentUserShort, onSetCurrentUser, taskOrder, onSetTaskOrder, listSequence, onSetListSequence, tomorrowEnabled, onSetTomorrowEnabled, caseMode, onSetCaseMode, trashedTasks, completedTasks, projects, clients, onUntrashTask, onPurgeTask, onToggleTask, onPurgeEmptyProjects, liveBackupAt, dailyBackupAt, onDownloadBackup, onRestoreFromFile, onRestoreFromSlot }: {
   people: Person[]; newId: string | null;
   onAddPerson: () => void;
   onRenamePerson: (id: string, name: string) => void;
@@ -4216,6 +4216,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
   onSetTaskOrder: (v: TaskOrder) => void;
   listSequence: ListId[];
   onSetListSequence: (v: ListId[]) => void;
+  onPurgeEmptyProjects: () => number;
   tomorrowEnabled: boolean;
   onSetTomorrowEnabled: (v: boolean) => void;
   caseMode: 'off' | 'title';
@@ -4234,6 +4235,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
   onRestoreFromSlot: (slot: 'live' | 'daily') => Promise<string>;
 }) {
   const bodyFont = "font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap";
+  const [purgeMsg, setPurgeMsg] = useState('');
   return (
     <div className="pb-[106px]" style={{ paddingTop: SPACING.topMargin }}>
       <TopHeader viewName="Settings" />
@@ -4308,6 +4310,21 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
               </button>
             );
           })}
+        </div>
+        {/* Maintenance — clean up "ghost" projects (blank name, no tasks). Runs
+            automatically 5s after load, but this triggers it on demand. */}
+        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-0">
+          <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Maintenance</p>
+        </div>
+        <div className="px-[31px] mb-[37px] flex flex-col gap-2 items-start">
+          <button
+            type="button"
+            onClick={() => { const n = onPurgeEmptyProjects(); setPurgeMsg(n > 0 ? `Removed ${n} empty project${n === 1 ? '' : 's'}.` : 'No empty projects found.'); }}
+            className="text-[13px] text-[#656464] hover:text-white transition-colors"
+          >
+            Clean up empty projects
+          </button>
+          {purgeMsg && <p className="text-[#8465ff] text-[12px]">{purgeMsg}</p>}
         </div>
         {/* Tomorrow section toggle. Off → tomorrow tasks visually fall back into Next (data
             preserved). The midnight refill keeps Tomorrow at 5 tasks even while hidden — flip
@@ -6184,10 +6201,17 @@ export default function App() {
   // Focus page left panel drill-down: null = master list of all projects; a project id =
   // that project's task list with a back arrow to return to the master list.
   const [focusProjectId, setFocusProjectId] = useState<string | null>(null);
-  // Edge assign rails: which slide-out drawer is open. 'projects' = left drawer,
-  // 'people' = right drawer. Opened by hovering/clicking the thin edge bars or by
+  // Edge assign rails: which slide-out drawer is open. Both sides now show the SAME
+  // unified tray (Assign To people on top, Assign Project below). 'left' | 'right' just
+  // records which edge pulled it out. Opened by hovering/clicking the thin edge bars or by
   // dragging a task card into the edge zones; drops on drawer rows reassign.
-  const [edgeDrawer, setEdgeDrawer] = useState<'projects' | 'people' | null>(null);
+  const [edgeDrawer, setEdgeDrawer] = useState<'left' | 'right' | null>(null);
+  // Client groups expanded in the edge tray's project list (default collapsed — the tray
+  // shows client headers; click one to reveal its projects). Keyed by client id.
+  const [edgeExpandedClients, setEdgeExpandedClients] = useState<Set<string>>(new Set());
+  // Same collapse model for the focus page's left project-filter panel — client headers
+  // collapse the "sub-projects" so the user scans the big picture and expands on demand.
+  const [focusExpandedClients, setFocusExpandedClients] = useState<Set<string>>(new Set());
   // Drag-over state for the References column. When the user drags a file from
   // outside the app onto the column AND there are already images visible, we
   // overlay an "Add Images" sheet on top of the gallery so they can pick a
@@ -6402,6 +6426,10 @@ export default function App() {
   useEffect(() => { focusImagesRef.current = focusImages; }, [focusImages]);
   const focusImageFoldersRef = useRef(focusImageFolders);
   useEffect(() => { focusImageFoldersRef.current = focusImageFolders; }, [focusImageFolders]);
+  // Live mirror of the task list — lets purgeEmptyProjects (a stable useCallback) read the
+  // current tasks without re-binding on every change.
+  const tasksRef = useRef(tasks);
+  useEffect(() => { tasksRef.current = tasks; }, [tasks]);
   // Gallery-container dimension tracking — Zoom All needs to know how much
   // room the sectioned content has so we can binary-search the largest row
   // height that still fits everything in the viewport. Using a state-based
@@ -6719,6 +6747,22 @@ export default function App() {
   }, []);
   const deleteProject = useCallback((id: string) => setProjects((prev) => prev.filter((p) => p.id !== id)), []);
   const deleteClient = useCallback((id: string) => setClients((prev) => prev.filter((c) => c.id !== id)), []);
+  // Purge "ghost" projects — blank-named projects that carry no tasks and aren't the one
+  // currently being named (newId). These accumulate when a + spawns a project the user
+  // never titles. Returns how many were removed so the caller can surface it.
+  const purgeEmptyProjects = useCallback((): number => {
+    let removed = 0;
+    setProjects((prev) => {
+      const usedIds = new Set(tasksRef.current.map((t) => t.projectId).filter(Boolean) as string[]);
+      const kept = prev.filter((p) => {
+        const isGhost = !(p.name || '').trim() && !usedIds.has(p.id) && p.id !== newlyCreatedIdRef.current;
+        if (isGhost) removed++;
+        return !isGhost;
+      });
+      return removed > 0 ? kept : prev;
+    });
+    return removed;
+  }, []);
   const renameProject = useCallback((id: string, name: string) => {
     setProjects((prev) => prev.map((p) => (p.id === id ? { ...p, name } : p)));
     scheduleSentenceCaseProject(id);
@@ -7625,6 +7669,20 @@ export default function App() {
     setProjects((prev) => prev.map((p) => (!p.list && projectListMap[p.id] ? { ...p, list: projectListMap[p.id] } : p)));
   }, [projects, tasks, projectListMap, setProjects]);
 
+  // One-time ghost purge: 5s after mount (Liveblocks has synced, no in-flight rename),
+  // remove blank-named projects that carry no tasks — the "untitled project ghosts" the
+  // user can't otherwise clear. Delayed + one-shot so it never races a project being named.
+  const ghostPurgeRef = useRef(false);
+  useEffect(() => {
+    if (ghostPurgeRef.current) return;
+    ghostPurgeRef.current = true;
+    const h = window.setTimeout(() => {
+      const n = purgeEmptyProjects();
+      if (n > 0) console.log(`[ghost-purge] removed ${n} empty project(s)`);
+    }, 5000);
+    return () => window.clearTimeout(h);
+  }, [purgeEmptyProjects]);
+
   // Tasks in the "Personal" client are scoped to their assignees: other users never see them.
   // This filter is applied to every display path (list, project, calendar, dashboard) so Personal
   // work stays off the team's radar.
@@ -8106,10 +8164,15 @@ export default function App() {
               <>
                 {/* Per-list blocks: Work, then Admin, then Projects (skipping any
                     list with no today/tomorrow tasks). */}
+                {/* Quick-add is wired on every header: the tall list header (Work/Admin/
+                    Projects) and the "Today / Tomorrow" header both spawn a today task in
+                    that list; the Next sub-headers spawn a next task. The new blank task
+                    autofocuses inline (renderBucket passes autoFocus on newId) so the user
+                    types straight into it — no mode switch needed. */}
                 {listBlocks.map((b, idx) => (
                   <div key={`dash-list-${b.list}`}>
                     {idx > 0 && <Spacer />}
-                    <SectionHeader title={LIST_TITLES[b.list]} sticky="date" tall />
+                    <SectionHeader title={LIST_TITLES[b.list]} sticky="date" tall onAdd={() => { addBlankTaskInSection(b.list, 'today'); }} />
                     {/* Today + Tomorrow consolidated into ONE chunk per list — a single
                         "Today / Tomorrow" header with the tasks stacked day-ordered
                         (todays first, then tomorrows). The separate sub-headers were
@@ -8118,7 +8181,7 @@ export default function App() {
                         merged SortableContext (prefix dash:<list>:days:) so drags flow
                         across the day boundary; drops resolve the section from the
                         target row, same as before. */}
-                    <SectionHeader title="Today / Tomorrow" sticky="category" />
+                    <SectionHeader title="Today / Tomorrow" sticky="category" onAdd={() => { addBlankTaskInSection(b.list, 'today'); }} />
                     {bucket([...b.today, ...b.tomorrow], `dash:${b.list}:days:`)}
                   </div>
                 ))}
@@ -8132,7 +8195,7 @@ export default function App() {
                     {nextBlocks.map((b, idx) => (
                       <Fragment key={`dash-next-${b.list}`}>
                         {idx > 0 && <Spacer />}
-                        <SectionHeader title={LIST_TITLES[b.list]} sticky="category" />
+                        <SectionHeader title={LIST_TITLES[b.list]} sticky="category" onAdd={() => { addBlankTaskInSection(b.list, 'next'); }} />
                         {bucket(b.next, `dash:next:${b.list}:`)}
                       </Fragment>
                     ))}
@@ -8505,13 +8568,13 @@ export default function App() {
           if (x < 90) setAssignTrayOpen(true);
           else if (x > 400) setAssignTrayOpen(false);
         }
-        // Edge assign rails (every view except Settings; left drawer yields to the
-        // Projects-view tray). Enter the edge zone while dragging a task → the drawer
-        // pulls out; drift back toward the middle → it tucks away.
+        // Edge assign rails (every view except Settings; left edge yields to the
+        // Projects-view tray). Enter the edge zone while dragging a task → the unified
+        // tray pulls out from that side; drift back toward the middle → it tucks away.
         if (activeType === 'task' || activeType === 'projTask') {
-          if (x < 90 && mode !== 'projectView' && mode !== 'settings') setEdgeDrawer('projects');
-          else if (x > window.innerWidth - 90 && mode !== 'settings') setEdgeDrawer('people');
-          else if (x > 340 && x < window.innerWidth - 280) setEdgeDrawer(null);
+          if (x < 110 && mode !== 'projectView' && mode !== 'settings') setEdgeDrawer('left');
+          else if (x > window.innerWidth - 110 && mode !== 'settings') setEdgeDrawer('right');
+          else if (x > 360 && x < window.innerWidth - 360) setEdgeDrawer(null);
         }
       }}
       onDragEnd={(ev) => { setAssignTrayOpen(false); setEdgeDrawer(null); handleDragEnd(ev); }}
@@ -8745,27 +8808,45 @@ export default function App() {
                     Information + References are parked behind FOCUS_SHOW_INFO /
                     FOCUS_SHOW_REFERENCES while ctrl-assets takes over reference handling. */}
                 {(() => {
-                  // Left panel: top-pinned milestones + the master project list. Clicking a
-                  // project FILTERS rather than navigates — the center Dashboard stack and
-                  // the right calendar strip narrow to that project's tasks (focusProjectId).
-                  // The active row highlights and swaps its chevron for an ×; clicking it
-                  // again clears the filter.
-                  const rows: Array<{ p: Project; client?: Client }> = [];
-                  for (const c of proj2SortedClients) {
-                    for (const p of projects.filter((pp) => pp.clientId === c.id)) rows.push({ p, client: c });
-                  }
-                  for (const p of projects.filter((pp) => !pp.clientId || !clients.some((c) => c.id === pp.clientId))) rows.push({ p });
-                  // Milestones pinned at the very top of the column — every list, deadline
-                  // ascending with undated last (same sort as the list-view milestones
-                  // bucket). An active project filter narrows these too.
+                  // Left panel: top-pinned milestones + a COLLAPSED project filter. Client
+                  // headers collapse their projects so the user scans the big picture and
+                  // expands on demand. Clicking a project FILTERS (not navigates) — the
+                  // center Dashboard stack and the three calendar columns narrow to it.
+                  // The active project highlights + shows an ×; click again to clear.
+                  // Milestones are grouped by their effective LIST in the universal section
+                  // sequence (Work / Projects / Admin), then deadline within — matching how
+                  // everything else on the page is ordered.
+                  const listRank = (t: Task) => { const idx = listSequence.indexOf(effectiveListFor(t)); return idx < 0 ? 99 : idx; };
                   const topMilestones = visibleTasks
                     .filter((t) => t.type === 'scheduled' && (!focusProjectId || t.projectId === focusProjectId))
                     .sort((a, b) => {
+                      if (listRank(a) !== listRank(b)) return listRank(a) - listRank(b);
                       const ad = a.deadline || '￿';
                       const bd = b.deadline || '￿';
                       if (ad !== bd) return ad < bd ? -1 : 1;
                       return a.title.localeCompare(b.title);
                     });
+                  const clientlessProjects = projects.filter((pp) => !pp.clientId || !clients.some((c) => c.id === pp.clientId));
+                  const projectRow = (p: Project, indent: boolean) => {
+                    const count = visibleTasks.filter((t) => t.projectId === p.id).length;
+                    const active = focusProjectId === p.id;
+                    return (
+                      <button
+                        key={p.id}
+                        type="button"
+                        onClick={() => setFocusProjectId(active ? null : p.id)}
+                        className={`group h-[37px] w-full text-left box-border flex flex-row gap-2 items-center px-[31px] transition-colors ${active ? 'bg-white/[0.075]' : 'hover:bg-white/[0.03]'}`}
+                      >
+                        <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis text-white ${indent ? 'pl-[20px]' : ''}`}>
+                          {p.name || 'Untitled'}
+                        </span>
+                        {count > 0 && <span className="text-[#474747] text-[12px]">{count}</span>}
+                        {active
+                          ? <X size={14} className="ml-auto text-[#a8a8a8]" />
+                          : <ChevronRight size={14} className="ml-auto text-[#5e5e5e] opacity-0 group-hover:opacity-100 transition-opacity" />}
+                      </button>
+                    );
+                  };
                   return (
                     <div className="flex-1 min-w-[280px] flex flex-col min-h-0 overflow-hidden">
                       <div className="shrink-0 group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]" style={{ marginBottom: SPACING.dcr }}>
@@ -8778,29 +8859,33 @@ export default function App() {
                             <Spacer />
                           </>
                         )}
-                        {rows.map(({ p, client: c }) => {
-                          const count = visibleTasks.filter((t) => t.projectId === p.id).length;
-                          const active = focusProjectId === p.id;
+                        {proj2SortedClients.map((c) => {
+                          const clientProjects = projects.filter((pp) => pp.clientId === c.id);
+                          if (clientProjects.length === 0) return null;
+                          const expanded = focusExpandedClients.has(c.id);
+                          const hasActive = clientProjects.some((p) => p.id === focusProjectId);
                           return (
-                            <button
-                              key={p.id}
-                              type="button"
-                              onClick={() => setFocusProjectId(active ? null : p.id)}
-                              className={`group h-[37px] w-full text-left box-border flex flex-row gap-2 items-center px-[31px] transition-colors ${active ? 'bg-white/[0.075]' : 'hover:bg-white/[0.03]'}`}
-                            >
-                              <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap text-[#656464]">
-                                {c?.short || (c && c.id === PERSONAL_CLIENT_ID ? 'Personal' : '')}
-                              </span>
-                              <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis text-white">
-                                {p.name || 'Untitled'}
-                              </span>
-                              {count > 0 && <span className="text-[#474747] text-[12px]">{count}</span>}
-                              {active
-                                ? <X size={14} className="ml-auto text-[#a8a8a8]" />
-                                : <ChevronRight size={14} className="ml-auto text-[#5e5e5e] opacity-0 group-hover:opacity-100 transition-opacity" />}
-                            </button>
+                            <Fragment key={c.id}>
+                              <button
+                                type="button"
+                                onClick={() => setFocusExpandedClients((prev) => { const n = new Set(prev); n.has(c.id) ? n.delete(c.id) : n.add(c.id); return n; })}
+                                className="group h-[37px] w-full text-left box-border flex flex-row gap-2 items-center px-[31px] hover:bg-white/[0.03] transition-colors"
+                              >
+                                <ChevronRight size={12} className={`text-[#5e5e5e] transition-transform ${expanded ? 'rotate-90' : ''}`} />
+                                <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis ${hasActive ? 'text-[#8465ff]' : 'text-white'}`}>
+                                  {c.name || (c.id === PERSONAL_CLIENT_ID ? 'Personal' : c.short)}
+                                </span>
+                                <span className="text-[#474747] text-[12px]">{clientProjects.length}</span>
+                              </button>
+                              {expanded && clientProjects.map((p) => projectRow(p, true))}
+                            </Fragment>
                           );
                         })}
+                        {clientlessProjects.length > 0 && (
+                          <>
+                            {clientlessProjects.map((p) => projectRow(p, false))}
+                          </>
+                        )}
                       </CustomScroll>
                     </div>
                   );
@@ -9802,6 +9887,7 @@ export default function App() {
             onSetTaskOrder={setTaskOrder}
             listSequence={listSequence}
             onSetListSequence={setListSequence}
+            onPurgeEmptyProjects={purgeEmptyProjects}
             tomorrowEnabled={tomorrowEnabled}
             onSetTomorrowEnabled={setTomorrowEnabled}
             caseMode={caseMode}
@@ -9822,58 +9908,68 @@ export default function App() {
         )}
 
         {/* ── Edge assign rails ───────────────────────────────────────────────
-            Ever-present thin bars hugging the left and right edges of every
-            view (except Settings and the PIP). Rollover or click pulls out the
-            drawer; while dragging a task, entering the edge zone auto-opens it
-            (see onDragMove) — drop on a row to reassign. Left = projects,
-            right = assignees. On the Projects view the LEFT edge belongs to
-            the existing Resources/Clients tray, so only the right rail shows. */}
-        {!PIP_MODE && mode !== 'settings' && (
-          <>
-            {mode !== 'projectView' && (
-              <div
-                onMouseEnter={() => setEdgeDrawer('projects')}
-                className="fixed left-[10px] top-[130px] bottom-[110px] z-40 flex items-center"
-              >
-                <button
-                  type="button"
-                  onClick={() => setEdgeDrawer((d) => (d === 'projects' ? null : 'projects'))}
-                  className="h-full w-[8px] rounded-full bg-white/[0.04] hover:bg-white/[0.09] transition-colors flex items-center justify-center overflow-hidden"
-                  aria-label="Assign project drawer"
-                >
-                  <ChevronRight size={8} className="text-[#5e5e5e] shrink-0" />
-                </button>
+            Ever-present bars hugging the left and right edges of every view
+            (except Settings + PIP), with generous margins so they clear the
+            task columns and the right one sits well inside the scroll-bar.
+            Rollover or click pulls out the tray; while dragging a task,
+            entering the edge zone auto-opens it (see onDragMove) — drop on a
+            row to reassign. BOTH sides show the SAME unified tray: Assign To
+            (people) on top, then Assign Project (grouped by client, collapsed)
+            below. On the Projects view the LEFT edge belongs to the existing
+            Resources/Clients tray, so only the right rail shows there. */}
+        {!PIP_MODE && mode !== 'settings' && (() => {
+          const trayOpen = (side: 'left' | 'right') => edgeDrawer === side && !(side === 'left' && mode === 'projectView');
+          const unifiedTray = (side: 'left' | 'right') => (
+            <div
+              onMouseLeave={() => setEdgeDrawer((d) => (d === side ? null : d))}
+              // top-[70px] lands the tray's top edge halfway between the "Focus — …"
+              // header row and the column titles, per request. bottom clears the nav.
+              // No rounding (nothing else in the app rounds). 320px wide.
+              className={`fixed ${side === 'left' ? 'left-0 border-r' : 'right-0 border-l'} top-[70px] bottom-[92px] w-[320px] z-40 bg-[#1f1f1f] border-[#333333] flex flex-col transition-transform duration-200 ease-out ${trayOpen(side) ? 'translate-x-0' : (side === 'left' ? '-translate-x-full' : 'translate-x-full')}`}
+            >
+              {/* Assign To — people. */}
+              <div className="shrink-0 h-[37px] flex items-center px-[31px]">
+                <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Assign To</p>
               </div>
-            )}
-            <div
-              onMouseEnter={() => setEdgeDrawer('people')}
-              className="fixed right-[10px] top-[130px] bottom-[110px] z-40 flex items-center"
-            >
-              <button
-                type="button"
-                onClick={() => setEdgeDrawer((d) => (d === 'people' ? null : 'people'))}
-                className="h-full w-[8px] rounded-full bg-white/[0.04] hover:bg-white/[0.09] transition-colors flex items-center justify-center overflow-hidden"
-                aria-label="Assign person drawer"
-              >
-                <ChevronLeft size={8} className="text-[#5e5e5e] shrink-0" />
-              </button>
-            </div>
-            {/* Projects drawer (left). Rows are droppables — drag a task in and release
-                to reparent. Grouped by the proj2 client order, clientless projects last. */}
-            <div
-              onMouseLeave={() => setEdgeDrawer((d) => (d === 'projects' ? null : d))}
-              className={`fixed left-0 top-[106px] bottom-[96px] w-[300px] z-40 bg-[#1f1f1f] border-r border-[#333333] flex flex-col transition-transform duration-200 ease-out ${edgeDrawer === 'projects' && mode !== 'projectView' ? 'translate-x-0' : '-translate-x-full'}`}
-            >
+              <div className="shrink-0">
+                {people.map((per) => (
+                  <EdgeDropRow key={per.id} id={`edge:person:${per.short}`}>
+                    <AssigneeBadge letter={per.short || '?'} tone="todo" />
+                    <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis text-white">{per.name}</span>
+                  </EdgeDropRow>
+                ))}
+              </div>
+              {/* Two-line-space breather before the Assign Project section. */}
+              <div className="shrink-0 h-[74px]" aria-hidden />
               <div className="shrink-0 h-[37px] flex items-center px-[31px]">
                 <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Assign Project</p>
               </div>
+              {/* Projects grouped by client, COLLAPSED — client header rows expand to
+                  reveal their projects (drop targets). Clientless projects list flat. */}
               <CustomScroll>
-                {proj2SortedClients.map((c) => projects.filter((p) => p.clientId === c.id).map((p) => (
-                  <EdgeDropRow key={p.id} id={`edge:project:${p.id}`}>
-                    <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap text-[#656464]">{c.short || c.name}</span>
-                    <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis text-white">{p.name || 'Untitled'}</span>
-                  </EdgeDropRow>
-                )))}
+                {proj2SortedClients.map((c) => {
+                  const clientProjects = projects.filter((p) => p.clientId === c.id);
+                  if (clientProjects.length === 0) return null;
+                  const expanded = edgeExpandedClients.has(c.id);
+                  return (
+                    <Fragment key={c.id}>
+                      <button
+                        type="button"
+                        onClick={() => setEdgeExpandedClients((prev) => { const n = new Set(prev); n.has(c.id) ? n.delete(c.id) : n.add(c.id); return n; })}
+                        className="group h-[37px] w-full text-left box-border flex flex-row gap-2 items-center px-[31px] hover:bg-white/[0.03] transition-colors"
+                      >
+                        <ChevronRight size={12} className={`text-[#5e5e5e] transition-transform ${expanded ? 'rotate-90' : ''}`} />
+                        <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis text-white">{c.name || c.short}</span>
+                        <span className="text-[#474747] text-[12px]">{clientProjects.length}</span>
+                      </button>
+                      {expanded && clientProjects.map((p) => (
+                        <EdgeDropRow key={p.id} id={`edge:project:${p.id}`}>
+                          <span className="pl-[20px] font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis text-white">{p.name || 'Untitled'}</span>
+                        </EdgeDropRow>
+                      ))}
+                    </Fragment>
+                  );
+                })}
                 {projects.filter((p) => !p.clientId || !clients.some((c) => c.id === p.clientId)).map((p) => (
                   <EdgeDropRow key={p.id} id={`edge:project:${p.id}`}>
                     <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis text-white">{p.name || 'Untitled'}</span>
@@ -9881,25 +9977,45 @@ export default function App() {
                 ))}
               </CustomScroll>
             </div>
-            {/* People drawer (right). Drop adds the person to the task's assignees. */}
-            <div
-              onMouseLeave={() => setEdgeDrawer((d) => (d === 'people' ? null : d))}
-              className={`fixed right-0 top-[106px] bottom-[96px] w-[240px] z-40 bg-[#1f1f1f] border-l border-[#333333] flex flex-col transition-transform duration-200 ease-out ${edgeDrawer === 'people' ? 'translate-x-0' : 'translate-x-full'}`}
-            >
-              <div className="shrink-0 h-[37px] flex items-center px-[31px]">
-                <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Assign To</p>
+          );
+          return (
+            <>
+              {/* Left trigger — double-width bar, generous margin off the columns.
+                  Hidden on the Projects view (its left edge has its own tray). */}
+              {mode !== 'projectView' && (
+                <div
+                  onMouseEnter={() => setEdgeDrawer('left')}
+                  className="fixed left-[18px] top-[120px] bottom-[116px] z-40 flex items-center"
+                >
+                  <button
+                    type="button"
+                    onClick={() => setEdgeDrawer((d) => (d === 'left' ? null : 'left'))}
+                    className="h-full w-[16px] bg-white/[0.05] hover:bg-white/[0.11] transition-colors flex items-center justify-center"
+                    aria-label="Assign drawer (left)"
+                  >
+                    <ChevronRight size={12} className="text-[#8a8a8a] shrink-0" />
+                  </button>
+                </div>
+              )}
+              {/* Right trigger — pushed 34px in so it clears the CustomScroll thumb. */}
+              <div
+                onMouseEnter={() => setEdgeDrawer('right')}
+                className="fixed right-[34px] top-[120px] bottom-[116px] z-40 flex items-center"
+              >
+                <button
+                  type="button"
+                  onClick={() => setEdgeDrawer((d) => (d === 'right' ? null : 'right'))}
+                  className="h-full w-[16px] bg-white/[0.05] hover:bg-white/[0.11] transition-colors flex items-center justify-center"
+                  aria-label="Assign drawer (right)"
+                >
+                  <ChevronLeft size={12} className="text-[#8a8a8a] shrink-0" />
+                </button>
               </div>
-              <CustomScroll>
-                {people.map((per) => (
-                  <EdgeDropRow key={per.id} id={`edge:person:${per.short}`}>
-                    <AssigneeBadge letter={per.short || '?'} tone="todo" />
-                    <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis text-white">{per.name}</span>
-                  </EdgeDropRow>
-                ))}
-              </CustomScroll>
-            </div>
-          </>
-        )}
+              {unifiedTray('left')}
+              {unifiedTray('right')}
+            </>
+          );
+        })()}
         {!PIP_MODE && <BottomBar mode={mode} onSetMode={setMode} onAdd={addAndEditTask} />}
 
         <AnimatePresence>
