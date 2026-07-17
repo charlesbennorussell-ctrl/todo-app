@@ -1,7 +1,7 @@
 {
   "name": "ctrl-project",
   "private": true,
-  "version": "0.1.68",
+  "version": "0.1.69",
   "type": "module",
   "scripts": {
     "dev": "vite",

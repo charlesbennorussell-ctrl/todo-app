@@ -1676,6 +1676,18 @@ function StickyOverlay({ scrollElRef }: { scrollElRef: React.RefObject<HTMLDivEl
 
 function Spacer() { return <div className="h-[37px] shrink-0 w-full" />; }
 
+// Drop-target row inside the edge assign drawers (left = projects, right = assignees).
+// Highlights while a dragged card hovers it; the drop itself is handled in handleDragEnd
+// via the `edge:project:<id>` / `edge:person:<short>` droppable ids.
+function EdgeDropRow({ id, children }: { id: string; children: React.ReactNode }) {
+  const { setNodeRef, isOver } = useDroppable({ id });
+  return (
+    <div ref={setNodeRef} className={`h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px] transition-colors ${isOver ? 'bg-white/[0.10]' : 'hover:bg-white/[0.03]'}`}>
+      {children}
+    </div>
+  );
+}
+
 function SectionDroppable({ id, children }: { id: string; children: React.ReactNode }) {
   const { setNodeRef } = useDroppable({ id });
   // pb-[37px] gives the section a 37px slop zone below its last card so dropping in the visual
@@ -4722,6 +4734,7 @@ function TaskQuickEdit({
   onClose, onUpdateTask, onAddProject, onAddClient, onAddPerson,
   onRenameClient, onRenameProject, onRenamePerson,
   onDeleteClient, onDeleteProject, onDeletePerson,
+  projectListOf, onPinProjectList,
 }: {
   task: Task;
   projects: Project[]; clients: Client[]; people: Person[];
@@ -4744,6 +4757,15 @@ function TaskQuickEdit({
   onDeleteClient: (id: string) => void;
   onDeleteProject: (id: string) => void;
   onDeletePerson: (id: string) => void;
+  // Effective list of a project (pinned list, else dominant task list, else 'projects').
+  // Drives the contextual project picker: pick the LIST first, and the project options
+  // narrow to projects that actually live in that list — no more House/Family-style admin
+  // projects leaking into every picker.
+  projectListOf: (id: string) => ListId;
+  // Picking a project for a task PERMANENTLY pins an unpinned project to the task's list,
+  // so the association sticks ("personal / financial / car are part of admin — they should
+  // always be marked as that").
+  onPinProjectList: (id: string, list: ListId) => void;
 }) {
   // Auto-disambiguate initials: if two people share a first letter, both render with their
   // first two letters (so the badge becomes a small pill). Falls back to 3+ chars on triple
@@ -4779,7 +4801,13 @@ function TaskQuickEdit({
     if (b.id === PERSONAL_CLIENT_ID) return 1;
     return a.name.localeCompare(b.name);
   });
-  const projectsForClient = resolvedClientId ? projects.filter((p) => p.clientId === resolvedClientId) : [];
+  // Contextual project options: client match AND list match. A project counts as belonging
+  // to the task's current list via projectListOf (pin → dominant tasks → 'projects' home).
+  // The currently-assigned project always stays listed so an existing link never renders
+  // as a phantom "nothing selected".
+  const projectsForClient = resolvedClientId
+    ? projects.filter((p) => p.clientId === resolvedClientId && (projectListOf(p.id) === task.list || p.id === task.projectId || p.id === newId))
+    : [];
   const client = resolvedClientId ? clients.find((c) => c.id === resolvedClientId) : undefined;
   const isMilestone = task.type === 'scheduled';
   const todayIso = todayISO();
@@ -4918,9 +4946,11 @@ function TaskQuickEdit({
             {projectsForClient.map((p) => p.id === newId ? (
               <EditableText key={p.id} value={p.name} placeholder="New Project" autoFocus onChange={(v) => onRenameProject(p.id, v)} onDiscardIfEmpty={() => onDeleteProject(p.id)} className="text-[14px] font-['Untitled_Sans',sans-serif] whitespace-nowrap text-white font-bold" />
             ) : (
-              <Pill key={p.id} active={task.projectId === p.id} onClick={() => apply({ projectId: p.id })}>{p.name || 'New Project'}</Pill>
+              <Pill key={p.id} active={task.projectId === p.id} onClick={() => { onPinProjectList(p.id, task.list); apply({ projectId: p.id }); }}>{p.name || 'New Project'}</Pill>
             ))}
-            <PlusBtn onClick={() => onAddProject({ name: '', clientId: resolvedClientId })} />
+            {/* New projects born in this panel inherit the task's list so they stay inside
+                the contextual filter above instead of instantly vanishing from it. */}
+            <PlusBtn onClick={() => onAddProject({ name: '', clientId: resolvedClientId, list: task.list })} />
           </div>
         )}
 
@@ -6154,6 +6184,10 @@ export default function App() {
   // Focus page left panel drill-down: null = master list of all projects; a project id =
   // that project's task list with a back arrow to return to the master list.
   const [focusProjectId, setFocusProjectId] = useState<string | null>(null);
+  // Edge assign rails: which slide-out drawer is open. 'projects' = left drawer,
+  // 'people' = right drawer. Opened by hovering/clicking the thin edge bars or by
+  // dragging a task card into the edge zones; drops on drawer rows reassign.
+  const [edgeDrawer, setEdgeDrawer] = useState<'projects' | 'people' | null>(null);
   // Drag-over state for the References column. When the user drags a file from
   // outside the app onto the column AND there are already images visible, we
   // overlay an "Add Images" sheet on top of the gallery so they can pick a
@@ -6614,6 +6648,12 @@ export default function App() {
     const id = `p-${Date.now()}`;
     setProjects((prev) => [...prev, { id, name: '', clientId, list }]);
     setNewId(id);
+  }, []);
+  // Pin an UNPINNED project to a list — called when the edit panel assigns the project to
+  // a task, so the project's list affiliation becomes permanent ("House is admin, always").
+  // Already-pinned projects are left alone.
+  const pinProjectList = useCallback((id: string, list: ListId) => {
+    setProjects((prev) => prev.map((p) => (p.id === id && !p.list ? { ...p, list } : p)));
   }, []);
   const addBlankTaskInList = useCallback((listId: ListId) => {
     const id = `task-${Date.now()}`;
@@ -7177,6 +7217,27 @@ export default function App() {
     const activeTaskId = (active.data.current?.task as Task | undefined)?.id ?? String(active.id);
     const overTaskId = (over.data.current?.task as Task | undefined)?.id ?? String(over.id);
     const overIdStr = String(over.id);
+    // Edge assign rails: drop on a row inside the slide-out drawers. Left drawer rows are
+    // edge:project:<id> (reparent, list follows the project's pin), right drawer rows are
+    // edge:person:<short> (add assignee — additive, never removes existing ones).
+    if (overIdStr.startsWith('edge:')) {
+      const dragged = tasks.find((t) => t.id === activeTaskId);
+      if (dragged) {
+        if (overIdStr.startsWith('edge:project:')) {
+          const pid = overIdStr.slice('edge:project:'.length);
+          const proj = projects.find((p) => p.id === pid);
+          const targetList: ListId = proj?.list ?? dragged.list;
+          setTasks((prev) => prev.map((t) => (t.id === dragged.id ? { ...t, projectId: pid, list: targetList } : t)));
+        } else if (overIdStr.startsWith('edge:person:')) {
+          const short = overIdStr.slice('edge:person:'.length);
+          setTasks((prev) => prev.map((t) => (t.id === dragged.id && !t.assignees.includes(short) ? { ...t, assignees: [...t.assignees, short] } : t)));
+        }
+      }
+      setEdgeDrawer(null);
+      resetDragRefs();
+      clearOverlay();
+      return;
+    }
     // Project view 2: drop on a project block (header OR empty area OR existing task). The
     // task gets reparented to that project — projectId is set, and list flips to the
     // project's pinned list (or the column's list if unpinned). Header drops handled here;
@@ -7547,6 +7608,22 @@ export default function App() {
     if (t.projectId && projectListMap[t.projectId]) return projectListMap[t.projectId];
     return t.list;
   }, [projectListMap]);
+
+  // One-time hygiene sweep: PERMANENTLY pin every unpinned project to its dominant task
+  // list. "House / Family / Financial / Car" style projects whose tasks all live in Admin
+  // were floating list-less, so they leaked into every surface's project picker — pinning
+  // them makes the affiliation stick (new pins also happen at panel-assignment time via
+  // pinProjectList). Runs once per session and only writes when something actually needs
+  // pinning.
+  const pinMigrationRef = useRef(false);
+  useEffect(() => {
+    if (pinMigrationRef.current) return;
+    if (projects.length === 0 || tasks.length === 0) return;
+    pinMigrationRef.current = true;
+    const needsPin = projects.some((p) => !p.list && projectListMap[p.id]);
+    if (!needsPin) return;
+    setProjects((prev) => prev.map((p) => (!p.list && projectListMap[p.id] ? { ...p, list: projectListMap[p.id] } : p)));
+  }, [projects, tasks, projectListMap, setProjects]);
 
   // Tasks in the "Personal" client are scoped to their assignees: other users never see them.
   // This filter is applied to every display path (list, project, calendar, dashboard) so Personal
@@ -8338,6 +8415,11 @@ export default function App() {
 
   const calendarCollision = useCallback((args: Parameters<typeof pointerWithin>[0]) => {
     const collisions = pointerWithin(args);
+    // Edge assign drawers win over everything, in EVERY mode — without this the calendar
+    // branch below filters collisions down to cal-cell hits and the drawers would be
+    // unreachable drop targets while in calendar view.
+    const edgeHit = collisions.find((c) => String(c.id).startsWith('edge:'));
+    if (edgeHit) return [edgeHit];
     if (mode !== 'calendar') return collisions;
     const activeCellId = args.active.data.current?.calendarCellId as string | undefined;
     const activeTask = args.active.data.current?.task as Task | undefined;
@@ -8415,21 +8497,29 @@ export default function App() {
       onDragStart={handleDragStart}
       onDragOver={handleDragOver}
       onDragMove={(ev) => {
-        // Projects view: dragging a card toward the LEFT EDGE slides out the
-        // Resources/Clients assignment tray; moving well away closes it again.
-        if (mode !== 'projectView') return;
         const ae = ev.activatorEvent as PointerEvent | null;
         const x = (ae && typeof ae.clientX === 'number' ? ae.clientX : 0) + ev.delta.x;
-        if (x < 90) setAssignTrayOpen(true);
-        else if (x > 400) setAssignTrayOpen(false);
+        // Projects view: dragging a card toward the LEFT EDGE slides out the
+        // Resources/Clients assignment tray; moving well away closes it again.
+        if (mode === 'projectView') {
+          if (x < 90) setAssignTrayOpen(true);
+          else if (x > 400) setAssignTrayOpen(false);
+        }
+        // Edge assign rails (every view except Settings; left drawer yields to the
+        // Projects-view tray). Enter the edge zone while dragging a task → the drawer
+        // pulls out; drift back toward the middle → it tucks away.
+        if (activeType === 'task' || activeType === 'projTask') {
+          if (x < 90 && mode !== 'projectView' && mode !== 'settings') setEdgeDrawer('projects');
+          else if (x > window.innerWidth - 90 && mode !== 'settings') setEdgeDrawer('people');
+          else if (x > 340 && x < window.innerWidth - 280) setEdgeDrawer(null);
+        }
       }}
-      onDragEnd={(ev) => { setAssignTrayOpen(false); handleDragEnd(ev); }}
+      onDragEnd={(ev) => { setAssignTrayOpen(false); setEdgeDrawer(null); handleDragEnd(ev); }}
       measuring={measuringConfig}
-      // restrictToVerticalAxis for task drags EXCEPT in the Projects view —
-      // there the card must be able to travel LEFT into the assignment tray
-      // (drop on a person/client row to assign). The category lock is enforced
-      // at the displacement+drop layer so data stays clean either way.
-      modifiers={(activeType === 'task' || activeType === 'projTask') && mode !== 'projectView' ? [restrictToVerticalAxis] : []}
+      // NO axis lock on task drags any more — cards must be able to travel horizontally
+      // into the edge assign drawers (and the Projects-view tray). The category lock is
+      // still enforced at the displacement+drop layer so data stays clean.
+      modifiers={[]}
     >
       {/* New-version banner. Sits fixed at the top of the viewport with a
           high z-index so it overlays the TopHeader and column titles. The
@@ -9731,6 +9821,85 @@ export default function App() {
           />
         )}
 
+        {/* ── Edge assign rails ───────────────────────────────────────────────
+            Ever-present thin bars hugging the left and right edges of every
+            view (except Settings and the PIP). Rollover or click pulls out the
+            drawer; while dragging a task, entering the edge zone auto-opens it
+            (see onDragMove) — drop on a row to reassign. Left = projects,
+            right = assignees. On the Projects view the LEFT edge belongs to
+            the existing Resources/Clients tray, so only the right rail shows. */}
+        {!PIP_MODE && mode !== 'settings' && (
+          <>
+            {mode !== 'projectView' && (
+              <div
+                onMouseEnter={() => setEdgeDrawer('projects')}
+                className="fixed left-[10px] top-[130px] bottom-[110px] z-40 flex items-center"
+              >
+                <button
+                  type="button"
+                  onClick={() => setEdgeDrawer((d) => (d === 'projects' ? null : 'projects'))}
+                  className="h-full w-[8px] rounded-full bg-white/[0.04] hover:bg-white/[0.09] transition-colors flex items-center justify-center overflow-hidden"
+                  aria-label="Assign project drawer"
+                >
+                  <ChevronRight size={8} className="text-[#5e5e5e] shrink-0" />
+                </button>
+              </div>
+            )}
+            <div
+              onMouseEnter={() => setEdgeDrawer('people')}
+              className="fixed right-[10px] top-[130px] bottom-[110px] z-40 flex items-center"
+            >
+              <button
+                type="button"
+                onClick={() => setEdgeDrawer((d) => (d === 'people' ? null : 'people'))}
+                className="h-full w-[8px] rounded-full bg-white/[0.04] hover:bg-white/[0.09] transition-colors flex items-center justify-center overflow-hidden"
+                aria-label="Assign person drawer"
+              >
+                <ChevronLeft size={8} className="text-[#5e5e5e] shrink-0" />
+              </button>
+            </div>
+            {/* Projects drawer (left). Rows are droppables — drag a task in and release
+                to reparent. Grouped by the proj2 client order, clientless projects last. */}
+            <div
+              onMouseLeave={() => setEdgeDrawer((d) => (d === 'projects' ? null : d))}
+              className={`fixed left-0 top-[106px] bottom-[96px] w-[300px] z-40 bg-[#1f1f1f] border-r border-[#333333] flex flex-col transition-transform duration-200 ease-out ${edgeDrawer === 'projects' && mode !== 'projectView' ? 'translate-x-0' : '-translate-x-full'}`}
+            >
+              <div className="shrink-0 h-[37px] flex items-center px-[31px]">
+                <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Assign Project</p>
+              </div>
+              <CustomScroll>
+                {proj2SortedClients.map((c) => projects.filter((p) => p.clientId === c.id).map((p) => (
+                  <EdgeDropRow key={p.id} id={`edge:project:${p.id}`}>
+                    <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap text-[#656464]">{c.short || c.name}</span>
+                    <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis text-white">{p.name || 'Untitled'}</span>
+                  </EdgeDropRow>
+                )))}
+                {projects.filter((p) => !p.clientId || !clients.some((c) => c.id === p.clientId)).map((p) => (
+                  <EdgeDropRow key={p.id} id={`edge:project:${p.id}`}>
+                    <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis text-white">{p.name || 'Untitled'}</span>
+                  </EdgeDropRow>
+                ))}
+              </CustomScroll>
+            </div>
+            {/* People drawer (right). Drop adds the person to the task's assignees. */}
+            <div
+              onMouseLeave={() => setEdgeDrawer((d) => (d === 'people' ? null : d))}
+              className={`fixed right-0 top-[106px] bottom-[96px] w-[240px] z-40 bg-[#1f1f1f] border-l border-[#333333] flex flex-col transition-transform duration-200 ease-out ${edgeDrawer === 'people' ? 'translate-x-0' : 'translate-x-full'}`}
+            >
+              <div className="shrink-0 h-[37px] flex items-center px-[31px]">
+                <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Assign To</p>
+              </div>
+              <CustomScroll>
+                {people.map((per) => (
+                  <EdgeDropRow key={per.id} id={`edge:person:${per.short}`}>
+                    <AssigneeBadge letter={per.short || '?'} tone="todo" />
+                    <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis text-white">{per.name}</span>
+                  </EdgeDropRow>
+                ))}
+              </CustomScroll>
+            </div>
+          </>
+        )}
         {!PIP_MODE && <BottomBar mode={mode} onSetMode={setMode} onAdd={addAndEditTask} />}
 
         <AnimatePresence>
@@ -9795,6 +9964,8 @@ export default function App() {
               }}
               onUpdateTask={updateTask}
               onAddProject={(p) => addBlankProject(p.clientId, p.list)}
+              projectListOf={(id) => projectListMap[id] ?? 'projects'}
+              onPinProjectList={pinProjectList}
               onAddClient={addBlankClient}
               onAddPerson={addPerson}
               onRenameClient={renameClient}
