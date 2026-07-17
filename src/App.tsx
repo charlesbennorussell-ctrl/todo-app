@@ -584,7 +584,16 @@ function TaskCheckbox({ completed, started = false, onToggle }: { completed: boo
     // {...listeners} and start a drag â€” toggling completion stays a click, not the start of a move.
     // -mt-[2px] lifts the checkbox so its TOP sits at the title's cap-height (top of capital
     // letters) and its bottom sits roughly at the baseline â€” visually "embedded" in the text line.
-    <motion.div className="relative shrink-0 size-3 cursor-pointer -mt-[2px]" whileTap={{ scale: 0.9 }} onPointerDown={(e) => e.stopPropagation()} onClick={onToggle}>
+    <motion.div
+      className="relative shrink-0 size-3 cursor-pointer -mt-[2px]"
+      whileTap={{ scale: 0.9 }}
+      onPointerDown={(e) => e.stopPropagation()}
+      onClick={(e) => { e.stopPropagation(); onToggle(); }}
+      // Two quick clicks to advance pending → started → done fire a dblclick that bubbles to
+      // the row's onDoubleClick (open editor). Swallow it here so cycling the checkbox never
+      // opens the edit panel.
+      onDoubleClick={(e) => e.stopPropagation()}
+    >
       <div className="absolute inset-0 rounded-[3.333px]" style={{ backgroundColor: fill }}>
         <div aria-hidden="true" className="absolute border-[1.5px] border-solid inset-0 pointer-events-none rounded-[3.333px]" style={{ borderColor: border }} />
       </div>
@@ -4115,7 +4124,7 @@ function WeekCalendarMode({
             .sort((a, b) => (listSequence.indexOf(a.list) - listSequence.indexOf(b.list)) || a.order - b.order);
           return (
             <CalendarColumnDroppable key="nextweek" date={nwToken}>
-              <div className="shrink-0 h-[37px] flex items-center gap-2 px-[16px] mb-[37px] text-[#8465ff]">
+              <div className="shrink-0 h-[37px] flex items-center gap-2 px-[16px] mb-[37px] text-white">
                 <p className="font-['NB_International:Regular',sans-serif]">Next Week</p>
               </div>
               <CustomScroll>
@@ -9176,7 +9185,7 @@ export default function App() {
                     {
                       key: 'fc-next',
                       header: (
-                        <div className="shrink-0 h-[37px] flex items-center gap-2 px-[16px] text-[#8465ff]" style={{ marginBottom: SPACING.dcr }}>
+                        <div className="shrink-0 h-[37px] flex items-center gap-2 px-[16px] text-white" style={{ marginBottom: SPACING.dcr }}>
                           <p className="font-['NB_International:Regular',sans-serif]">Next</p>
                         </div>
                       ),
@@ -10283,25 +10292,22 @@ export default function App() {
         <DragOverlay dropAnimation={null} style={{ cursor: 'grabbing' }}>
           {activeTask && activeType === 'task' ? (
             activeCalendarCellId ? (
-              // Calendar drag: free-floating ghost that tracks the cursor 1:1 ï¿½ no column-snap spring
-              // fighting the cursor (calendar columns are narrow, snapping makes it feel laggy).
-              // Drop shadow restored at 1/4 size, 1/2 opacity vs. the original. Subtle enough that
-              // the per-frame repaint cost is negligible while still conveying that the card is lifted.
+              // Calendar drag: free-floating ghost that tracks the cursor 1:1. dnd-kit's
+              // DragOverlay already positions it under the pointer, so the motion.div must NOT
+              // add its own x-offset — the old `x: columnOffset*…` column-snap DOUBLE-applied
+              // horizontal movement (card raced ahead of the cursor) and, when activeRectWidth
+              // was unmeasured, the `?? '100%'` width blew the card out to the full portal
+              // width. Fixed width fallback + no x-snap = a normal-size card that follows the
+              // mouse.
               <motion.div
-                initial={{ scale: 1, x: 0 }}
+                initial={{ scale: 1 }}
                 animate={{
                   scale: 1.02,
-                  // Card width + 12px (mx-[6px] each side) ≈ full column-to-column distance.
-                  // activeRectWidth alone undershot — overlay landed in the gap between cols.
-                  x: columnOffset * ((activeRectWidth || 200) + 12),
                   boxShadow: "0 1.875px 7.5px -0.625px rgba(0, 0, 0, 0.35), 0 1.25px 3.125px -0.3125px rgba(0, 0, 0, 0.25)",
                 }}
-                transition={{
-                  scale: { type: "spring", stiffness: 600, damping: 30, mass: 0.4 },
-                  x: { type: "spring", stiffness: 320, damping: 34, mass: 0.7 },
-                }}
+                transition={{ scale: { type: "spring", stiffness: 600, damping: 30, mass: 0.4 } }}
                 className="bg-[#3a3a3a] overflow-hidden"
-                style={{ width: activeRectWidth ?? '100%', height: activeRectHeight, willChange: 'transform' }}
+                style={{ width: activeRectWidth ?? 220, height: activeRectHeight ?? 55, willChange: 'transform' }}
               >
                 <CalendarCardBody task={activeTask} projects={projects} clients={clients} taskOrder={taskOrder} />
               </motion.div>
