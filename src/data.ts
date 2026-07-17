@@ -44,6 +44,9 @@ export interface Task {
   // pending=0 → started=1 → completed=2).
   started?: boolean;
   startedAt?: number; // epoch ms — drives the started-grace window mirroring completedAt.
+  // Epoch ms when the task was created. Blank tasks (title never filled in) are auto-removed
+  // 3 minutes after creation; legacy blanks with no stamp are treated as expired.
+  createdAt?: number;
 }
 
 export interface Project { id: string; name: string; clientId?: string; list?: ListId; }

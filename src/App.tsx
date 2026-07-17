@@ -3504,17 +3504,21 @@ function computeCalendarDistribution(tasks: Task[], todayAnchor: Date, horizonDa
     let totalMandatory = 0;
     for (const listId of CAL_LISTS.map((c) => c.id)) {
       const m: Task[] = [];
+      // COMPLETED tasks are excluded from every live placement below — they
+      // used to pile up on today via their stale section:'today' (30-40 old
+      // completions crowding the current day). Instead they appear once as a
+      // faded RESIDUE row pinned to their completion date (see below).
       m.push(...tasks.filter((t) =>
-        t.list === listId && t.deadline === iso && t.type !== 'scheduled'
+        t.list === listId && t.deadline === iso && t.type !== 'scheduled' && !t.completed
       ).sort((a, b) => a.order - b.order));
       if (iso === todayIso) {
         m.push(...tasks.filter((t) =>
-          t.list === listId && t.section === 'today' && !t.deadline && t.type !== 'scheduled'
+          t.list === listId && t.section === 'today' && !t.deadline && t.type !== 'scheduled' && !t.completed
         ).sort((a, b) => a.order - b.order));
       }
       if (iso === tomorrowIso) {
         m.push(...tasks.filter((t) =>
-          t.list === listId && t.section === 'tomorrow' && !t.deadline && t.type !== 'scheduled'
+          t.list === listId && t.section === 'tomorrow' && !t.deadline && t.type !== 'scheduled' && !t.completed
         ).sort((a, b) => a.order - b.order));
       }
       mandatoryByList[listId] = m;
@@ -3533,7 +3537,15 @@ function computeCalendarDistribution(tasks: Task[], todayAnchor: Date, horizonDa
       const fillers = queue.slice(queueIdxs[listId], queueIdxs[listId] + slotsLeft);
       queueIdxs[listId] += fillers.length;
       dayBudget -= fillers.length;
-      map[`${iso}:${listId}`] = [...m, ...fillers];
+      // COMPLETION RESIDUE: a completed task shows once, faded, pinned on its
+      // completion date — but NOT on the day it was completed (it "fades out"
+      // that day and reappears as history from the next day onward). Old
+      // completions with no completedDay stamp never place anywhere.
+      const residue = tasks.filter((t) =>
+        t.list === listId && t.completed && t.type !== 'scheduled' &&
+        t.completedDay === iso && iso !== todayIso
+      ).sort((a, b) => a.order - b.order);
+      map[`${iso}:${listId}`] = [...m, ...fillers, ...residue];
     }
   }
   return map;
@@ -3703,10 +3715,13 @@ function WeekCalendarMode({
   taskOrder?: TaskOrder;
 }) {
   const [weekOffset, setWeekOffset] = useState(0);
-  // Column 1 = yesterday, column 2 = today, columns 3ï¿½7 = next 5 days. weekOffset shifts the whole window by 7-day increments.
+  // Column 1 = today, columns 2–5 = the next 4 days (no yesterday — it read as
+  // noise). weekOffset shifts the whole window by 7-day increments.
   const today = new Date(); today.setHours(0, 0, 0, 0);
-  const weekStart = addDaysToDate(today, -1 + weekOffset * 7);
-  const days = Array.from({ length: 7 }, (_, i) => addDaysToDate(weekStart, i));
+  const weekStart = addDaysToDate(today, weekOffset * 7);
+  // Five DATE columns (today + next 4); the 6th grid slot is the synthetic
+  // "Next Week" look-ahead/drop column rendered after the map.
+  const days = Array.from({ length: 5 }, (_, i) => addDaysToDate(weekStart, i));
   const dayNameShort = (d: Date) => d.toLocaleDateString('en-US', { weekday: 'short' });
   const bodyFont = "font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap";
   const todayIso = dateToISO(new Date());
@@ -3811,7 +3826,8 @@ function WeekCalendarMode({
   };
 
   const formatRange = () => {
-    const end = addDaysToDate(weekStart, 6);
+    // Range covers the five DATE columns (the Next Week column sits beyond it).
+    const end = addDaysToDate(weekStart, 4);
     const mon = weekStart.toLocaleDateString('en-US', { month: 'short' });
     const monEnd = end.toLocaleDateString('en-US', { month: 'short' });
     // Use — (em dash) for the range separator. Previous source had UTF-8 mojibake from an
@@ -3847,7 +3863,7 @@ function WeekCalendarMode({
           flex-1 min-h-0 lets children control their own scroll; overflow-x-auto preserves
           horizontal scroll for narrow viewports (the inner grid keeps min-w-[1400px]). */}
       <div className="flex-1 min-h-0 overflow-x-auto">
-      <div className="grid grid-cols-7 gap-0 px-[19px] h-full min-w-[1400px]">
+      <div className="grid grid-cols-6 gap-0 px-[19px] h-full min-w-[1200px]">
         {days.map((d, i) => {
           const iso = dateToISO(d);
           const isToday = iso === todayIso;
@@ -3861,17 +3877,8 @@ function WeekCalendarMode({
               {/* Independent per-column scroll. Coming-Up + per-band stacks live here.
                   CustomScroll supplies the fixed-size pill thumb (the native scrollbar is hidden). */}
               <CustomScroll>
-              {/* The last visible column gets the overflow stack of milestones whose deadlines
-                  fall beyond the window — labelled "Coming Up" so it reads as a separate look-ahead
-                  group rather than as part of day 7's content. */}
-              {iso === lastVisibleIso && overflowMilestones.length > 0 && (
-                <div className="mb-[37px]">
-                  <div className="h-[20px] px-[16px] flex items-center mb-[6px]">
-                    <p className={`${bodyFont} text-[#5e5e5e]`}>Coming Up</p>
-                  </div>
-                  {overflowMilestones.map((t) => <MilestoneCard key={t.id} task={t} showDate />)}
-                </div>
-              )}
+              {/* Coming Up (overflow milestones) moved to the dedicated
+                  "Next Week" column — see below after the day-columns map. */}
               {/* Milestones for this day are pinned above their respective category band (Work,
                   Projects, Admin) inside the list-loop below — no longer rendered as a standalone
                   block above all bands. */}
@@ -3960,6 +3967,60 @@ function WeekCalendarMode({
             </CalendarColumnDroppable>
           );
         })}
+        {(() => {
+          // ── 7th column: NEXT WEEK (not a date) ─────────────────────────────
+          // Look-ahead + drop hotspot. Shows the Coming Up milestones and a few
+          // highlights already scheduled for next week. Dropping ANY card here
+          // schedules it for next week — the 'NW@' token tells the drop handler
+          // to set the deadline even for queue tasks that normally keep none.
+          const lastD = days[days.length - 1];
+          const delta = ((8 - lastD.getDay()) % 7) || 7; // first Monday after the window
+          const nwStart = addDaysToDate(lastD, delta);
+          const nwStartIso = dateToISO(nwStart);
+          const nwEndIso = dateToISO(addDaysToDate(nwStart, 6));
+          const nwToken = `NW@${nwStartIso}`;
+          const highlights = tasks
+            .filter((t) => !t.completed && t.type !== 'scheduled' && t.deadline
+              && t.deadline >= nwStartIso && t.deadline <= nwEndIso)
+            .sort((a, b) => ((a.deadline || '') < (b.deadline || '') ? -1 : 1))
+            .slice(0, 10);
+          return (
+            <CalendarColumnDroppable key="nextweek" date={nwToken}>
+              <div className="shrink-0 h-[37px] flex items-center gap-2 px-[16px] mb-[37px] text-[#8465ff]">
+                <p className="font-['NB_International:Regular',sans-serif]">Next Week</p>
+              </div>
+              <CustomScroll>
+                <CalendarDayDroppable id={`cal:${nwToken}:projects`} isEmpty={highlights.length === 0 && overflowMilestones.length === 0} className="pb-[37px]">
+                  {overflowMilestones.length > 0 && (
+                    <div className="mb-[37px]">
+                      <div className="h-[20px] px-[16px] flex items-center mb-[6px]">
+                        <p className={`${bodyFont} text-[#5e5e5e]`}>Coming Up</p>
+                      </div>
+                      {overflowMilestones.map((t) => <MilestoneCard key={t.id} task={t} showDate />)}
+                    </div>
+                  )}
+                  {highlights.length > 0 && (
+                    <div>
+                      <div className="h-[20px] px-[16px] flex items-center mb-[6px]">
+                        <p className={`${bodyFont} text-[#5e5e5e]`}>Scheduled</p>
+                      </div>
+                      {highlights.map((t) => (
+                        <div key={`nw-${t.id}`} className="opacity-70">
+                          <CalendarCardBody task={t} projects={projects} clients={clients} taskOrder={taskOrder} />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {isAnyDragging && (
+                    <div className={`${bodyFont} mx-[16px] mt-[12px] px-3 py-5 rounded border border-dashed border-[#8465ff]/50 text-[#8465ff] text-center`}>
+                      Drop → next week
+                    </div>
+                  )}
+                </CalendarDayDroppable>
+              </CustomScroll>
+            </CalendarColumnDroppable>
+          );
+        })()}
       </div>
       </div>
     </div>
@@ -4963,6 +5024,10 @@ export default function App() {
   const [showAdd, setShowAdd] = useState(false);
   const [prefillList, setPrefillList] = useState<ListId | null>(null);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
+  // Projects view: slide-out Resources/Clients assignment tray (left edge).
+  // Auto-opens while a drag approaches the left edge; chevron handle toggles
+  // it manually for adding/renaming people and clients.
+  const [assignTrayOpen, setAssignTrayOpen] = useState(false);
   // 'edit' = double-click, panel stays open until you click off. 'quick' = right-click,
   // panel closes after a single change is applied (one-shot mode for quick re-categorising).
   const [editMode, setEditMode] = useState<'edit' | 'quick'>('edit');
@@ -5049,6 +5114,34 @@ export default function App() {
   };
   const openEdit = useCallback((t: Task, e?: { currentTarget?: EventTarget | null }) => { setEditingTask(t); setSelectedTaskId(t.id); setEditMode('edit'); setEditAnchor(captureAnchorFromEvent(e)); }, []);
   const openQuick = useCallback((t: Task, e?: { currentTarget?: EventTarget | null }) => { setEditingTask(t); setSelectedTaskId(t.id); setEditMode('quick'); setEditAnchor(captureAnchorFromEvent(e)); }, []);
+
+  // ── Blank-task auto-expiry ────────────────────────────────────────────────
+  // Tasks created but never given a title self-destruct 3 minutes after
+  // creation. Legacy blanks with no createdAt stamp count as already expired,
+  // so accumulated empty rows get cleaned on the first sweep. The task
+  // currently open in the edit/quick panel is exempt (mid-edit protection).
+  const editingTaskIdRef = useRef<string | null>(null);
+  useEffect(() => { editingTaskIdRef.current = editingTask?.id ?? null; }, [editingTask]);
+  useEffect(() => {
+    const MAX_AGE_MS = 180_000, SWEEP_EVERY_MS = 30_000;
+    const sweep = () => {
+      const now = Date.now();
+      setTasks((prev) => {
+        const expired = prev.filter((t) =>
+          !t.title.trim() && !t.trashed &&
+          (now - (t.createdAt ?? 0)) > MAX_AGE_MS &&
+          t.id !== editingTaskIdRef.current);
+        if (expired.length === 0) return prev;
+        const ids = new Set(expired.map((t) => t.id));
+        console.log(`[blank-sweep] removing ${expired.length} empty task(s)`);
+        return prev.filter((t) => !ids.has(t.id));
+      });
+    };
+    const h = setInterval(sweep, SWEEP_EVERY_MS);
+    sweep();
+    return () => clearInterval(h);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   // Single-click selection — Information panel and any "where am I?" affordances key off this.
   // Editing also sets it (above), so opening the quick-edit / full panel drags the selection
   // along with the user. Selection persists across panel close so the focus column doesn't
@@ -5066,7 +5159,7 @@ export default function App() {
   // EditableText shows "New Task" as a gray placeholder which disappears on first keystroke.
   const addAndEditTask = useCallback(() => {
     const id = `t-${Date.now()}`;
-    const newTask: Task = { id, title: '', type: 'todo', assignees: currentUserShort ? [currentUserShort] : [], completed: false, list: 'work', section: 'today', order: 0 };
+    const newTask: Task = { id, title: '', type: 'todo', assignees: currentUserShort ? [currentUserShort] : [], completed: false, list: 'work', section: 'today', order: 0, createdAt: Date.now() };
     setTasks((prev) => [...prev, newTask]);
     setEditingTask(newTask);
     setNewId(id);
@@ -5526,7 +5619,7 @@ export default function App() {
     const id = `task-${Date.now()}`;
     setTasks((prev) => {
       const maxOrder = prev.filter((x) => x.list === listId && x.section === 'today').reduce((m, x) => Math.max(m, x.order), -1);
-      return [...prev, { id, title: '', type: 'todo', assignees: currentUserShort ? [currentUserShort] : [], completed: false, list: listId, section: 'today', order: maxOrder + 1, projectId }];
+      return [...prev, { id, title: '', type: 'todo', assignees: currentUserShort ? [currentUserShort] : [], completed: false, list: listId, section: 'today', order: maxOrder + 1, projectId, createdAt: Date.now() }];
     });
     setNewId(id);
   }, [currentUserShort]);
@@ -6416,7 +6509,7 @@ export default function App() {
     const id = `task-${Date.now()}`;
     setTasks((prev) => {
       const maxOrder = prev.filter((x) => x.list === listId && x.section === 'today').reduce((m, x) => Math.max(m, x.order), -1);
-      return [...prev, { id, title: '', type: 'todo', assignees: currentUserShort ? [currentUserShort] : [], completed: false, list: listId, section: 'today', order: maxOrder + 1 }];
+      return [...prev, { id, title: '', type: 'todo', assignees: currentUserShort ? [currentUserShort] : [], completed: false, list: listId, section: 'today', order: maxOrder + 1, createdAt: Date.now() }];
     });
     setNewId(id);
   }, [currentUserShort]);
@@ -6424,7 +6517,7 @@ export default function App() {
     const id = `task-${Date.now()}`;
     setTasks((prev) => {
       const maxOrder = prev.filter((x) => x.list === listId && x.section === section).reduce((m, x) => Math.max(m, x.order), -1);
-      return [...prev, { id, title: '', type: 'todo', assignees: currentUserShort ? [currentUserShort] : [], completed: false, list: listId, section, order: maxOrder + 1 }];
+      return [...prev, { id, title: '', type: 'todo', assignees: currentUserShort ? [currentUserShort] : [], completed: false, list: listId, section, order: maxOrder + 1, createdAt: Date.now() }];
     });
     setNewId(id);
   }, [currentUserShort]);
@@ -6984,7 +7077,11 @@ export default function App() {
       return;
     }
     if (overIdStr.startsWith('cal:')) {
-      const [, targetDate, targetListRaw] = overIdStr.split(':');
+      const [, targetDateRaw, targetListRaw] = overIdStr.split(':');
+      // 'NW@<iso>' = the Next Week hotspot column — schedule for next week,
+      // setting the deadline even for queue tasks that normally keep none.
+      const isNextWeekDrop = targetDateRaw.startsWith('NW@');
+      const targetDate = isNextWeekDrop ? targetDateRaw.slice(3) : targetDateRaw;
       const droppedList = targetListRaw as ListId;
       const srcTask = tasks.find((t) => t.id === activeTaskId);
       // The redirected collision lost the original over-task — fall back to the refs captured
@@ -7010,7 +7107,7 @@ export default function App() {
         //      changes its priority/order in the queue. Today / Tomorrow drops still flip
         //      section to 'today' / 'tomorrow' (explicit placement); future-day drops keep
         //      section='next' so the task stays in the auto-distributed queue.
-        const isQueueTask = !srcTask.deadline;
+        const isQueueTask = !srcTask.deadline && !isNextWeekDrop;
         // If the user released the card OUTSIDE the source category band (Admin / Work /
         // Projects) of the destination column, decide top vs bottom based on where they
         // released relative to the source band. CAL_LISTS order is admin → work → projects;
@@ -7268,6 +7365,17 @@ export default function App() {
         else addBlankTaskInSection('work', 'today');
         return;
       }
+      // Ctrl+Space — PIP quick view. In the Tauri desktop app the OS-level
+      // global shortcut (registered in src-tauri/lib.rs) handles this even
+      // when the app is unfocused; this in-app fallback covers the WEB build,
+      // opening the same ?pip=1 view in a small popup window.
+      if (e.code === 'Space' && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault();
+        if (!('__TAURI_INTERNALS__' in window)) {
+          window.open('/?pip=1', 'ctrl-pip', 'width=420,height=880,left=40,top=40');
+        }
+        return;
+      }
       // View-mode shortcuts (1/2/3) and N (new-task panel).
       if (e.key === '1') { e.preventDefault(); setMode('dashboard'); return; }
       if (e.key === '2') { e.preventDefault(); setMode('projectView'); return; }
@@ -7381,7 +7489,8 @@ export default function App() {
   const focusStripCells = useMemo(() => {
     const anchor = new Date();
     anchor.setHours(0, 0, 0, 0);
-    return computeCalendarDistribution(calendarTasks, anchor, 3);
+    // 9-day horizon: Today (0) + Tomorrow (1) + the "Next" column's week (2..8).
+    return computeCalendarDistribution(calendarTasks, anchor, 9);
   }, [calendarTasks]);
 
   // Settings → Trash column: every soft-deleted task (newest first by trashedAt). Personal
@@ -7639,11 +7748,14 @@ export default function App() {
           clients={clients}
           taskOrder={taskOrder}
           density={density}
-          nonDraggable
         />
       ))}
     </>
   );
+  // ^ milestones are now DRAGGABLE (nonDraggable removed): the drop plumbing
+  // already supported cross-list milestone moves (section:<list>:milestones
+  // targets convert type correctly), so a milestone accidentally filed under
+  // Work can simply be dragged into Projects/Admin.
 
   // omitDeadlineIso: the focus page's mini-calendar bands are already grouped BY day, so a
   // per-row chip matching the band's own day ("Today" inside the Today band) is noise — pass
@@ -8172,12 +8284,22 @@ export default function App() {
       collisionDetection={calendarCollision}
       onDragStart={handleDragStart}
       onDragOver={handleDragOver}
-      onDragEnd={handleDragEnd}
+      onDragMove={(ev) => {
+        // Projects view: dragging a card toward the LEFT EDGE slides out the
+        // Resources/Clients assignment tray; moving well away closes it again.
+        if (mode !== 'projectView') return;
+        const ae = ev.activatorEvent as PointerEvent | null;
+        const x = (ae && typeof ae.clientX === 'number' ? ae.clientX : 0) + ev.delta.x;
+        if (x < 90) setAssignTrayOpen(true);
+        else if (x > 400) setAssignTrayOpen(false);
+      }}
+      onDragEnd={(ev) => { setAssignTrayOpen(false); handleDragEnd(ev); }}
       measuring={measuringConfig}
-      // restrictToVerticalAxis for all task drags. The category lock is enforced at the
-      // displacement+drop layer (cells in different categories don't displace, drops route
-      // back to source list) so the card visually moves freely while the data stays clean.
-      modifiers={activeType === 'task' || activeType === 'projTask' ? [restrictToVerticalAxis] : []}
+      // restrictToVerticalAxis for task drags EXCEPT in the Projects view —
+      // there the card must be able to travel LEFT into the assignment tray
+      // (drop on a person/client row to assign). The category lock is enforced
+      // at the displacement+drop layer so data stays clean either way.
+      modifiers={(activeType === 'task' || activeType === 'projTask') && mode !== 'projectView' ? [restrictToVerticalAxis] : []}
     >
       {/* New-version banner. Sits fixed at the top of the viewport with a
           high z-index so it overlays the TopHeader and column titles. The
@@ -8250,18 +8372,17 @@ export default function App() {
               <TopHeader viewName="Projects" />
             </div>
             <div className="flex flex-row gap-0 flex-1 min-h-0 overflow-x-auto mobile-carousel">
-            {/* Sidebar: Resources (people) + Clients. Scrolls independently. */}
-            <div className="flex-1 min-w-[280px] flex flex-col min-h-0 overflow-hidden">
-              {/* Spacer matching the column-title row above each column (h-[37px] + mb=dcr) so
-                  the Resources label drops down to align with the first project-group title in
-                  each column (NewLiving, Build Good Set of Mock Ups, Today, etc.) instead of
-                  sitting in the same row as the Work / Projects / Admin column titles. */}
-              <div className="shrink-0 h-[37px]" style={{ marginBottom: SPACING.dcr }} aria-hidden />
+            {/* v-next: Resources + Clients moved into a slide-out ASSIGNMENT
+                TRAY on the left edge — the three project columns get the full
+                width. The tray auto-opens while a card is dragged toward the
+                left edge (drop on a person/client row to assign — those rows
+                were already droppables), and the chevron handle toggles it for
+                managing people/clients by hand. */}
+            <div
+              className={`absolute left-0 top-0 bottom-0 z-40 w-[300px] bg-[#1f1f1f] border-r border-white/5 shadow-2xl transition-transform duration-200 flex flex-col ${assignTrayOpen ? 'translate-x-0' : '-translate-x-full'}`}
+              style={{ paddingTop: SPACING.topMargin }}
+            >
               <CustomScroll>
-                {/* Resources / Clients headers are presentational labels, not column titles, so they
-                    render in the same muted gray as calendar band labels and sit DIRECTLY above the
-                    first row underneath (no dcr paragraph break — the label reads as the header of
-                    the list immediately below it, like an inline section divider). */}
                 <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]">
                   <p className="font-['NB_International:Regular',sans-serif] text-[#5e5e5e] text-[14.333px]">Resources</p>
                   <AddPlus onClick={addPerson} />
@@ -8288,6 +8409,14 @@ export default function App() {
                 ))}
               </CustomScroll>
             </div>
+            <button
+              type="button"
+              onClick={() => setAssignTrayOpen((o) => !o)}
+              title="Resources & Clients"
+              className={`absolute top-1/2 -translate-y-1/2 z-50 h-[64px] w-[18px] flex items-center justify-center text-[#656464] hover:text-white bg-[#1f1f1f] border border-white/5 rounded-r transition-all duration-200 ${assignTrayOpen ? 'left-[300px]' : 'left-0'}`}
+            >
+              <ChevronRight size={14} className={`transition-transform ${assignTrayOpen ? 'rotate-180' : ''}`} />
+            </button>
             {(['work', 'projects', 'admin'] as ListId[]).map((l) => renderProjectGroupedColumn(l))}
             </div>
           </div>
@@ -8378,10 +8507,17 @@ export default function App() {
               <div className="shrink-0">
                 <TopHeader viewName="Focus" />
               </div>
-              <div className="flex flex-row gap-0 flex-1 min-h-0 w-full max-w-[1240px] min-[1530px]:max-w-[1740px] mx-auto">
-                {/* Column 0 — Projects panel: a flat master list of every project; clicking
-                    one drills into that project's tasks, and the back chevron in the title
-                    row returns to the master list (focusProjectId drives the two states).
+              {/* SIX-COLUMN GRID: col 1 = projects-as-filters, cols 2–3 = the Dashboard
+                  stack at double width (the 2fr track — no col-span wrapper needed),
+                  cols 4–6 = the calendar unpacked into Today / Tomorrow / Next columns.
+                  overflow-x-auto lets narrow windows scroll instead of crushing columns
+                  (each child carries its own min-width). NOTE for un-parking
+                  FOCUS_SHOW_INFO / FOCUS_SHOW_REFERENCES: the track template is fixed at
+                  five tracks — re-enabling those columns means widening the template. */}
+              <div className="grid grid-cols-[1fr_2fr_1fr_1fr_1fr] gap-0 flex-1 min-h-0 w-full overflow-x-auto">
+                {/* Column 1 — Projects panel: flat master list (milestones pinned on top);
+                    clicking a project FILTERS the Dashboard stack + all three calendar
+                    columns (focusProjectId). Active row shows an ×; click again to clear.
                     Information + References are parked behind FOCUS_SHOW_INFO /
                     FOCUS_SHOW_REFERENCES while ctrl-assets takes over reference handling. */}
                 {(() => {
@@ -8451,93 +8587,102 @@ export default function App() {
                     same column the PIP window shows. When a project is selected in the
                     left panel, the whole stack narrows to that project's tasks. */}
                 {renderColumn('dashboard', focusProjectId)}
-                {/* Column 2 — mini day-calendar: Today / Tomorrow / day-after as stacked
-                    bands on the right end. WIDE WINDOWS ONLY (hidden below 1530px — the
-                    desktop app window is 1800 wide so it shows there; the 520px PIP and
-                    half-snapped windows fall back to the two-column layout). Deadline-
-                    driven: each band lists the tasks + milestones due that day, personal-
-                    scoped like the dashboard (yours + unassigned; milestones always).
-                    Rows reuse renderReadonlyBucket — live checkbox, double-click edit,
-                    right-click quick-edit — with the per-row date chip hidden since the
-                    band header already says the day. */}
-                <div className="hidden min-[1530px]:flex flex-1 min-w-[280px] flex-col min-h-0 overflow-hidden">
-                  <div className="shrink-0 group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]" style={{ marginBottom: SPACING.dcr }}>
-                    <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">Calendar</p>
-                  </div>
-                  <CustomScroll>
-                    {(() => {
-                      // PULLED FROM THE CALENDAR VIEW. The strip's three days render exactly
-                      // what the week calendar's day columns render: same distribution
-                      // (focusStripCells ← computeCalendarDistribution: deadlined todos +
-                      // today/tomorrow sections; day 3 gets queue fillers), same band
-                      // structure (Admin / Work / Projects with grey labels), same
-                      // CalendarCards (checkbox, two-line meta, drag, hover +/delete).
-                      // Empty bands are skipped to keep the digest tight.
-                      const stripAnchor = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; })();
-                      return [0, 1, 2].map((off) => {
-                        const d = addDaysToDate(stripAnchor, off);
-                        const iso = dateToISO(d);
-                        const label = `${d.toLocaleDateString('en-US', { weekday: 'short' })} ${d.getDate()}${off === 0 ? ' (Today)' : ''}`;
-                        return (
-                          <div key={`focus-cal-${iso}`}>
-                            {off > 0 && <Spacer />}
-                            <SectionHeader title={label} sticky="date" accent={off === 0} />
-                            {CAL_LISTS.map(({ id: listId, label: bandLabel }) => {
-                              // Project filter (left-panel selection) narrows the strip too.
-                              const bucketAll = focusStripCells[`${iso}:${listId}`] || [];
-                              const bucket = focusProjectId ? bucketAll.filter((t) => t.projectId === focusProjectId) : bucketAll;
-                              // Milestones pinned to this day, band-matched by effective
-                              // list (the project's pinned list wins over the task's own)
-                              // — same rule as WeekCalendarMode's dayMilestones, over the
-                              // same calendarTasks set the calendar itself receives.
-                              const dayMilestones = calendarTasks.filter((t) => {
-                                if (t.type !== 'scheduled' || t.deadline !== iso) return false;
-                                if (focusProjectId && t.projectId !== focusProjectId) return false;
-                                if (t.projectId) {
-                                  const proj = projects.find((p) => p.id === t.projectId);
-                                  if (proj?.list) return proj.list === listId;
-                                }
-                                return t.list === listId;
-                              }).sort((a, b) => a.title.localeCompare(b.title));
-                              if (bucket.length === 0 && dayMilestones.length === 0) return null;
-                              const cellId = `cal:${iso}:${listId}`;
-                              const cellTasks = [...dayMilestones, ...bucket];
-                              return (
-                                <div key={listId} className="pb-[24px] last:pb-0">
-                                  {/* Band label — same treatment as the calendar's in-column
-                                      category labels (grey, 20px row, 16px inset). */}
-                                  <div className="h-[20px] px-[16px] flex items-center mb-[6px]">
-                                    <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap text-[#5e5e5e]">{bandLabel}</p>
-                                  </div>
-                                  <SortableContext items={cellTasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
-                                    {cellTasks.map((t) => (
-                                      <CalendarCard
-                                        key={t.id}
-                                        task={t}
-                                        cellId={cellId}
-                                        onToggle={() => toggleTask(t.id)}
-                                        onRename={(title) => renameTask(t.id, title)}
-                                        onDelete={() => deleteTask(t.id)}
-                                        onEdit={() => openEdit(t)}
-                                        onQuickEdit={() => openQuick(t)}
-                                        onAddSibling={() => addSiblingTask(t)}
-                                        isAnyDragging={!!activeTask}
-                                        categoryDimmed={!!activeTask && activeTask.list !== listId}
-                                        projects={projects}
-                                        clients={clients}
-                                        taskOrder={taskOrder}
-                                      />
-                                    ))}
-                                  </SortableContext>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        );
-                      });
-                    })()}
-                  </CustomScroll>
-                </div>
+                {/* Columns 4–6 — the calendar unpacked into THREE side-by-side columns:
+                    Today, Tomorrow, Next. Same engine as the calendar view
+                    (focusStripCells ← computeCalendarDistribution over calendarTasks),
+                    same band structure (Admin / Work / Projects), same CalendarCards
+                    (checkbox, two-line meta, drag, hover +/delete). "Next" aggregates the
+                    following week (day+2 … day+8) — dated cards keep their date chips so
+                    the horizon stays readable. The left-panel project filter narrows all
+                    three columns. Headers match the calendar view's day-header format. */}
+                {(() => {
+                  const stripAnchor = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; })();
+                  // One band block (label + cards) per CAL_LIST, aggregated over the
+                  // column's iso set. Mirrors WeekCalendarMode's per-day band rendering.
+                  const dayBands = (isos: string[], colKey: string) => CAL_LISTS.map(({ id: listId, label: bandLabel }) => {
+                    const isoSet = new Set(isos);
+                    const bucketAll = isos.flatMap((iso) => focusStripCells[`${iso}:${listId}`] || []);
+                    const bucket = focusProjectId ? bucketAll.filter((t) => t.projectId === focusProjectId) : bucketAll;
+                    // Milestones dated inside this column's window, band-matched by
+                    // effective list (project's pinned list wins over the task's own) —
+                    // same rule as WeekCalendarMode's dayMilestones, over the same
+                    // calendarTasks set the calendar itself receives.
+                    const bandMilestones = calendarTasks.filter((t) => {
+                      if (t.type !== 'scheduled' || !t.deadline || !isoSet.has(t.deadline)) return false;
+                      if (focusProjectId && t.projectId !== focusProjectId) return false;
+                      if (t.projectId) {
+                        const proj = projects.find((p) => p.id === t.projectId);
+                        if (proj?.list) return proj.list === listId;
+                      }
+                      return t.list === listId;
+                    }).sort((a, b) => (a.deadline! < b.deadline! ? -1 : a.deadline! > b.deadline! ? 1 : a.title.localeCompare(b.title)));
+                    if (bucket.length === 0 && bandMilestones.length === 0) return null;
+                    const cellId = `cal:${isos[0]}:${listId}`;
+                    const cellTasks = [...bandMilestones, ...bucket];
+                    return (
+                      <div key={`${colKey}-${listId}`} className="pb-[24px] last:pb-0">
+                        {/* Band label — same treatment as the calendar's in-column
+                            category labels (grey, 20px row, 16px inset). */}
+                        <div className="h-[20px] px-[16px] flex items-center mb-[6px]">
+                          <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap text-[#5e5e5e]">{bandLabel}</p>
+                        </div>
+                        <SortableContext items={cellTasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
+                          {cellTasks.map((t) => (
+                            <CalendarCard
+                              key={t.id}
+                              task={t}
+                              cellId={cellId}
+                              onToggle={() => toggleTask(t.id)}
+                              onRename={(title) => renameTask(t.id, title)}
+                              onDelete={() => deleteTask(t.id)}
+                              onEdit={() => openEdit(t)}
+                              onQuickEdit={() => openQuick(t)}
+                              onAddSibling={() => addSiblingTask(t)}
+                              isAnyDragging={!!activeTask}
+                              categoryDimmed={!!activeTask && activeTask.list !== listId}
+                              projects={projects}
+                              clients={clients}
+                              taskOrder={taskOrder}
+                            />
+                          ))}
+                        </SortableContext>
+                      </div>
+                    );
+                  });
+                  const d0 = stripAnchor;
+                  const d1 = addDaysToDate(stripAnchor, 1);
+                  const nextIsos = [2, 3, 4, 5, 6, 7, 8].map((off) => dateToISO(addDaysToDate(stripAnchor, off)));
+                  // Day headers replicate the calendar view's: NB-font weekday + Univers
+                  // date number, purple for today with the "(Today)" suffix.
+                  const dayHeader = (d: Date, isToday: boolean) => (
+                    <div className={`shrink-0 h-[37px] flex items-center gap-2 px-[16px] ${isToday ? 'text-[#8465ff]' : 'text-white'}`} style={{ marginBottom: SPACING.dcr }}>
+                      <p className="font-['NB_International:Regular',sans-serif]">{d.toLocaleDateString('en-US', { weekday: 'short' })}</p>
+                      <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap">{d.getDate()}</p>
+                      {isToday && <p className="font-['NB_International:Regular',sans-serif]">(Today)</p>}
+                    </div>
+                  );
+                  const cols: Array<{ key: string; header: React.ReactNode; isos: string[] }> = [
+                    { key: 'fc-today', header: dayHeader(d0, true), isos: [dateToISO(d0)] },
+                    { key: 'fc-tomorrow', header: dayHeader(d1, false), isos: [dateToISO(d1)] },
+                    {
+                      key: 'fc-next',
+                      header: (
+                        <div className="shrink-0 h-[37px] flex items-center gap-2 px-[16px] text-[#8465ff]" style={{ marginBottom: SPACING.dcr }}>
+                          <p className="font-['NB_International:Regular',sans-serif]">Next</p>
+                        </div>
+                      ),
+                      isos: nextIsos,
+                    },
+                  ];
+                  return cols.map((col) => (
+                    <div key={col.key} className="min-w-[240px] flex flex-col min-h-0 overflow-hidden">
+                      {col.header}
+                      <CustomScroll>
+                        {dayBands(col.isos, col.key)}
+                      </CustomScroll>
+                    </div>
+                  ));
+                })()}
                 {/* Column 2 — Project / Task Information (Brief + Integrations).
                     Title sits in the same row as the Dashboard column header so the three
                     columns share a single top-aligned header line. The header reads
