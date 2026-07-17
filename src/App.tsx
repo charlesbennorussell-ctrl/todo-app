@@ -7701,7 +7701,11 @@ export default function App() {
     </>
   );
 
-  const renderColumn = (listId: ListId) => {
+  // filterProjectId (dashboard column only): when set, every bucket narrows to that single
+  // project's tasks — the focus page's left-panel project filter drives this. Callers that
+  // use Array.map must wrap in a lambda (`LISTS.map((l) => renderColumn(l))`) so map's index
+  // isn't accidentally passed as the filter.
+  const renderColumn = (listId: ListId, filterProjectId?: string | null) => {
     // Dashboard tasks are now draggable too â€” using the same renderBucket as the per-list columns.
     // Reordering within a sub-list (admin/work/projects) updates order; dragging across sub-lists
     // moves the task to the target's list (handled by handleCrossSectionMove).
@@ -7768,18 +7772,21 @@ export default function App() {
             // Inline assignee filter — dashboard scopes to tasks assigned to the
             // current user (or unassigned, which default to "everyone's").
             const forMe = (xs: Task[]) => xs.filter((t) => t.assignees.length === 0 || t.assignees.includes(currentUserShort));
+            // Project scope — the focus page's left-panel filter. Applied after
+            // forMe so an active filter narrows every bucket to one project.
+            const scope = (xs: Task[]) => (filterProjectId ? xs.filter((t) => t.projectId === filterProjectId) : xs);
             const orderedLists = ['work', 'admin', 'projects'] as ListId[];
             // Build per-list bundles up-front so we know which list blocks are
             // empty (skipped) vs visible (rendered) — needed for the Spacer
             // between-block logic to skip dead spacers.
             const blocks = orderedLists.map((list) => {
-              const today = forMe(tasksByKey[`${list}:today`] || []);
-              const tomorrow = tomorrowEnabled ? forMe(tasksByKey[`${list}:tomorrow`] || []) : [];
+              const today = scope(forMe(tasksByKey[`${list}:today`] || []));
+              const tomorrow = tomorrowEnabled ? scope(forMe(tasksByKey[`${list}:tomorrow`] || [])) : [];
               // When tomorrow is OFF, tomorrow-tagged tasks fall through into
               // next — mirrors the per-list column's tomorrow→next merge.
-              const next = forMe(tomorrowEnabled
+              const next = scope(forMe(tomorrowEnabled
                 ? (tasksByKey[`${list}:next`] || [])
-                : [...(tasksByKey[`${list}:tomorrow`] || []), ...(tasksByKey[`${list}:next`] || [])]);
+                : [...(tasksByKey[`${list}:tomorrow`] || []), ...(tasksByKey[`${list}:next`] || [])]));
               return { list, today, tomorrow, next };
             });
             const listBlocks = blocks.filter((b) => b.today.length + b.tomorrow.length > 0);
@@ -8224,7 +8231,9 @@ export default function App() {
             {/* Columns row — flex-1 + min-h-0 so children can shrink to fit and each column
                 can have its own overflow:auto scroller. */}
             <div className="flex flex-row gap-0 flex-1 min-h-0 overflow-x-auto mobile-carousel">
-              {LISTS.map(renderColumn)}
+              {/* Lambda (not bare map(renderColumn)) so map's index isn't passed as the
+                  second renderColumn param (filterProjectId). */}
+              {LISTS.map((l) => renderColumn(l))}
             </div>
           </div>
         )}
@@ -8376,78 +8385,48 @@ export default function App() {
                     Information + References are parked behind FOCUS_SHOW_INFO /
                     FOCUS_SHOW_REFERENCES while ctrl-assets takes over reference handling. */}
                 {(() => {
-                  const drill = focusProjectId ? projects.find((p) => p.id === focusProjectId) : undefined;
-                  if (drill) {
-                    const drillClient = drill.clientId ? clients.find((c) => c.id === drill.clientId) : undefined;
-                    // Same membership rule as project view 2: explicit projectId, plus the
-                    // milestone-title inference (a scheduled task under the same client whose
-                    // title matches the project name reads as that project's milestone).
-                    const drillName = (drill.name || '').trim().toLowerCase();
-                    const projTasks = visibleTasks.filter((t) => {
-                      if (t.projectId === drill.id) return true;
-                      return !t.projectId && t.type === 'scheduled' && !!t.clientId && t.clientId === drill.clientId
-                        && t.title.trim().toLowerCase() === drillName;
-                    });
-                    // Milestones first (the project's headline goals), then todos by section
-                    // (today → tomorrow → next → inbox) with manual order inside each.
-                    const sectionRank: Record<SectionId, number> = { today: 0, tomorrow: 1, next: 2, inbox: 3 };
-                    const detailTasks = [
-                      ...projTasks.filter((t) => t.type === 'scheduled'),
-                      ...projTasks.filter((t) => t.type !== 'scheduled')
-                        .sort((a, b) => (sectionRank[a.section] - sectionRank[b.section]) || a.order - b.order),
-                    ];
-                    return (
-                      <div className="flex-1 min-w-[280px] flex flex-col min-h-0 overflow-hidden">
-                        {/* Title row: back chevron sits in the 35px gutter (absolute) so the
-                            breadcrumb text stays aligned with the other column titles. */}
-                        <div className="relative shrink-0 group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]" style={{ marginBottom: SPACING.dcr }}>
-                          <button
-                            type="button"
-                            onClick={() => setFocusProjectId(null)}
-                            aria-label="Back to projects"
-                            className="absolute left-[8px] top-1/2 -translate-y-1/2 p-1 text-[#656464] hover:text-white transition-colors"
-                          >
-                            <ChevronLeft size={16} />
-                          </button>
-                          <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">
-                            {drillClient?.short ? <>{drillClient.short}<Arrowhead /></> : null}{drill.name || 'Untitled'}
-                          </p>
-                          <AddPlus onClick={() => addTaskToProject(drill.id, drill.list ?? 'projects')} />
-                        </div>
-                        <CustomScroll>
-                          {detailTasks.length > 0
-                            ? renderProjectBucket(detailTasks, `proj2:${drill.list ?? 'projects'}:${drill.id}:`, false)
-                            : (
-                              <div className="h-[37px] box-border flex flex-row items-center px-[31px] w-full">
-                                <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap text-[#474747]">No tasks yet</p>
-                              </div>
-                            )}
-                        </CustomScroll>
-                      </div>
-                    );
-                  }
-                  // Master list — every project, grouped by the proj2 client order (Personal
-                  // first, then alphabetical), clientless projects at the bottom. Each row:
-                  // client short (grey) › project name (white) + visible-task count.
+                  // Left panel: top-pinned milestones + the master project list. Clicking a
+                  // project FILTERS rather than navigates — the center Dashboard stack and
+                  // the right calendar strip narrow to that project's tasks (focusProjectId).
+                  // The active row highlights and swaps its chevron for an ×; clicking it
+                  // again clears the filter.
                   const rows: Array<{ p: Project; client?: Client }> = [];
                   for (const c of proj2SortedClients) {
                     for (const p of projects.filter((pp) => pp.clientId === c.id)) rows.push({ p, client: c });
                   }
                   for (const p of projects.filter((pp) => !pp.clientId || !clients.some((c) => c.id === pp.clientId))) rows.push({ p });
+                  // Milestones pinned at the very top of the column — every list, deadline
+                  // ascending with undated last (same sort as the list-view milestones
+                  // bucket). An active project filter narrows these too.
+                  const topMilestones = visibleTasks
+                    .filter((t) => t.type === 'scheduled' && (!focusProjectId || t.projectId === focusProjectId))
+                    .sort((a, b) => {
+                      const ad = a.deadline || '￿';
+                      const bd = b.deadline || '￿';
+                      if (ad !== bd) return ad < bd ? -1 : 1;
+                      return a.title.localeCompare(b.title);
+                    });
                   return (
                     <div className="flex-1 min-w-[280px] flex flex-col min-h-0 overflow-hidden">
                       <div className="shrink-0 group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]" style={{ marginBottom: SPACING.dcr }}>
                         <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">Projects</p>
                       </div>
                       <CustomScroll>
+                        {topMilestones.length > 0 && (
+                          <>
+                            {renderReadonlyBucket(topMilestones)}
+                            <Spacer />
+                          </>
+                        )}
                         {rows.map(({ p, client: c }) => {
                           const count = visibleTasks.filter((t) => t.projectId === p.id).length;
+                          const active = focusProjectId === p.id;
                           return (
                             <button
                               key={p.id}
                               type="button"
-                              onClick={() => setFocusProjectId(p.id)}
-                              className="group h-[37px] w-full text-left box-border flex flex-row gap-2 items-center px-[31px] hover:bg-white/[0.03] transition-colors"
+                              onClick={() => setFocusProjectId(active ? null : p.id)}
+                              className={`group h-[37px] w-full text-left box-border flex flex-row gap-2 items-center px-[31px] transition-colors ${active ? 'bg-white/[0.075]' : 'hover:bg-white/[0.03]'}`}
                             >
                               <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap text-[#656464]">
                                 {c?.short || (c && c.id === PERSONAL_CLIENT_ID ? 'Personal' : '')}
@@ -8456,7 +8435,9 @@ export default function App() {
                                 {p.name || 'Untitled'}
                               </span>
                               {count > 0 && <span className="text-[#474747] text-[12px]">{count}</span>}
-                              <ChevronRight size={14} className="ml-auto text-[#5e5e5e] opacity-0 group-hover:opacity-100 transition-opacity" />
+                              {active
+                                ? <X size={14} className="ml-auto text-[#a8a8a8]" />
+                                : <ChevronRight size={14} className="ml-auto text-[#5e5e5e] opacity-0 group-hover:opacity-100 transition-opacity" />}
                             </button>
                           );
                         })}
@@ -8467,9 +8448,9 @@ export default function App() {
                 {/* Column 1 — the daily Dashboard stack. Same renderer as the list view's
                     Dashboard column (list-first hierarchy: Work/Admin/Projects → Today/
                     Tomorrow, then Next → per-list) so the two stay in lockstep — and the
-                    same column the PIP window shows. Replaces the old bespoke focus-dash
-                    markup that still used the date-first layout. */}
-                {renderColumn('dashboard')}
+                    same column the PIP window shows. When a project is selected in the
+                    left panel, the whole stack narrows to that project's tasks. */}
+                {renderColumn('dashboard', focusProjectId)}
                 {/* Column 2 — mini day-calendar: Today / Tomorrow / day-after as stacked
                     bands on the right end. WIDE WINDOWS ONLY (hidden below 1530px — the
                     desktop app window is 1800 wide so it shows there; the 520px PIP and
@@ -8502,13 +8483,16 @@ export default function App() {
                             {off > 0 && <Spacer />}
                             <SectionHeader title={label} sticky="date" accent={off === 0} />
                             {CAL_LISTS.map(({ id: listId, label: bandLabel }) => {
-                              const bucket = focusStripCells[`${iso}:${listId}`] || [];
+                              // Project filter (left-panel selection) narrows the strip too.
+                              const bucketAll = focusStripCells[`${iso}:${listId}`] || [];
+                              const bucket = focusProjectId ? bucketAll.filter((t) => t.projectId === focusProjectId) : bucketAll;
                               // Milestones pinned to this day, band-matched by effective
                               // list (the project's pinned list wins over the task's own)
                               // — same rule as WeekCalendarMode's dayMilestones, over the
                               // same calendarTasks set the calendar itself receives.
                               const dayMilestones = calendarTasks.filter((t) => {
                                 if (t.type !== 'scheduled' || t.deadline !== iso) return false;
+                                if (focusProjectId && t.projectId !== focusProjectId) return false;
                                 if (t.projectId) {
                                   const proj = projects.find((p) => p.id === t.projectId);
                                   if (proj?.list) return proj.list === listId;
