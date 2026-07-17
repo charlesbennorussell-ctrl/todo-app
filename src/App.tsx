@@ -16,6 +16,7 @@ import {
   MeasuringStrategy,
   pointerWithin,
   useDroppable,
+  useDraggable,
 } from '@dnd-kit/core';
 import { restrictToVerticalAxis, restrictToHorizontalAxis, restrictToParentElement } from '@dnd-kit/modifiers';
 import {
@@ -1375,8 +1376,15 @@ function SortableTaskItem({
             />
           )}
         </div>
-        {/* Assignees hide at density >= 5. */}
-        {density < 5 && task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} faint={isExpiredMilestone} />)}
+        {/* Assignees hide at density >= 5. They're also hidden by default and fade in on
+            row-hover (opacity only, so the reserved width doesn't shift the row) — the
+            circles were visual noise at rest. The badge stays visible while dragging so the
+            floating overlay still reads who owns it. */}
+        {density < 5 && task.assignees.length > 0 && (
+          <span className={`flex flex-row items-center gap-2 transition-opacity duration-200 ${(isDragOverlay || isDragging || hovered) ? 'opacity-100' : 'opacity-0'}`}>
+            {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} faint={isExpiredMilestone} />)}
+          </span>
+        )}
         {(() => {
           // Three render cases:
           //   1. Has a real deadline → DeadlineArrow + formatted date (existing behavior)
@@ -1684,6 +1692,66 @@ function EdgeDropRow({ id, children }: { id: string; children: React.ReactNode }
   return (
     <div ref={setNodeRef} className={`h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px] transition-colors ${isOver ? 'bg-white/[0.10]' : 'hover:bg-white/[0.03]'}`}>
       {children}
+    </div>
+  );
+}
+
+// The focus panel's "Projects" title, doubling as the un-nest drop target: dragging a
+// sub-project onto it promotes it back to top level (focusnest:__root__ → parentId cleared).
+function ProjectsHeaderDropZone() {
+  const { setNodeRef, isOver } = useDroppable({ id: 'focusnest:__root__' });
+  return (
+    <div
+      ref={setNodeRef}
+      className={`shrink-0 group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] transition-colors ${isOver ? 'bg-[#8465ff]/20' : ''}`}
+      style={{ marginBottom: SPACING.dcr }}
+    >
+      <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">Projects{isOver ? ' — drop to un-nest' : ''}</p>
+    </div>
+  );
+}
+
+// A project row in the focus-page filter panel: draggable (drag onto another to nest it) AND
+// a drop target (`focusnest:<id>`). Clicking still filters — the 8px sensor distance means a
+// stationary press is a click, a >8px move is a drag. depth indents nested rows; `expandable`
+// shows the accordion chevron; `active`/`onToggleExpand`/`onClick` drive filter + expand.
+function FocusProjectRow({
+  project, client, depth, count, active, expandable, expanded, onClick, onToggleExpand,
+}: {
+  project: Project; client?: Client; depth: number; count: number; active: boolean;
+  expandable: boolean; expanded: boolean; onClick: () => void; onToggleExpand: () => void;
+}) {
+  const { setNodeRef: dragRef, attributes, listeners, isDragging } = useDraggable({
+    id: `focusdrag:${project.id}`,
+    data: { type: 'focusProject', projectId: project.id, project },
+  });
+  const { setNodeRef: dropRef, isOver } = useDroppable({ id: `focusnest:${project.id}` });
+  return (
+    <div
+      ref={(el) => { dragRef(el); dropRef(el); }}
+      {...attributes}
+      {...listeners}
+      onClick={onClick}
+      className={`group h-[37px] w-full text-left box-border flex flex-row gap-2 items-center px-[31px] cursor-grab active:cursor-grabbing transition-colors ${isDragging ? 'opacity-40' : ''} ${isOver ? 'bg-[#8465ff]/20' : active ? 'bg-white/[0.075]' : 'hover:bg-white/[0.03]'}`}
+      style={{ paddingLeft: 31 + depth * 16 }}
+    >
+      {expandable ? (
+        <button
+          type="button"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => { e.stopPropagation(); onToggleExpand(); }}
+          className="shrink-0 -ml-[2px] p-[2px] text-[#5e5e5e] hover:text-white transition-colors"
+          aria-label={expanded ? 'Collapse sub-projects' : 'Expand sub-projects'}
+        >
+          <ChevronRight size={12} className={`transition-transform ${expanded ? 'rotate-90' : ''}`} />
+        </button>
+      ) : depth > 0 ? <span className="shrink-0 w-[10px]" aria-hidden /> : null}
+      {client?.short && depth === 0 && (
+        <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap text-[#656464]">{client.short}</span>
+      )}
+      <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis text-white">{project.name || 'Untitled'}</span>
+      {count > 0 && <span className="text-[#474747] text-[12px]">{count}</span>}
+      {active && <X size={14} className="ml-auto text-[#a8a8a8]" />}
     </div>
   );
 }
@@ -3726,7 +3794,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
 }
 
 function WeekCalendarMode({
-  tasks, projects, clients, onToggleTask, onRenameTask, onDeleteTask, onEditTask, onQuickEditTask, onAddSiblingTask, onSyncSections, isAnyDragging,
+  tasks, projects, clients, onToggleTask, onRenameTask, onDeleteTask, onEditTask, onQuickEditTask, onAddSiblingTask, onAddTaskOnDay, onSyncSections, isAnyDragging,
   activeTask, overTask, activeCellId, activeSlotHeight, taskOrder = 'ptc', listSequence, newTaskId = null,
 }: {
   tasks: Task[]; projects: Project[]; clients: Client[];
@@ -3737,6 +3805,9 @@ function WeekCalendarMode({
   onQuickEditTask?: (t: Task) => void;
   // pinDeadline keeps the spawned sibling in the cell it came from — see addSiblingTask.
   onAddSiblingTask: (t: Task, pinDeadline?: string) => void;
+  // Quick-add for a day cell's band label (+ on hover) — creates a blank task in that list
+  // dated to that day. Autofocuses inline via newTaskId.
+  onAddTaskOnDay: (listId: ListId, iso: string) => void;
   // Universal section sequence (Settings) — band order AND queue-allocation order.
   listSequence: ListId[];
   // Most recently created task id — its calendar card renders with an autofocused
@@ -3950,8 +4021,16 @@ function WeekCalendarMode({
                 const categoryDimmed = !!activeTask && activeTask.list !== listId;
                 return (
                   <CalendarDayDroppable key={listId} id={`cal:${iso}:${listId}`} isEmpty={bucket.length === 0 && dayMilestones.length === 0} className="pb-[37px] last:pb-0">
-                    <div className="h-[20px] px-[16px] flex items-center mb-[6px]">
+                    <div className="group/band h-[20px] px-[16px] flex items-center gap-2 mb-[6px]">
                       <p className={`${bodyFont} text-[#5e5e5e]`}>{label}</p>
+                      <button
+                        type="button"
+                        onClick={() => onAddTaskOnDay(listId, iso)}
+                        className="opacity-0 group-hover/band:opacity-100 text-[#656464] hover:text-white transition-opacity"
+                        aria-label={`Add ${label} task on ${iso}`}
+                      >
+                        <Plus size={14} />
+                      </button>
                     </div>
                     {dayMilestones.length > 0 && dayMilestones.map((t) => <MilestoneCard key={`m-${t.id}`} task={t} showDate={false} categoryDimmed={categoryDimmed} />)}
                     <SortableContext items={items} strategy={verticalListSortingStrategy}>
@@ -4237,9 +4316,13 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
   const bodyFont = "font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap";
   const [purgeMsg, setPurgeMsg] = useState('');
   return (
-    <div className="pb-[106px]" style={{ paddingTop: SPACING.topMargin }}>
-      <TopHeader viewName="Settings" />
-      <div className="flex gap-0">
+    // Fixed header + SCROLLING body. Previously the whole page was one non-scrolling block, so
+    // on a viewport shorter than the settings content (~1300px) the lower sections — Local
+    // Backup, People, Clients — were clipped below the fold with no way to reach them.
+    <div className="h-full flex flex-col" style={{ paddingTop: SPACING.topMargin, paddingBottom: 76 }}>
+      <div className="shrink-0"><TopHeader viewName="Settings" /></div>
+      <div className="flex-1 min-h-0 overflow-y-auto">
+      <div className="flex gap-0 pb-[106px]">
       <div className="flex-1 min-w-[280px]">
         <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-0">
           <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">I am</p>
@@ -4509,6 +4592,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
         </div>
       </div>
       </div>
+      </div>
     </div>
   );
 }
@@ -4641,7 +4725,13 @@ function ProjectTaskRow({ task, listId, onToggle, onRename, onDelete, onEdit, on
             });
           })()}
         </div>
-        {density < 5 && task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} />)}
+        {/* Assignee circles hidden at rest, fade in on row-hover (opacity only — reserved
+            width keeps the row from shifting). Matches SortableTaskItem. */}
+        {density < 5 && task.assignees.length > 0 && (
+          <span className="flex flex-row items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
+            {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} />)}
+          </span>
+        )}
         {task.deadline && (
           <>
             {!isScheduled && <DeadlineArrow dim={task.completed} small={density >= 3} />}
@@ -5329,7 +5419,10 @@ export default function App() {
   // but for prefixed contexts (dashboard sub-lists) activeId is e.g. "dash:work:taskId" while
   // activeTaskId stays "taskId" so tasks.find(t.id === activeTaskId) resolves the real task.
   const [activeTaskId, setActiveTaskIdState] = useState<string | null>(null);
-  const [activeType, setActiveType] = useState<'task' | 'project' | 'projTask' | 'damImage' | null>(null);
+  const [activeType, setActiveType] = useState<'task' | 'project' | 'projTask' | 'damImage' | 'focusProject' | null>(null);
+  // The project being dragged in the focus-panel nesting UI (drag one project onto another to
+  // make it a sub-project). Held for the DragOverlay pill.
+  const [activeFocusProject, setActiveFocusProject] = useState<Project | null>(null);
   const [activeProject, setActiveProject] = useState<Project | null>(null);
   const [activeProjTask, setActiveProjTask] = useState<Task | null>(null);
   // The image being dragged in the references gallery — held so DragOverlay
@@ -6212,6 +6305,12 @@ export default function App() {
   // Same collapse model for the focus page's left project-filter panel — client headers
   // collapse the "sub-projects" so the user scans the big picture and expands on demand.
   const [focusExpandedClients, setFocusExpandedClients] = useState<Set<string>>(new Set());
+  // Which PARENT projects are expanded (accordion) to show their sub-projects.
+  const [focusExpandedProjects, setFocusExpandedProjects] = useState<Set<string>>(new Set());
+  // Drag-to-accordion: while dragging a project, hovering a collapsed parent for a beat
+  // auto-expands it so you can drop INTO its subtree. This ref holds the pending dwell timer
+  // + which project it's for, so moving off cancels it.
+  const focusDwellRef = useRef<{ id: string; timer: number } | null>(null);
   // Drag-over state for the References column. When the user drags a file from
   // outside the app onto the column AND there are already images visible, we
   // overlay an "Add Images" sheet on top of the gallery so they can pick a
@@ -6683,6 +6782,25 @@ export default function App() {
   const pinProjectList = useCallback((id: string, list: ListId) => {
     setProjects((prev) => prev.map((p) => (p.id === id && !p.list ? { ...p, list } : p)));
   }, []);
+  // Nest a project under another (drag-to-accordion) or un-nest it (parentId = undefined).
+  // Guards: no self-parenting, and no cycles — walk the prospective parent's ancestor chain
+  // and refuse if `id` is already an ancestor (would orphan the subtree).
+  const setProjectParent = useCallback((id: string, parentId: string | undefined) => {
+    if (id === parentId) return;
+    setProjects((prev) => {
+      if (parentId) {
+        const byId = new Map(prev.map((p) => [p.id, p]));
+        let cur = byId.get(parentId);
+        let hops = 0;
+        while (cur && hops < 100) {
+          if (cur.id === id) return prev; // parentId is a descendant of id → cycle, abort
+          cur = cur.parentId ? byId.get(cur.parentId) : undefined;
+          hops++;
+        }
+      }
+      return prev.map((p) => (p.id === id ? { ...p, parentId } : p));
+    });
+  }, []);
   const addBlankTaskInList = useCallback((listId: ListId) => {
     const id = `task-${Date.now()}`;
     setTasks((prev) => {
@@ -6696,6 +6814,20 @@ export default function App() {
     setTasks((prev) => {
       const maxOrder = prev.filter((x) => x.list === listId && x.section === section).reduce((m, x) => Math.max(m, x.order), -1);
       return [...prev, { id, title: '', type: 'todo', assignees: currentUserShort ? [currentUserShort] : [], completed: false, list: listId, section, order: maxOrder + 1, createdAt: Date.now() }];
+    });
+    setNewId(id);
+  }, [currentUserShort]);
+  // Quick-add for a calendar DAY cell: create a blank task dated to `iso` in `listId`. Section
+  // follows the day (today / tomorrow → those sections so they show as mandatory; any other day
+  // → 'next' with the deadline pinning it to that column). Autofocuses inline like every other +.
+  const addTaskOnDay = useCallback((listId: ListId, iso: string) => {
+    const id = `task-${Date.now()}`;
+    const today = todayISO();
+    const tomorrow = (() => { const d = new Date(); d.setHours(d.getHours() - 4); d.setDate(d.getDate() + 1); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; })();
+    const section: SectionId = iso === today ? 'today' : iso === tomorrow ? 'tomorrow' : 'next';
+    setTasks((prev) => {
+      const maxOrder = prev.filter((x) => x.list === listId && x.deadline === iso).reduce((m, x) => Math.max(m, x.order), -1);
+      return [...prev, { id, title: '', type: 'todo', assignees: currentUserShort ? [currentUserShort] : [], completed: false, list: listId, section, order: maxOrder + 1, deadline: iso, createdAt: Date.now() }];
     });
     setNewId(id);
   }, [currentUserShort]);
@@ -6852,6 +6984,12 @@ export default function App() {
 
   const handleDragStart = useCallback((e: DragStartEvent) => {
     const type = e.active.data.current?.type;
+    if (type === 'focusProject') {
+      setActiveId(e.active.id as string);
+      setActiveType('focusProject');
+      setActiveFocusProject(e.active.data.current?.project as Project);
+      return;
+    }
     if (type === 'project') {
       setActiveId(e.active.id as string);
       setActiveType('project');
@@ -6959,8 +7097,29 @@ export default function App() {
   // category band (→ insert at top of source bucket) or BELOW (→ insert at bottom).
   const lastCalOverCellIdRef = useRef<string | null>(null);
   const handleDragOver = useCallback((event: DragOverEvent) => {
-    const { over } = event;
+    const { active, over } = event;
     setOverId((over?.id as string) || null);
+    // Drag-to-accordion: while dragging a project, dwelling over a collapsed parent for a beat
+    // auto-expands it so the user can drop into the subtree. `event.active.data` is always
+    // current (state would be stale in this []-deps callback).
+    if (active.data.current?.type === 'focusProject') {
+      const oid = over ? String(over.id) : '';
+      const target = oid.startsWith('focusnest:') ? oid.slice('focusnest:'.length) : '';
+      const dragged = active.data.current.projectId as string;
+      if (target && target !== '__root__' && target !== dragged) {
+        if (focusDwellRef.current?.id !== target) {
+          if (focusDwellRef.current) clearTimeout(focusDwellRef.current.timer);
+          const timer = window.setTimeout(() => {
+            setFocusExpandedProjects((prev) => { const n = new Set(prev); n.add(target); return n; });
+            focusDwellRef.current = null;
+          }, 1200);
+          focusDwellRef.current = { id: target, timer };
+        }
+      } else if (focusDwellRef.current) {
+        clearTimeout(focusDwellRef.current.timer); focusDwellRef.current = null;
+      }
+      return;
+    }
     // If over is a task (not a cell), remember its id. If user dragged off everything, clear.
     const overTask = over?.data.current?.task as Task | undefined;
     if (overTask) {
@@ -6990,7 +7149,22 @@ export default function App() {
     const { active, over } = event;
     setOverId(null);
     setOverTaskIdHint(null);
-    const clearOverlay = () => { setActiveId(null); setActiveTaskIdState(null); setActiveType(null); setActiveProject(null); setActiveProjTask(null); setActiveCalendarCellId(null); setActiveDamImage(null); setActiveDamMultiCount(1); };
+    const clearOverlay = () => { setActiveId(null); setActiveTaskIdState(null); setActiveType(null); setActiveProject(null); setActiveProjTask(null); setActiveCalendarCellId(null); setActiveDamImage(null); setActiveDamMultiCount(1); setActiveFocusProject(null); };
+    // Cancel any pending drag-to-accordion dwell.
+    if (focusDwellRef.current) { clearTimeout(focusDwellRef.current.timer); focusDwellRef.current = null; }
+    // Focus-panel project nesting: dropped a project onto another → nest; onto the un-nest
+    // zone (focusnest:__root__) → clear parent. Handled early so it can't fall through to the
+    // task-drop paths below.
+    if (active.data.current?.type === 'focusProject') {
+      const draggedId = active.data.current.projectId as string;
+      const overIdRaw = over ? String(over.id) : '';
+      if (overIdRaw.startsWith('focusnest:')) {
+        const target = overIdRaw.slice('focusnest:'.length);
+        setProjectParent(draggedId, target === '__root__' ? undefined : target);
+      }
+      clearOverlay();
+      return;
+    }
     const resetDragRefs = () => {
       setColumnOffset(0); pendingOffsetRef.current = 0;
       if (dwellTimerRef.current) { clearTimeout(dwellTimerRef.current); dwellTimerRef.current = null; }
@@ -8568,13 +8742,11 @@ export default function App() {
           if (x < 90) setAssignTrayOpen(true);
           else if (x > 400) setAssignTrayOpen(false);
         }
-        // Edge assign rails (every view except Settings; left edge yields to the
-        // Projects-view tray). Enter the edge zone while dragging a task → the unified
-        // tray pulls out from that side; drift back toward the middle → it tucks away.
+        // Left-only assign tray: enter the left edge zone while dragging a task → the tray
+        // pulls out; drift back toward the middle → it tucks away.
         if (activeType === 'task' || activeType === 'projTask') {
           if (x < 110 && mode !== 'projectView' && mode !== 'settings') setEdgeDrawer('left');
-          else if (x > window.innerWidth - 110 && mode !== 'settings') setEdgeDrawer('right');
-          else if (x > 360 && x < window.innerWidth - 360) setEdgeDrawer(null);
+          else if (x > 360) setEdgeDrawer(null);
         }
       }}
       onDragEnd={(ev) => { setAssignTrayOpen(false); setEdgeDrawer(null); handleDragEnd(ev); }}
@@ -8719,6 +8891,7 @@ export default function App() {
             onEditTask={openEdit}
             onQuickEditTask={openQuick}
             onAddSiblingTask={addSiblingTask}
+            onAddTaskOnDay={addTaskOnDay}
             onSyncSections={syncCalendarSections}
             isAnyDragging={!!activeId}
             activeTask={activeTask}
@@ -8826,32 +8999,47 @@ export default function App() {
                       if (ad !== bd) return ad < bd ? -1 : 1;
                       return a.title.localeCompare(b.title);
                     });
-                  const clientlessProjects = projects.filter((pp) => !pp.clientId || !clients.some((c) => c.id === pp.clientId));
-                  const projectRow = (p: Project, indent: boolean) => {
-                    const count = visibleTasks.filter((t) => t.projectId === p.id).length;
-                    const active = focusProjectId === p.id;
+                  // Project nesting: a project with a parentId renders indented under its
+                  // parent (accordion), and NOT in its own client group. `childrenOf` maps a
+                  // parent id → its sub-projects; `isTopLevel` = no parent (or orphaned parent).
+                  const projById = new Map(projects.map((p) => [p.id, p]));
+                  const childrenOf = new Map<string, Project[]>();
+                  for (const p of projects) {
+                    if (p.parentId && projById.has(p.parentId)) {
+                      const arr = childrenOf.get(p.parentId) || [];
+                      arr.push(p); childrenOf.set(p.parentId, arr);
+                    }
+                  }
+                  const isTopLevel = (p: Project) => !p.parentId || !projById.has(p.parentId);
+                  const clientlessTop = projects.filter((pp) => (!pp.clientId || !clients.some((c) => c.id === pp.clientId)) && isTopLevel(pp));
+                  // Recursive node: the row + (if expanded) its sub-projects one level deeper.
+                  // Only the top-level row shows the client short (nested rows are clearly
+                  // under a parent already).
+                  const renderNode = (p: Project, client: Client | undefined, depth: number): React.ReactNode => {
+                    const kids = childrenOf.get(p.id) || [];
+                    const expanded = focusExpandedProjects.has(p.id);
                     return (
-                      <button
-                        key={p.id}
-                        type="button"
-                        onClick={() => setFocusProjectId(active ? null : p.id)}
-                        className={`group h-[37px] w-full text-left box-border flex flex-row gap-2 items-center px-[31px] transition-colors ${active ? 'bg-white/[0.075]' : 'hover:bg-white/[0.03]'}`}
-                      >
-                        <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis text-white ${indent ? 'pl-[20px]' : ''}`}>
-                          {p.name || 'Untitled'}
-                        </span>
-                        {count > 0 && <span className="text-[#474747] text-[12px]">{count}</span>}
-                        {active
-                          ? <X size={14} className="ml-auto text-[#a8a8a8]" />
-                          : <ChevronRight size={14} className="ml-auto text-[#5e5e5e] opacity-0 group-hover:opacity-100 transition-opacity" />}
-                      </button>
+                      <Fragment key={p.id}>
+                        <FocusProjectRow
+                          project={p}
+                          client={client}
+                          depth={depth}
+                          count={visibleTasks.filter((t) => t.projectId === p.id).length}
+                          active={focusProjectId === p.id}
+                          expandable={kids.length > 0}
+                          expanded={expanded}
+                          onClick={() => setFocusProjectId(focusProjectId === p.id ? null : p.id)}
+                          onToggleExpand={() => setFocusExpandedProjects((prev) => { const n = new Set(prev); n.has(p.id) ? n.delete(p.id) : n.add(p.id); return n; })}
+                        />
+                        {expanded && kids.map((k) => renderNode(k, undefined, depth + 1))}
+                      </Fragment>
                     );
                   };
                   return (
                     <div className="flex-1 min-w-[280px] flex flex-col min-h-0 overflow-hidden">
-                      <div className="shrink-0 group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]" style={{ marginBottom: SPACING.dcr }}>
-                        <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">Projects</p>
-                      </div>
+                      {/* Header doubles as the un-nest drop zone: drag a sub-project up here to
+                          promote it back to top level (focusnest:__root__). */}
+                      <ProjectsHeaderDropZone />
                       <CustomScroll>
                         {topMilestones.length > 0 && (
                           <>
@@ -8860,10 +9048,10 @@ export default function App() {
                           </>
                         )}
                         {proj2SortedClients.map((c) => {
-                          const clientProjects = projects.filter((pp) => pp.clientId === c.id);
-                          if (clientProjects.length === 0) return null;
+                          const clientTop = projects.filter((pp) => pp.clientId === c.id && isTopLevel(pp));
+                          if (clientTop.length === 0) return null;
                           const expanded = focusExpandedClients.has(c.id);
-                          const hasActive = clientProjects.some((p) => p.id === focusProjectId);
+                          const hasActive = projects.some((p) => p.clientId === c.id && p.id === focusProjectId);
                           return (
                             <Fragment key={c.id}>
                               <button
@@ -8875,15 +9063,15 @@ export default function App() {
                                 <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis ${hasActive ? 'text-[#8465ff]' : 'text-white'}`}>
                                   {c.name || (c.id === PERSONAL_CLIENT_ID ? 'Personal' : c.short)}
                                 </span>
-                                <span className="text-[#474747] text-[12px]">{clientProjects.length}</span>
+                                <span className="text-[#474747] text-[12px]">{clientTop.length}</span>
                               </button>
-                              {expanded && clientProjects.map((p) => projectRow(p, true))}
+                              {expanded && clientTop.map((p) => renderNode(p, c, 1))}
                             </Fragment>
                           );
                         })}
-                        {clientlessProjects.length > 0 && (
+                        {clientlessTop.length > 0 && (
                           <>
-                            {clientlessProjects.map((p) => projectRow(p, false))}
+                            {clientlessTop.map((p) => renderNode(p, undefined, 0))}
                           </>
                         )}
                       </CustomScroll>
@@ -8908,7 +9096,7 @@ export default function App() {
                   const stripAnchor = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; })();
                   // One band block (label + cards) per CAL_LIST, aggregated over the
                   // column's iso set. Mirrors WeekCalendarMode's per-day band rendering.
-                  const dayBands = (isos: string[], colKey: string) => listSequence.map((listId) => {
+                  const dayBands = (isos: string[], colKey: string, section: SectionId) => listSequence.map((listId) => {
                     const bandLabel = LIST_TITLES[listId];
                     const isoSet = new Set(isos);
                     const bucketAll = isos.flatMap((iso) => focusStripCells[`${iso}:${listId}`] || []);
@@ -8926,15 +9114,25 @@ export default function App() {
                       }
                       return t.list === listId;
                     }).sort((a, b) => (a.deadline! < b.deadline! ? -1 : a.deadline! > b.deadline! ? 1 : a.title.localeCompare(b.title)));
-                    if (bucket.length === 0 && bandMilestones.length === 0) return null;
                     const cellId = `cal:${isos[0]}:${listId}`;
                     const cellTasks = [...bandMilestones, ...bucket];
+                    // Every band renders now (even empty) so a task can be created in ANY
+                    // category on ANY day — the label carries a hover-reveal +. Empty bands
+                    // are just the quiet grey label until you hover.
                     return (
-                      <div key={`${colKey}-${listId}`} className="pb-[24px] last:pb-0">
+                      <div key={`${colKey}-${listId}`} className={cellTasks.length > 0 ? 'pb-[24px] last:pb-0' : 'pb-[12px] last:pb-0'}>
                         {/* Band label — same treatment as the calendar's in-column
-                            category labels (grey, 20px row, 16px inset). */}
-                        <div className="h-[20px] px-[16px] flex items-center mb-[6px]">
+                            category labels (grey, 20px row, 16px inset) + hover +. */}
+                        <div className="group/band h-[20px] px-[16px] flex items-center gap-2 mb-[6px]">
                           <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap text-[#5e5e5e]">{bandLabel}</p>
+                          <button
+                            type="button"
+                            onClick={() => addBlankTaskInSection(listId, section)}
+                            className="opacity-0 group-hover/band:opacity-100 text-[#656464] hover:text-white transition-opacity"
+                            aria-label={`Add ${bandLabel} task`}
+                          >
+                            <Plus size={14} />
+                          </button>
                         </div>
                         <SortableContext items={cellTasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
                           {cellTasks.map((t) => (
@@ -8972,9 +9170,9 @@ export default function App() {
                       {isToday && <p className="font-['NB_International:Regular',sans-serif]">(Today)</p>}
                     </div>
                   );
-                  const cols: Array<{ key: string; header: React.ReactNode; isos: string[] }> = [
-                    { key: 'fc-today', header: dayHeader(d0, true), isos: [dateToISO(d0)] },
-                    { key: 'fc-tomorrow', header: dayHeader(d1, false), isos: [dateToISO(d1)] },
+                  const cols: Array<{ key: string; header: React.ReactNode; isos: string[]; section: SectionId }> = [
+                    { key: 'fc-today', header: dayHeader(d0, true), isos: [dateToISO(d0)], section: 'today' },
+                    { key: 'fc-tomorrow', header: dayHeader(d1, false), isos: [dateToISO(d1)], section: 'tomorrow' },
                     {
                       key: 'fc-next',
                       header: (
@@ -8983,13 +9181,14 @@ export default function App() {
                         </div>
                       ),
                       isos: nextIsos,
+                      section: 'next',
                     },
                   ];
                   return cols.map((col) => (
                     <div key={col.key} className="min-w-[240px] flex flex-col min-h-0 overflow-hidden">
                       {col.header}
                       <CustomScroll>
-                        {dayBands(col.isos, col.key)}
+                        {dayBands(col.isos, col.key, col.section)}
                       </CustomScroll>
                     </div>
                   ));
@@ -9917,15 +10116,17 @@ export default function App() {
             (people) on top, then Assign Project (grouped by client, collapsed)
             below. On the Projects view the LEFT edge belongs to the existing
             Resources/Clients tray, so only the right rail shows there. */}
-        {!PIP_MODE && mode !== 'settings' && (() => {
-          const trayOpen = (side: 'left' | 'right') => edgeDrawer === side && !(side === 'left' && mode === 'projectView');
-          const unifiedTray = (side: 'left' | 'right') => (
+        {!PIP_MODE && mode !== 'settings' && mode !== 'projectView' && (() => {
+          // LEFT-ONLY tray (the right rail is gone — one tray, on the left). The trigger is a
+          // SHORT centered handle rather than a full-height edge strip, so its hotspot no longer
+          // covers (and intercepts clicks on) the whole left column.
+          const trayOpen = edgeDrawer === 'left';
+          const unifiedTray = () => (
             <div
-              onMouseLeave={() => setEdgeDrawer((d) => (d === side ? null : d))}
-              // top-[70px] lands the tray's top edge halfway between the "Focus — …"
-              // header row and the column titles, per request. bottom clears the nav.
-              // No rounding (nothing else in the app rounds). 320px wide.
-              className={`fixed ${side === 'left' ? 'left-0 border-r' : 'right-0 border-l'} top-[70px] bottom-[92px] w-[320px] z-40 bg-[#1f1f1f] border-[#333333] flex flex-col transition-transform duration-200 ease-out ${trayOpen(side) ? 'translate-x-0' : (side === 'left' ? '-translate-x-full' : 'translate-x-full')}`}
+              onMouseLeave={() => setEdgeDrawer((d) => (d === 'left' ? null : d))}
+              // top-[70px] lands the tray's top edge halfway between the header row and the
+              // column titles. bottom clears the nav. No rounding. 320px wide.
+              className={`fixed left-0 border-r top-[70px] bottom-[92px] w-[320px] z-40 bg-[#1f1f1f] border-[#333333] flex flex-col transition-transform duration-200 ease-out ${trayOpen ? 'translate-x-0' : '-translate-x-full'}`}
             >
               {/* Assign To — people. */}
               <div className="shrink-0 h-[37px] flex items-center px-[31px]">
@@ -9980,39 +10181,24 @@ export default function App() {
           );
           return (
             <>
-              {/* Left trigger — double-width bar, generous margin off the columns.
-                  Hidden on the Projects view (its left edge has its own tray). */}
-              {mode !== 'projectView' && (
-                <div
-                  onMouseEnter={() => setEdgeDrawer('left')}
-                  className="fixed left-[18px] top-[120px] bottom-[116px] z-40 flex items-center"
-                >
-                  <button
-                    type="button"
-                    onClick={() => setEdgeDrawer((d) => (d === 'left' ? null : 'left'))}
-                    className="h-full w-[16px] bg-white/[0.05] hover:bg-white/[0.11] transition-colors flex items-center justify-center"
-                    aria-label="Assign drawer (left)"
-                  >
-                    <ChevronRight size={12} className="text-[#8a8a8a] shrink-0" />
-                  </button>
-                </div>
-              )}
-              {/* Right trigger — pushed 34px in so it clears the CustomScroll thumb. */}
+              {/* Left trigger — a SHORT handle centered vertically on the left edge, so its
+                  hover/click hotspot no longer runs the full height of the left column. Only
+                  the small tab intercepts; the rest of the column is fully clickable. */}
               <div
-                onMouseEnter={() => setEdgeDrawer('right')}
-                className="fixed right-[34px] top-[120px] bottom-[116px] z-40 flex items-center"
+                onMouseEnter={() => setEdgeDrawer('left')}
+                className="fixed left-0 top-1/2 -translate-y-1/2 z-40 flex items-center"
               >
                 <button
                   type="button"
-                  onClick={() => setEdgeDrawer((d) => (d === 'right' ? null : 'right'))}
-                  className="h-full w-[16px] bg-white/[0.05] hover:bg-white/[0.11] transition-colors flex items-center justify-center"
-                  aria-label="Assign drawer (right)"
+                  onClick={() => setEdgeDrawer((d) => (d === 'left' ? null : 'left'))}
+                  className="h-[72px] w-[14px] bg-white/[0.06] hover:bg-white/[0.12] transition-colors flex items-center justify-center"
+                  aria-label="Assign drawer"
+                  title="Assign project / person"
                 >
-                  <ChevronLeft size={12} className="text-[#8a8a8a] shrink-0" />
+                  <ChevronRight size={12} className="text-[#8a8a8a] shrink-0" />
                 </button>
               </div>
-              {unifiedTray('left')}
-              {unifiedTray('right')}
+              {unifiedTray()}
             </>
           );
         })()}
@@ -10173,6 +10359,12 @@ export default function App() {
               <Folder size={12} className="text-[#656464]" />
               <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] text-white whitespace-nowrap">{activeProject.name}</span>
             </motion.div>
+          ) : null}
+          {activeFocusProject ? (
+            <div className="bg-[#333333] h-[37px] box-border flex flex-row gap-2 items-center px-[31px] shadow-lg">
+              <Folder size={12} className="text-[#656464]" />
+              <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] text-white whitespace-nowrap">{activeFocusProject.name || 'Untitled'}</span>
+            </div>
           ) : null}
           {activeProjTask ? (
             <motion.div

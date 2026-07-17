@@ -49,7 +49,11 @@ export interface Task {
   createdAt?: number;
 }
 
-export interface Project { id: string; name: string; clientId?: string; list?: ListId; }
+// parentId: optional project nesting. A project with a parentId is a SUB-project, rendered
+// indented under its parent (accordion) in the focus-page project filter. Set by dragging one
+// project row onto another; cleared by dragging it back to the top. Cycles are prevented at
+// the set site (a project can't be nested under one of its own descendants).
+export interface Project { id: string; name: string; clientId?: string; list?: ListId; parentId?: string; }
 export interface Client { id: string; name: string; short: string; }
 export interface Person { id: string; name: string; short: string; }
 
