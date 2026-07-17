@@ -3477,7 +3477,10 @@ const CAL_QUEUE_CAP_PER_LIST_PER_DAY = 3;
 //     tomorrow are sealed during the day (their fill happens at the 4 AM refill)
 //   - global day budget CAL_TASKS_PER_DAY, per-list band cap
 //     CAL_QUEUE_CAP_PER_LIST_PER_DAY, weekends queue-fill only the projects list
-function computeCalendarDistribution(tasks: Task[], todayAnchor: Date, horizonDays: number): Record<string, Task[]> {
+// listOrder: the universal section sequence (Settings → Section sequence). It drives BOTH
+// band display order and the queue-filler allocation order — earlier lists in the sequence
+// get first crack at each day's remaining budget.
+function computeCalendarDistribution(tasks: Task[], todayAnchor: Date, horizonDays: number, listOrder: ListId[]): Record<string, Task[]> {
   const map: Record<string, Task[]> = {};
   const todayIso = `${todayAnchor.getFullYear()}-${String(todayAnchor.getMonth() + 1).padStart(2, '0')}-${String(todayAnchor.getDate()).padStart(2, '0')}`;
   const tomorrowAnchor = addDaysToDate(todayAnchor, 1);
@@ -3485,7 +3488,7 @@ function computeCalendarDistribution(tasks: Task[], todayAnchor: Date, horizonDa
   // Per-list queues + their cursors. Queues advance independently per list.
   const queues: Record<string, Task[]> = {};
   const queueIdxs: Record<string, number> = {};
-  for (const listId of CAL_LISTS.map((c) => c.id)) {
+  for (const listId of listOrder) {
     queues[listId] = tasks.filter((t) =>
       t.list === listId &&
       (t.section === 'next' || t.section === 'inbox') &&
@@ -3502,7 +3505,7 @@ function computeCalendarDistribution(tasks: Task[], todayAnchor: Date, horizonDa
     // Pass 1 — collect mandatory per list, sum the total.
     const mandatoryByList: Record<string, Task[]> = {};
     let totalMandatory = 0;
-    for (const listId of CAL_LISTS.map((c) => c.id)) {
+    for (const listId of listOrder) {
       const m: Task[] = [];
       // COMPLETED tasks are excluded from every live placement below — they
       // used to pile up on today via their stale section:'today' (30-40 old
@@ -3526,7 +3529,7 @@ function computeCalendarDistribution(tasks: Task[], todayAnchor: Date, horizonDa
     }
     // Pass 2 — assign queue fillers per list (today/tomorrow sealed; Wed+ real-time).
     let dayBudget = Math.max(0, CAL_TASKS_PER_DAY - totalMandatory);
-    for (const listId of CAL_LISTS.map((c) => c.id)) {
+    for (const listId of listOrder) {
       const m = mandatoryByList[listId];
       const skipQueueForWeekend = listId !== 'projects' && (d.getDay() === 0 || d.getDay() === 6);
       const listFillerCap = Math.max(0, CAL_QUEUE_CAP_PER_LIST_PER_DAY - m.length);
@@ -3590,11 +3593,15 @@ function CalendarCardBody({ task, projects, clients, taskOrder = 'ptc' }: { task
   );
 }
 
-function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onDelete, onEdit, onQuickEdit, onAddSibling, isAnyDragging, dimmed, categoryDimmed, displacementOffset = 0, insertionGap = 0, taskOrder = 'ptc' }: {
+function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onDelete, onEdit, onQuickEdit, onAddSibling, isAnyDragging, dimmed, categoryDimmed, displacementOffset = 0, insertionGap = 0, taskOrder = 'ptc', autoFocusEdit = false }: {
   task: Task; cellId: string; projects: Project[]; clients: Client[];
   onToggle: () => void; onRename: (title: string) => void; onDelete: () => void; onEdit: () => void;
   onQuickEdit?: () => void;
   onAddSibling?: () => void;
+  // Freshly created task (newId): the title renders as an autofocused EditableText so the
+  // user can start typing immediately — list-view parity. Blurring while still empty
+  // discards the task via onDelete.
+  autoFocusEdit?: boolean;
   isAnyDragging: boolean; dimmed?: boolean;
   // Cards in OTHER bands than the active drag's source category get muted so the drag's
   // landing options stay visually loud. Same flavor as the completed-task gray, just brighter.
@@ -3650,8 +3657,19 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
               <TaskCheckbox completed={task.completed} started={task.started} onToggle={onToggle} />
             </div>
           )}
-          <div className="flex flex-row items-center gap-[4px] min-w-0">
-            <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleColor}`}>{task.title}</span>
+          <div className="flex flex-row items-center gap-[4px] min-w-0" onPointerDown={autoFocusEdit ? (e) => e.stopPropagation() : undefined}>
+            {autoFocusEdit ? (
+              <EditableText
+                value={task.title}
+                onChange={onRename}
+                autoFocus
+                placeholder="New Task"
+                onDiscardIfEmpty={onDelete}
+                className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap ${titleColor}`}
+              />
+            ) : (
+              <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleColor}`}>{task.title}</span>
+            )}
           </div>
         </div>
         {/* Meta row indents past the checkbox + gap so it lines up under the title text, not under
@@ -3697,7 +3715,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
 
 function WeekCalendarMode({
   tasks, projects, clients, onToggleTask, onRenameTask, onDeleteTask, onEditTask, onQuickEditTask, onAddSiblingTask, onSyncSections, isAnyDragging,
-  activeTask, overTask, activeCellId, activeSlotHeight, taskOrder = 'ptc',
+  activeTask, overTask, activeCellId, activeSlotHeight, taskOrder = 'ptc', listSequence, newTaskId = null,
 }: {
   tasks: Task[]; projects: Project[]; clients: Client[];
   onToggleTask: (id: string) => void;
@@ -3705,7 +3723,13 @@ function WeekCalendarMode({
   onDeleteTask: (id: string) => void;
   onEditTask: (t: Task) => void;
   onQuickEditTask?: (t: Task) => void;
-  onAddSiblingTask: (t: Task) => void;
+  // pinDeadline keeps the spawned sibling in the cell it came from — see addSiblingTask.
+  onAddSiblingTask: (t: Task, pinDeadline?: string) => void;
+  // Universal section sequence (Settings) — band order AND queue-allocation order.
+  listSequence: ListId[];
+  // Most recently created task id — its calendar card renders with an autofocused
+  // editable title so the user can type immediately (list-view parity).
+  newTaskId?: string | null;
   // Bulk section update — auto-promotes queue tasks landing on today/tomorrow into the
   // matching section so list view mirrors the calendar's distribution.
   onSyncSections: (updates: Array<{ id: string; section: SectionId }>) => void;
@@ -3733,7 +3757,7 @@ function WeekCalendarMode({
   // Distribution lives in computeCalendarDistribution (module scope — shared verbatim with
   // the focus page's mini-calendar strip). 84-day horizon ≈ 12 weeks; each cell render is an
   // O(1) map lookup. Recomputes only when the task list changes.
-  const distributionByCell = useMemo(() => computeCalendarDistribution(tasks, todayAnchor, 84), [tasks, todayAnchor]);
+  const distributionByCell = useMemo(() => computeCalendarDistribution(tasks, todayAnchor, 84, listSequence), [tasks, todayAnchor, listSequence]);
 
   // (Auto-promotion of queue tasks into today/tomorrow happens ONCE per day inside the 4 AM
   //  refill effect in App. During the day today + tomorrow stay stable; only Wed+ continues to
@@ -3882,7 +3906,8 @@ function WeekCalendarMode({
               {/* Milestones for this day are pinned above their respective category band (Work,
                   Projects, Admin) inside the list-loop below — no longer rendered as a standalone
                   block above all bands. */}
-              {CAL_LISTS.map(({ id: listId, label }) => {
+              {listSequence.map((listId) => {
+                const label = LIST_TITLES[listId];
                 const bucket = tasksForCell(listId, d);
                 const items = bucket.map((t) => t.id);
                 const isPast = dayOffsetFromToday(d) < 0;
@@ -3947,7 +3972,7 @@ function WeekCalendarMode({
                               onDelete={() => onDeleteTask(t.id)}
                               onEdit={() => onEditTask(t)}
                               onQuickEdit={onQuickEditTask ? () => onQuickEditTask(t) : undefined}
-                              onAddSibling={() => onAddSiblingTask(t)}
+                              onAddSibling={() => onAddSiblingTask(t, iso)}
                               isAnyDragging={isAnyDragging}
                               dimmed={isPast}
                               categoryDimmed={categoryDimmed}
@@ -3956,6 +3981,7 @@ function WeekCalendarMode({
                               displacementOffset={displacementOffset}
                               insertionGap={insertionGap}
                               taskOrder={taskOrder}
+                              autoFocusEdit={t.id === newTaskId}
                             />
                           );
                         })}
@@ -3979,18 +4005,30 @@ function WeekCalendarMode({
           const nwStartIso = dateToISO(nwStart);
           const nwEndIso = dateToISO(addDaysToDate(nwStart, 6));
           const nwToken = `NW@${nwStartIso}`;
+          // FULL listing (no cap): everything already dated inside next week…
           const highlights = tasks
             .filter((t) => !t.completed && t.type !== 'scheduled' && t.deadline
               && t.deadline >= nwStartIso && t.deadline <= nwEndIso)
-            .sort((a, b) => ((a.deadline || '') < (b.deadline || '') ? -1 : 1))
-            .slice(0, 10);
+            .sort((a, b) => ((a.deadline || '') < (b.deadline || '') ? -1 : 1));
+          // …plus the REMAINING queue — every undated next/inbox todo that did NOT land in
+          // one of the five visible day cells. This is "the rest of the pile": dragging any
+          // card onto this column stamps it with next Monday's date (the NW@ drop token).
+          const placedIds = new Set<string>();
+          for (const vd of days) {
+            const vIso = dateToISO(vd);
+            for (const l of listSequence) for (const t of (distributionByCell[`${vIso}:${l}`] || [])) placedIds.add(t.id);
+          }
+          const queueRemainder = tasks
+            .filter((t) => !t.completed && t.type !== 'scheduled' && !t.deadline
+              && (t.section === 'next' || t.section === 'inbox') && !placedIds.has(t.id))
+            .sort((a, b) => (listSequence.indexOf(a.list) - listSequence.indexOf(b.list)) || a.order - b.order);
           return (
             <CalendarColumnDroppable key="nextweek" date={nwToken}>
               <div className="shrink-0 h-[37px] flex items-center gap-2 px-[16px] mb-[37px] text-[#8465ff]">
                 <p className="font-['NB_International:Regular',sans-serif]">Next Week</p>
               </div>
               <CustomScroll>
-                <CalendarDayDroppable id={`cal:${nwToken}:projects`} isEmpty={highlights.length === 0 && overflowMilestones.length === 0} className="pb-[37px]">
+                <CalendarDayDroppable id={`cal:${nwToken}:projects`} isEmpty={highlights.length === 0 && overflowMilestones.length === 0 && queueRemainder.length === 0} className="pb-[37px]">
                   {overflowMilestones.length > 0 && (
                     <div className="mb-[37px]">
                       <div className="h-[20px] px-[16px] flex items-center mb-[6px]">
@@ -4000,12 +4038,26 @@ function WeekCalendarMode({
                     </div>
                   )}
                   {highlights.length > 0 && (
-                    <div>
+                    <div className="mb-[37px]">
                       <div className="h-[20px] px-[16px] flex items-center mb-[6px]">
                         <p className={`${bodyFont} text-[#5e5e5e]`}>Scheduled</p>
                       </div>
                       {highlights.map((t) => (
                         <div key={`nw-${t.id}`} className="opacity-70">
+                          <CalendarCardBody task={t} projects={projects} clients={clients} taskOrder={taskOrder} />
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  {/* The rest of the pile — every queue task not placed in the visible five
+                      days. Read-only listing; drop anything here to schedule it next week. */}
+                  {queueRemainder.length > 0 && (
+                    <div>
+                      <div className="h-[20px] px-[16px] flex items-center mb-[6px]">
+                        <p className={`${bodyFont} text-[#5e5e5e]`}>Queue</p>
+                      </div>
+                      {queueRemainder.map((t) => (
+                        <div key={`nwq-${t.id}`} className="opacity-70">
                           <CalendarCardBody task={t} projects={projects} clients={clients} taskOrder={taskOrder} />
                         </div>
                       ))}
@@ -4140,7 +4192,7 @@ function BackupSection({
   );
 }
 
-function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePersonShort, onDeletePerson, currentUserShort, onSetCurrentUser, taskOrder, onSetTaskOrder, tomorrowEnabled, onSetTomorrowEnabled, caseMode, onSetCaseMode, trashedTasks, completedTasks, projects, clients, onUntrashTask, onPurgeTask, onToggleTask, liveBackupAt, dailyBackupAt, onDownloadBackup, onRestoreFromFile, onRestoreFromSlot }: {
+function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePersonShort, onDeletePerson, currentUserShort, onSetCurrentUser, taskOrder, onSetTaskOrder, listSequence, onSetListSequence, tomorrowEnabled, onSetTomorrowEnabled, caseMode, onSetCaseMode, trashedTasks, completedTasks, projects, clients, onUntrashTask, onPurgeTask, onToggleTask, liveBackupAt, dailyBackupAt, onDownloadBackup, onRestoreFromFile, onRestoreFromSlot }: {
   people: Person[]; newId: string | null;
   onAddPerson: () => void;
   onRenamePerson: (id: string, name: string) => void;
@@ -4150,6 +4202,8 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
   onSetCurrentUser: (short: string) => void;
   taskOrder: TaskOrder;
   onSetTaskOrder: (v: TaskOrder) => void;
+  listSequence: ListId[];
+  onSetListSequence: (v: ListId[]) => void;
   tomorrowEnabled: boolean;
   onSetTomorrowEnabled: (v: boolean) => void;
   caseMode: 'off' | 'title';
@@ -4210,6 +4264,35 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
                     </span>
                   </Fragment>
                 ))}
+              </button>
+            );
+          })}
+        </div>
+        {/* Section sequence — the UNIVERSAL Work / Projects / Admin order. One setting
+            drives every surface: list-view columns, dashboard-stack blocks, project-view
+            columns, calendar bands (and their queue-fill priority), and the focus page's
+            day columns. */}
+        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-0">
+          <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Section sequence</p>
+        </div>
+        <div className="px-[31px] mb-[37px] flex flex-col gap-2">
+          {([
+            ['work', 'projects', 'admin'],
+            ['work', 'admin', 'projects'],
+            ['projects', 'work', 'admin'],
+            ['projects', 'admin', 'work'],
+            ['admin', 'work', 'projects'],
+            ['admin', 'projects', 'work'],
+          ] as ListId[][]).map((seq) => {
+            const active = seq.join(',') === listSequence.join(',');
+            return (
+              <button
+                key={seq.join(',')}
+                type="button"
+                onClick={() => onSetListSequence(seq)}
+                className={`text-left text-[13px] transition-colors ${active ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}
+              >
+                {seq.map((l) => LIST_TITLES[l]).join('   ')}
               </button>
             );
           })}
@@ -5044,6 +5127,25 @@ export default function App() {
     setTaskOrderState(v);
     try { window.localStorage.setItem('todo-app-task-order', v); } catch {}
   }, []);
+  // Universal SECTION SEQUENCE — the one true order for Work / Projects / Admin across
+  // every surface: list-view columns, dashboard-stack blocks, project-view columns,
+  // calendar bands (including the queue-filler allocation order inside
+  // computeCalendarDistribution), and the focus page's day columns. Previously each
+  // surface hardcoded its own order and they had all drifted apart. Persisted
+  // per-browser, set from Settings → Section sequence.
+  const [listSequence, setListSequenceState] = useState<ListId[]>(() => {
+    const fallback: ListId[] = ['work', 'projects', 'admin'];
+    if (typeof window === 'undefined') return fallback;
+    try {
+      const v = JSON.parse(window.localStorage.getItem('todo-app-list-sequence') || 'null');
+      if (Array.isArray(v) && v.length === 3 && fallback.every((l) => v.includes(l))) return v as ListId[];
+    } catch {}
+    return fallback;
+  });
+  const setListSequence = useCallback((v: ListId[]) => {
+    setListSequenceState(v);
+    try { window.localStorage.setItem('todo-app-list-sequence', JSON.stringify(v)); } catch {}
+  }, []);
   // Responsive density of a single dashboard column. The cascade fights to preserve the task
   // title — title text is NEVER truncated, and date + arrow always stay visible.
   //   0  full       — everything visible at full size
@@ -5122,6 +5224,10 @@ export default function App() {
   // currently open in the edit/quick panel is exempt (mid-edit protection).
   const editingTaskIdRef = useRef<string | null>(null);
   useEffect(() => { editingTaskIdRef.current = editingTask?.id ?? null; }, [editingTask]);
+  // The most recently created task (newId) is exempt too — it's the one whose title field
+  // is autofocused and mid-type. Ref is synced next to newId's declaration further down
+  // (declaring it here keeps the sweep closure TDZ-safe).
+  const newlyCreatedIdRef = useRef<string | null>(null);
   useEffect(() => {
     const MAX_AGE_MS = 180_000, SWEEP_EVERY_MS = 30_000;
     const sweep = () => {
@@ -5130,7 +5236,8 @@ export default function App() {
         const expired = prev.filter((t) =>
           !t.title.trim() && !t.trashed &&
           (now - (t.createdAt ?? 0)) > MAX_AGE_MS &&
-          t.id !== editingTaskIdRef.current);
+          t.id !== editingTaskIdRef.current &&
+          t.id !== newlyCreatedIdRef.current);
         if (expired.length === 0) return prev;
         const ids = new Set(expired.map((t) => t.id));
         console.log(`[blank-sweep] removing ${expired.length} empty task(s)`);
@@ -5625,6 +5732,9 @@ export default function App() {
   }, [currentUserShort]);
   const addClient = useCallback((c: Omit<Client, 'id'>) => setClients((prev) => [...prev, { ...c, id: `c-${Date.now()}` }]), []);
   const [newId, setNewId] = useState<string | null>(null);
+  // Mirror for the blank-task sweep (declared next to the sweep effect, which runs above
+  // this state's declaration in file order).
+  useEffect(() => { newlyCreatedIdRef.current = newId; }, [newId]);
   // Pending destructive-confirm: when set, the TrashConfirmModal renders. The user must type
   // "TRASH" in the modal before the actual delete fires.
   const [pendingTrash, setPendingTrash] = useState<{ kind: 'project' | 'client'; id: string; name: string } | null>(null);
@@ -6522,7 +6632,12 @@ export default function App() {
     setNewId(id);
   }, [currentUserShort]);
   // Add a blank task as a sibling of an existing one: same list/section/project, inserted right after it.
-  const addSiblingTask = useCallback((sibling: Task) => {
+  // pinDeadline (calendar callsites): keeps the new task in the CELL it was spawned from.
+  // A sibling created from a calendar card inherits the source's deadline; if the source is
+  // an undated queue task shown on a future day, the cell's date is pinned instead — without
+  // it the blank sibling fell into the queue and "disappeared" from the cell the user was
+  // looking at.
+  const addSiblingTask = useCallback((sibling: Task, pinDeadline?: string) => {
     const id = `task-${Date.now()}`;
     // If the sibling is a milestone (type === 'scheduled'), spawn another milestone — not a
     // regular todo. The user clicked + on a milestone row, so they want to author another
@@ -6544,6 +6659,11 @@ export default function App() {
         // Carry the clientId too so a sibling milestone inherits the parent's client (regular
         // tasks normally derive client via project, but milestones often have only clientId).
         clientId: sibling.clientId,
+        deadline: sibling.deadline ?? pinDeadline,
+        // Stamp creation time — this site was MISSED when the blank-task sweep landed, so
+        // fresh siblings (createdAt undefined) counted as "legacy expired" and were reaped
+        // by the very next 30-second sweep. That was the "new task disappears" bug.
+        createdAt: Date.now(),
       };
       const insertAt = idx >= 0 ? idx + 1 : bucket.length;
       const reordered = [...bucket.slice(0, insertAt), newTask, ...bucket.slice(insertAt)].map((t, i) => ({ ...t, order: i }));
@@ -7113,7 +7233,8 @@ export default function App() {
         // released relative to the source band. CAL_LISTS order is admin → work → projects;
         // a smaller index means "above".
         const droppedListId = droppedCellId ? (droppedCellId.split(':')[2] as ListId) : null;
-        const calIndex = (l: ListId | null) => CAL_LISTS.findIndex((c) => c.id === l);
+        // Band above/below comparisons follow the universal section sequence.
+        const calIndex = (l: ListId | null) => (l ? listSequence.indexOf(l) : -1);
         const droppedIdx = calIndex(droppedListId);
         const sourceIdx = calIndex(targetList);
         // 'above' if the user released in a band that sits ABOVE the source band in the
@@ -7490,8 +7611,8 @@ export default function App() {
     const anchor = new Date();
     anchor.setHours(0, 0, 0, 0);
     // 9-day horizon: Today (0) + Tomorrow (1) + the "Next" column's week (2..8).
-    return computeCalendarDistribution(calendarTasks, anchor, 9);
-  }, [calendarTasks]);
+    return computeCalendarDistribution(calendarTasks, anchor, 9, listSequence);
+  }, [calendarTasks, listSequence]);
 
   // Settings → Trash column: every soft-deleted task (newest first by trashedAt). Personal
   // scoping still applies — other users don't see your trashed Personal items.
@@ -7887,7 +8008,8 @@ export default function App() {
             // Project scope — the focus page's left-panel filter. Applied after
             // forMe so an active filter narrows every bucket to one project.
             const scope = (xs: Task[]) => (filterProjectId ? xs.filter((t) => t.projectId === filterProjectId) : xs);
-            const orderedLists = ['work', 'admin', 'projects'] as ListId[];
+            // Universal section sequence (Settings) drives the block order here too.
+            const orderedLists = listSequence;
             // Build per-list bundles up-front so we know which list blocks are
             // empty (skipped) vs visible (rendered) — needed for the Spacer
             // between-block logic to skip dead spacers.
@@ -8082,12 +8204,20 @@ export default function App() {
     }
     // Pin milestones to the top of each project's bucket so they read as the project's
     // headline goal, with the day-to-day tasks underneath.
+    // Milestones sort by deadline ascending (undated last, title tiebreak) everywhere they
+    // pin — same rule as the list-view milestones bucket and the focus panel.
+    const sortMilestones = (xs: Task[]) => [...xs].sort((a, b) => {
+      const ad = a.deadline || '￿';
+      const bd = b.deadline || '￿';
+      if (ad !== bd) return ad < bd ? -1 : 1;
+      return a.title.localeCompare(b.title);
+    });
     for (const pid of Array.from(tasksByProject.keys())) {
       const arr = tasksByProject.get(pid)!;
       const milestones = arr.filter((t) => t.type === 'scheduled');
       if (milestones.length === 0) continue;
       const others = arr.filter((t) => t.type !== 'scheduled');
-      tasksByProject.set(pid, [...milestones, ...others]);
+      tasksByProject.set(pid, [...sortMilestones(milestones), ...others]);
     }
     // Same milestone-on-top rule for client-level orphans (no project under them).
     for (const cid of Array.from(tasksByClient.keys())) {
@@ -8095,7 +8225,7 @@ export default function App() {
       const milestones = arr.filter((t) => t.type === 'scheduled');
       if (milestones.length === 0) continue;
       const others = arr.filter((t) => t.type !== 'scheduled');
-      tasksByClient.set(cid, [...milestones, ...others]);
+      tasksByClient.set(cid, [...sortMilestones(milestones), ...others]);
     }
     // Build the client > projects hierarchy. A client appears in this column if any of its
     // projects has tasks here, OR it's pinned to this list, OR it has client-level tasks
@@ -8354,8 +8484,9 @@ export default function App() {
                 can have its own overflow:auto scroller. */}
             <div className="flex flex-row gap-0 flex-1 min-h-0 overflow-x-auto mobile-carousel">
               {/* Lambda (not bare map(renderColumn)) so map's index isn't passed as the
-                  second renderColumn param (filterProjectId). */}
-              {LISTS.map((l) => renderColumn(l))}
+                  second renderColumn param (filterProjectId). Column order = the universal
+                  section sequence from Settings. */}
+              {listSequence.map((l) => renderColumn(l))}
             </div>
           </div>
         )}
@@ -8417,7 +8548,8 @@ export default function App() {
             >
               <ChevronRight size={14} className={`transition-transform ${assignTrayOpen ? 'rotate-180' : ''}`} />
             </button>
-            {(['work', 'projects', 'admin'] as ListId[]).map((l) => renderProjectGroupedColumn(l))}
+            {/* Column order = the universal section sequence from Settings. */}
+            {listSequence.map((l) => renderProjectGroupedColumn(l))}
             </div>
           </div>
         )}
@@ -8441,6 +8573,8 @@ export default function App() {
             activeCellId={activeCalendarCellId}
             activeSlotHeight={(activeRectHeight ?? 50) + 4}
             taskOrder={taskOrder}
+            listSequence={listSequence}
+            newTaskId={newId}
           />
         )}
         {!PIP_MODE && mode === 'focus' && (() => {
@@ -8599,7 +8733,8 @@ export default function App() {
                   const stripAnchor = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; })();
                   // One band block (label + cards) per CAL_LIST, aggregated over the
                   // column's iso set. Mirrors WeekCalendarMode's per-day band rendering.
-                  const dayBands = (isos: string[], colKey: string) => CAL_LISTS.map(({ id: listId, label: bandLabel }) => {
+                  const dayBands = (isos: string[], colKey: string) => listSequence.map((listId) => {
+                    const bandLabel = LIST_TITLES[listId];
                     const isoSet = new Set(isos);
                     const bucketAll = isos.flatMap((iso) => focusStripCells[`${iso}:${listId}`] || []);
                     const bucket = focusProjectId ? bucketAll.filter((t) => t.projectId === focusProjectId) : bucketAll;
@@ -8637,12 +8772,13 @@ export default function App() {
                               onDelete={() => deleteTask(t.id)}
                               onEdit={() => openEdit(t)}
                               onQuickEdit={() => openQuick(t)}
-                              onAddSibling={() => addSiblingTask(t)}
+                              onAddSibling={() => addSiblingTask(t, isos[0])}
                               isAnyDragging={!!activeTask}
                               categoryDimmed={!!activeTask && activeTask.list !== listId}
                               projects={projects}
                               clients={clients}
                               taskOrder={taskOrder}
+                              autoFocusEdit={t.id === newId}
                             />
                           ))}
                         </SortableContext>
@@ -9574,6 +9710,8 @@ export default function App() {
             onSetCurrentUser={setCurrentUserShort}
             taskOrder={taskOrder}
             onSetTaskOrder={setTaskOrder}
+            listSequence={listSequence}
+            onSetListSequence={setListSequence}
             tomorrowEnabled={tomorrowEnabled}
             onSetTomorrowEnabled={setTomorrowEnabled}
             caseMode={caseMode}
