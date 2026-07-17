@@ -4106,81 +4106,119 @@ function WeekCalendarMode({
           );
         })}
         {(() => {
-          // ── 7th column: NEXT WEEK (not a date) ─────────────────────────────
-          // Look-ahead + drop hotspot. Shows the Coming Up milestones and a few
-          // highlights already scheduled for next week. Dropping ANY card here
-          // schedules it for next week — the 'NW@' token tells the drop handler
-          // to set the deadline even for queue tasks that normally keep none.
+          // ── 6th column: NEXT WEEK ──────────────────────────────────────────
+          // Now a FULL calendar column just like the day columns: broken into the
+          // three category bands (Admin / Work / Projects), each a real drop target
+          // with draggable cards + displacement. Dropping a card here schedules it
+          // for next Monday (the 'NW@' token tells handleDragEnd to set the deadline
+          // even for undated queue tasks) and lands it at the top of its category
+          // band (off-category-above rule in the drop handler).
           const lastD = days[days.length - 1];
           const delta = ((8 - lastD.getDay()) % 7) || 7; // first Monday after the window
           const nwStart = addDaysToDate(lastD, delta);
           const nwStartIso = dateToISO(nwStart);
           const nwEndIso = dateToISO(addDaysToDate(nwStart, 6));
           const nwToken = `NW@${nwStartIso}`;
-          // FULL listing (no cap): everything already dated inside next week…
-          const highlights = tasks
-            .filter((t) => !t.completed && t.type !== 'scheduled' && t.deadline
-              && t.deadline >= nwStartIso && t.deadline <= nwEndIso)
-            .sort((a, b) => ((a.deadline || '') < (b.deadline || '') ? -1 : 1));
-          // …plus the REMAINING queue — every undated next/inbox todo that did NOT land in
-          // one of the five visible day cells. This is "the rest of the pile": dragging any
-          // card onto this column stamps it with next Monday's date (the NW@ drop token).
+          // Ids already shown in the five visible day cells — excluded from the queue
+          // remainder so a task isn't listed twice.
           const placedIds = new Set<string>();
           for (const vd of days) {
             const vIso = dateToISO(vd);
             for (const l of listSequence) for (const t of (distributionByCell[`${vIso}:${l}`] || [])) placedIds.add(t.id);
           }
-          const queueRemainder = tasks
-            .filter((t) => !t.completed && t.type !== 'scheduled' && !t.deadline
-              && (t.section === 'next' || t.section === 'inbox') && !placedIds.has(t.id))
-            .sort((a, b) => (listSequence.indexOf(a.list) - listSequence.indexOf(b.list)) || a.order - b.order);
+          // Per-list next-week bucket: tasks DATED inside next week, plus the undated
+          // queue remainder for that list. Milestones are pinned above (dayMilestones).
+          const nwBucketFor = (listId: ListId) => tasks
+            .filter((t) => !t.completed && t.type !== 'scheduled' && t.list === listId
+              && ((t.deadline && t.deadline >= nwStartIso && t.deadline <= nwEndIso)
+                  || (!t.deadline && (t.section === 'next' || t.section === 'inbox') && !placedIds.has(t.id))))
+            .sort((a, b) => ((a.deadline || '￿') < (b.deadline || '￿') ? -1 : (a.deadline || '￿') > (b.deadline || '￿') ? 1 : a.order - b.order));
           return (
             <CalendarColumnDroppable key="nextweek" date={nwToken}>
               <div className="shrink-0 h-[37px] flex items-center gap-2 px-[16px] mb-[37px] text-white">
                 <p className="font-['NB_International:Regular',sans-serif]">Next Week</p>
               </div>
               <CustomScroll>
-                <CalendarDayDroppable id={`cal:${nwToken}:projects`} isEmpty={highlights.length === 0 && overflowMilestones.length === 0 && queueRemainder.length === 0} className="pb-[37px]">
-                  {overflowMilestones.length > 0 && (
-                    <div className="mb-[37px]">
-                      <div className="h-[20px] px-[16px] flex items-center mb-[6px]">
-                        <p className={`${bodyFont} text-[#5e5e5e]`}>Coming Up</p>
+                {/* Coming-Up milestones (dated beyond the visible window) stay pinned at the
+                    very top — a read-only look-ahead, same as before. */}
+                {overflowMilestones.length > 0 && (
+                  <div className="mb-[37px]">
+                    <div className="h-[20px] px-[16px] flex items-center mb-[6px]">
+                      <p className={`${bodyFont} text-[#5e5e5e]`}>Coming Up</p>
+                    </div>
+                    {overflowMilestones.map((t) => <MilestoneCard key={t.id} task={t} showDate />)}
+                  </div>
+                )}
+                {listSequence.map((listId) => {
+                  const label = LIST_TITLES[listId];
+                  const bucket = nwBucketFor(listId);
+                  const items = bucket.map((t) => t.id);
+                  // Milestones dated next week (or beyond, minus the Coming-Up ones already
+                  // shown) matched to this band by effective list — pinned above the cards.
+                  const bandMilestones = (tasks.filter((t) => {
+                    if (t.type !== 'scheduled' || !t.deadline || t.deadline < nwStartIso || t.deadline > nwEndIso) return false;
+                    const proj = t.projectId ? projects.find((p) => p.id === t.projectId) : undefined;
+                    return (proj?.list ?? t.list) === listId;
+                  }));
+                  // Displacement — identical logic to the day columns: same-bucket reorder
+                  // shifts the between cards; cross-bucket-into-here opens a gap above the
+                  // over-card so the drop slot is visible.
+                  const aIdx = activeTask ? bucket.findIndex((t) => t.id === activeTask.id) : -1;
+                  const oIdx = overTask ? bucket.findIndex((t) => t.id === overTask.id) : -1;
+                  const activeInBucket = aIdx >= 0;
+                  const overInBucket = oIdx >= 0;
+                  const categoryDimmed = !!activeTask && activeTask.list !== listId;
+                  const cellId = `cal:${nwToken}:${listId}`;
+                  return (
+                    <CalendarDayDroppable key={listId} id={cellId} isEmpty={bucket.length === 0 && bandMilestones.length === 0} className="pb-[37px] last:pb-0">
+                      <div className="group/band h-[20px] px-[16px] flex items-center gap-2 mb-[6px]">
+                        <p className={`${bodyFont} text-[#5e5e5e]`}>{label}</p>
+                        <button
+                          type="button"
+                          onClick={() => onAddTaskOnDay(listId, nwStartIso)}
+                          className="opacity-0 group-hover/band:opacity-100 text-[#656464] hover:text-white transition-opacity"
+                          aria-label={`Add ${label} task next week`}
+                        >
+                          <Plus size={14} />
+                        </button>
                       </div>
-                      {overflowMilestones.map((t) => <MilestoneCard key={t.id} task={t} showDate />)}
-                    </div>
-                  )}
-                  {highlights.length > 0 && (
-                    <div className="mb-[37px]">
-                      <div className="h-[20px] px-[16px] flex items-center mb-[6px]">
-                        <p className={`${bodyFont} text-[#5e5e5e]`}>Scheduled</p>
-                      </div>
-                      {highlights.map((t) => (
-                        <div key={`nw-${t.id}`} className="mx-[6px] mb-[4px] bg-white/[0.03] opacity-70">
-                          <CalendarCardBody task={t} projects={projects} clients={clients} taskOrder={taskOrder} />
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  {/* The rest of the pile — every queue task not placed in the visible five
-                      days. Read-only listing; drop anything here to schedule it next week. */}
-                  {queueRemainder.length > 0 && (
-                    <div>
-                      <div className="h-[20px] px-[16px] flex items-center mb-[6px]">
-                        <p className={`${bodyFont} text-[#5e5e5e]`}>Queue</p>
-                      </div>
-                      {queueRemainder.map((t) => (
-                        <div key={`nwq-${t.id}`} className="mx-[6px] mb-[4px] bg-white/[0.03] opacity-70">
-                          <CalendarCardBody task={t} projects={projects} clients={clients} taskOrder={taskOrder} />
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                  {isAnyDragging && (
-                    <div className={`${bodyFont} mx-[16px] mt-[12px] px-3 py-5 rounded border border-dashed border-[#8465ff]/50 text-[#8465ff] text-center`}>
-                      Drop → next week
-                    </div>
-                  )}
-                </CalendarDayDroppable>
+                      {bandMilestones.length > 0 && bandMilestones.map((t) => <MilestoneCard key={`m-${t.id}`} task={t} showDate categoryDimmed={categoryDimmed} />)}
+                      <SortableContext items={items} strategy={verticalListSortingStrategy}>
+                        {bucket.map((t, index) => {
+                          let displacementOffset = 0;
+                          let insertionGap = 0;
+                          const sameCategory = activeTask && activeTask.list === listId;
+                          if (sameCategory && activeTask && overTask && t.id !== activeTask.id) {
+                            if (!activeInBucket && overInBucket && index === oIdx) {
+                              insertionGap = activeSlotHeight;
+                            }
+                          }
+                          return (
+                            <CalendarCard
+                              key={t.id}
+                              task={t}
+                              cellId={cellId}
+                              onToggle={() => onToggleTask(t.id)}
+                              onRename={(title) => onRenameTask(t.id, title)}
+                              onDelete={() => onDeleteTask(t.id)}
+                              onEdit={() => onEditTask(t)}
+                              onQuickEdit={onQuickEditTask ? () => onQuickEditTask(t) : undefined}
+                              onAddSibling={() => onAddSiblingTask(t, nwStartIso)}
+                              isAnyDragging={isAnyDragging}
+                              categoryDimmed={categoryDimmed}
+                              projects={projects}
+                              clients={clients}
+                              displacementOffset={displacementOffset}
+                              insertionGap={insertionGap}
+                              taskOrder={taskOrder}
+                              autoFocusEdit={t.id === newTaskId}
+                            />
+                          );
+                        })}
+                      </SortableContext>
+                    </CalendarDayDroppable>
+                  );
+                })}
               </CustomScroll>
             </CalendarColumnDroppable>
           );
@@ -7559,18 +7597,23 @@ export default function App() {
           // Build the destination bucket without the source.
           const toBucket = without.filter((t) => t.list === targetList && t.section === targetSection).sort((a, b) => a.order - b.order);
           // Decide insert position:
+          //   - drop ON an existing card → before that card (displace)
           //   - off-category ABOVE  → top (index 0)
           //   - off-category BELOW  → bottom (append)
-          //   - same category & we have an over-task → before that task
+          //   - Next Week band with no over-card → TOP (per request: dropping into Next
+          //     Week lands the card at the top of its category, then reorder by hand)
           //   - else → append
           let insertAt = toBucket.length;
-          if (offCategoryDirection === 'above') {
+          if (intendedOverTaskId) {
+            const idx = toBucket.findIndex((t) => t.id === intendedOverTaskId);
+            if (idx >= 0) insertAt = idx;
+            else if (isNextWeekDrop) insertAt = 0;
+          } else if (offCategoryDirection === 'above') {
             insertAt = 0;
           } else if (offCategoryDirection === 'below') {
             insertAt = toBucket.length;
-          } else if (intendedOverTaskId) {
-            const idx = toBucket.findIndex((t) => t.id === intendedOverTaskId);
-            if (idx >= 0) insertAt = idx;
+          } else if (isNextWeekDrop) {
+            insertAt = 0;
           }
           const reorderedTo = [...toBucket.slice(0, insertAt), moved, ...toBucket.slice(insertAt)].map((t, i) => ({ ...t, order: i }));
           const fromOthers = without.filter((t) => t.list === srcTask.list && t.section === srcTask.section && t.id !== srcTask.id).map((t, i) => ({ ...t, order: i }));
