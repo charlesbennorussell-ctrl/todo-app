@@ -3827,7 +3827,12 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
                 onChange={onRename}
                 autoFocus
                 placeholder="New Task"
-                onDiscardIfEmpty={onDelete}
+                // NO onDiscardIfEmpty here. It hard-deleted the task the instant the autofocused
+                // field blurred — and creating a card triggers a re-render that blurs it right
+                // away, so a fresh task "blinked on and vanished" (no grace at all). The list card
+                // never did this; it leans on the 3-minute blank-sweep (which exempts the newly
+                // created id + the one being edited). Calendar/focus cards now do the same, so a
+                // freshly created task survives until you've had time to type.
                 className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap ${titleColor}`}
               />
             ) : (
@@ -7006,11 +7011,18 @@ export default function App() {
     });
     setNewId(id);
   }, [currentUserShort]);
-  const addBlankTaskInSection = useCallback((listId: ListId, section: SectionId) => {
+  // opts lets a caller stamp the new task with a project/client. Critical for the dashboard +
+  // buttons while a left-panel FILTER is active: without inheriting the filter's project/client
+  // the fresh task fails the scope filter and vanishes the instant it's created ("disappears
+  // instantly"). projectId wins over clientId when both are somehow supplied.
+  const addBlankTaskInSection = useCallback((listId: ListId, section: SectionId, opts?: { projectId?: string; clientId?: string }) => {
     const id = `task-${Date.now()}`;
     setTasks((prev) => {
       const maxOrder = prev.filter((x) => x.list === listId && x.section === section).reduce((m, x) => Math.max(m, x.order), -1);
-      return [...prev, { id, title: '', type: 'todo', assignees: currentUserShort ? [currentUserShort] : [], completed: false, list: listId, section, order: maxOrder + 1, createdAt: Date.now() }];
+      const extra: Partial<Task> = {};
+      if (opts?.projectId) extra.projectId = opts.projectId;
+      else if (opts?.clientId) extra.clientId = opts.clientId;
+      return [...prev, { id, title: '', type: 'todo', assignees: currentUserShort ? [currentUserShort] : [], completed: false, list: listId, section, order: maxOrder + 1, createdAt: Date.now(), ...extra }];
     });
     setNewId(id);
   }, [currentUserShort]);
@@ -8493,6 +8505,9 @@ export default function App() {
   // use Array.map must wrap in a lambda (`LISTS.map((l) => renderColumn(l))`) so map's index
   // isn't accidentally passed as the filter.
   const renderColumn = (listId: ListId, filterProjectId?: string | null, filterClientId?: string | null) => {
+    // When a left-panel filter is active, tasks added from this column must inherit it or they
+    // fail the scope filter and vanish on creation. Undefined when no filter is active.
+    const filterOpts = filterProjectId ? { projectId: filterProjectId } : filterClientId ? { clientId: filterClientId } : undefined;
     // Dashboard tasks are now draggable too â€” using the same renderBucket as the per-list columns.
     // Reordering within a sub-list (admin/work/projects) updates order; dragging across sub-lists
     // moves the task to the target's list (handled by handleCrossSectionMove).
@@ -8599,7 +8614,7 @@ export default function App() {
                 {listBlocks.map((b, idx) => (
                   <div key={`dash-list-${b.list}`}>
                     {idx > 0 && <Spacer />}
-                    <SectionHeader title={LIST_TITLES[b.list]} sticky="date" tall onAdd={() => { addBlankTaskInSection(b.list, 'today'); }} />
+                    <SectionHeader title={LIST_TITLES[b.list]} sticky="date" tall onAdd={() => { addBlankTaskInSection(b.list, 'today', filterOpts); }} />
                     {/* Today + Tomorrow consolidated into ONE chunk per list — a single
                         "Today / Tomorrow" header with the tasks stacked day-ordered
                         (todays first, then tomorrows). The separate sub-headers were
@@ -8608,7 +8623,7 @@ export default function App() {
                         merged SortableContext (prefix dash:<list>:days:) so drags flow
                         across the day boundary; drops resolve the section from the
                         target row, same as before. */}
-                    <SectionHeader title="Today / Tomorrow" sticky="category" onAdd={() => { addBlankTaskInSection(b.list, 'today'); }} />
+                    <SectionHeader title="Today / Tomorrow" sticky="category" onAdd={() => { addBlankTaskInSection(b.list, 'today', filterOpts); }} />
                     {bucket([...b.today, ...b.tomorrow], `dash:${b.list}:days:`)}
                   </div>
                 ))}
@@ -8622,7 +8637,7 @@ export default function App() {
                     {nextBlocks.map((b, idx) => (
                       <Fragment key={`dash-next-${b.list}`}>
                         {idx > 0 && <Spacer />}
-                        <SectionHeader title={LIST_TITLES[b.list]} sticky="category" onAdd={() => { addBlankTaskInSection(b.list, 'next'); }} />
+                        <SectionHeader title={LIST_TITLES[b.list]} sticky="category" onAdd={() => { addBlankTaskInSection(b.list, 'next', filterOpts); }} />
                         {bucket(b.next, `dash:next:${b.list}:`)}
                       </Fragment>
                     ))}
@@ -8643,19 +8658,19 @@ export default function App() {
           <>
             {wrap('today', (
               <>
-                <SectionHeader title="Today" sticky="date" onAdd={() => addBlankTaskInSection(listId, 'today')} />
+                <SectionHeader title="Today" sticky="date" onAdd={() => addBlankTaskInSection(listId, 'today', filterOpts)} />
                 {bucket(tasksByKey[`${listId}:today`] || [])}
               </>
             ))}
             {tomorrowEnabled && wrap('tomorrow', (
               <>
-                <SectionHeader title="Tomorrow" sticky="date" onAdd={() => addBlankTaskInSection(listId, 'tomorrow')} />
+                <SectionHeader title="Tomorrow" sticky="date" onAdd={() => addBlankTaskInSection(listId, 'tomorrow', filterOpts)} />
                 {bucket(tasksByKey[`${listId}:tomorrow`] || [])}
               </>
             ))}
             {wrap('next', (
               <>
-                <SectionHeader title="Next" sticky="date" onAdd={() => addBlankTaskInSection(listId, 'next')} />
+                <SectionHeader title="Next" sticky="date" onAdd={() => addBlankTaskInSection(listId, 'next', filterOpts)} />
                 {/* When the Tomorrow toggle is OFF, tomorrow-tagged tasks visually appear here
                     inside Next. Their data still says section='tomorrow' so flipping the toggle
                     on restores them to the Tomorrow section without losing context. */}
@@ -9431,7 +9446,7 @@ export default function App() {
                           <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap text-[#5e5e5e]">{bandLabel}</p>
                           <button
                             type="button"
-                            onClick={() => addBlankTaskInSection(listId, section)}
+                            onClick={() => addBlankTaskInSection(listId, section, focusProjectId ? { projectId: focusProjectId } : focusClientId ? { clientId: focusClientId } : undefined)}
                             className="opacity-0 group-hover/band:opacity-100 text-[#656464] hover:text-white transition-opacity"
                             aria-label={`Add ${bandLabel} task`}
                           >
