@@ -9345,51 +9345,25 @@ export default function App() {
                             <Spacer />
                           </>
                         )}
+                        {/* CLIENTS ONLY — the filter is a flat roster of every client, no project
+                            sub-categories, no expansion. Click a client to filter the dashboard to
+                            all its tasks; click again (or the X) to clear. Active = purple. */}
                         {proj2SortedClients.map((c) => {
-                          const clientTop = projects.filter((pp) => pp.clientId === c.id && isTopLevel(pp));
-                          if (clientTop.length === 0) return null;
-                          const expanded = focusExpandedClient === c.id;
                           const clientActive = focusClientId === c.id && !focusProjectId;
-                          const hasActive = clientActive || projects.some((p) => p.clientId === c.id && p.id === focusProjectId);
                           return (
-                            <Fragment key={c.id}>
-                              {/* Click a client → FILTER the dashboard to all its tasks AND open
-                                  its accordion (single-open: closes whatever else was open).
-                                  Clicking the active client again clears the filter. Picking a
-                                  sub-project then narrows to that project. Active = purple. */}
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setFocusProjectId(null);
-                                  const nowActive = focusClientId !== c.id;
-                                  setFocusClientId(nowActive ? c.id : null);
-                                  setFocusExpandedClient(nowActive ? c.id : null);
-                                }}
-                                className={`group h-[37px] w-full text-left box-border flex flex-row gap-2 items-center px-[31px] transition-colors ${clientActive ? 'bg-[#8465ff]/15' : 'hover:bg-white/[0.03]'}`}
-                              >
-                                <span
-                                  role="button"
-                                  tabIndex={-1}
-                                  onClick={(e) => { e.stopPropagation(); setFocusExpandedClient((cur) => (cur === c.id ? null : c.id)); }}
-                                  className="shrink-0 -ml-[2px] p-[2px] text-[#5e5e5e] hover:text-white transition-colors cursor-pointer"
-                                >
-                                  <ChevronRight size={12} className={`transition-transform ${expanded ? 'rotate-90' : ''}`} />
-                                </span>
-                                <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis ${hasActive ? 'text-[#8465ff]' : 'text-white'}`}>
-                                  {c.name || (c.id === PERSONAL_CLIENT_ID ? 'Personal' : c.short)}
-                                </span>
-                                <span className="text-[#474747] text-[12px]">{clientTop.length}</span>
-                                {clientActive && <X size={14} className="ml-auto text-[#a8a8a8]" />}
-                              </button>
-                              {expanded && clientTop.map((p) => renderNode(p, c, 1))}
-                            </Fragment>
+                            <button
+                              key={c.id}
+                              type="button"
+                              onClick={() => { setFocusProjectId(null); setFocusClientId(focusClientId === c.id ? null : c.id); }}
+                              className={`group h-[37px] w-full text-left box-border flex flex-row gap-2 items-center px-[31px] transition-colors ${clientActive ? 'bg-[#8465ff]/15' : 'hover:bg-white/[0.03]'}`}
+                            >
+                              <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis ${clientActive ? 'text-[#8465ff]' : 'text-white'}`}>
+                                {c.name || (c.id === PERSONAL_CLIENT_ID ? 'Personal' : c.short)}
+                              </span>
+                              {clientActive && <X size={14} className="ml-auto text-[#a8a8a8]" />}
+                            </button>
                           );
                         })}
-                        {clientlessTop.length > 0 && (
-                          <>
-                            {clientlessTop.map((p) => renderNode(p, undefined, 0))}
-                          </>
-                        )}
                       </CustomScroll>
                     </div>
                   );
@@ -10447,11 +10421,10 @@ export default function App() {
           // underneath (TrayMask + calendarCollision keep the drag from leaking below). Drop a
           // task on a person → assignee added; on a project → the task MOVES to that project.
           const trayOpen = edgeDrawer === 'left';
-          // While a task is in flight every client is force-expanded, so all project rows are
-          // mounted (and thus measured by dnd-kit at drag start) and droppable without a hover.
-          const trayDragActive = activeType === 'task' || activeType === 'projTask';
-          // Single-open accordion, hover-driven: lingering over a client header opens ITS
-          // projects and closes whatever was open; rolling onto the next one readjusts.
+          // Single-open accordion, hover-driven: EVERY client starts collapsed, even mid-drag.
+          // Lingering over a client header opens ITS projects (and closes whatever was open);
+          // rolling onto the next one readjusts. Dropping straight on a client header assigns
+          // the client; hover-open then drop on a project row to assign the project.
           const hoverExpand = (cid: string) => {
             if (trayHoverTimerRef.current) clearTimeout(trayHoverTimerRef.current);
             trayHoverTimerRef.current = setTimeout(() => { setEdgeExpandedClient(cid); }, 250);
@@ -10517,7 +10490,10 @@ export default function App() {
                   {proj2SortedClients.map((c) => {
                     const clientProjects = projects.filter((p) => p.clientId === c.id);
                     if (clientProjects.length === 0) return null;
-                    const expanded = trayDragActive || edgeExpandedClient === c.id;
+                    // Tray always shows every client EXPANDED — the indentation makes the
+                    // client→project hierarchy read clearly, and it keeps every project row
+                    // mounted so all are live drop targets the moment a drag starts.
+                    const expanded = true;
                     return (
                       <Fragment key={c.id}>
                         <EdgeClientRow
