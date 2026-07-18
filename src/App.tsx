@@ -9580,10 +9580,29 @@ export default function App() {
                       section: 'next',
                     },
                   ];
+                  // "Coming Up" — upcoming milestones dated BEYOND the Next column's window,
+                  // pinned read-only at the top of the Next column. Mirrors the calendar view's
+                  // Next-Week look-ahead so a dated milestone a week or two out (e.g. a birthday)
+                  // still gets featured on the focus page. Respects the active filter + search.
+                  const focusLastVisibleIso = nextIsos[nextIsos.length - 1];
+                  const cuClientOf = (t: Task) => t.clientId ?? (t.projectId ? projects.find((p) => p.id === t.projectId)?.clientId : undefined);
+                  const cuPasses = (t: Task) => focusProjectId ? t.projectId === focusProjectId : focusClientId ? cuClientOf(t) === focusClientId : true;
+                  const comingUpMilestones = calendarTasks
+                    .filter((t) => t.type === 'scheduled' && !!t.deadline && t.deadline > focusLastVisibleIso && cuPasses(t) && taskMatchesQuery(t, focusSearch, projects, clients))
+                    .sort((a, b) => (a.deadline! < b.deadline! ? -1 : a.deadline! > b.deadline! ? 1 : a.title.localeCompare(b.title)));
                   return cols.map((col) => (
                     <div key={col.key} className="min-w-[240px] flex flex-col min-h-0 overflow-hidden">
                       {col.header}
                       <CustomScroll>
+                        {/* Next column only: upcoming milestones beyond the window, featured up top. */}
+                        {col.section === 'next' && comingUpMilestones.length > 0 && (
+                          <div className="mb-[24px]">
+                            <div className="h-[20px] px-[16px] flex items-center mb-[6px]">
+                              <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap text-[#5e5e5e]">Coming Up</p>
+                            </div>
+                            {renderReadonlyBucket(comingUpMilestones, undefined, true)}
+                          </div>
+                        )}
                         {dayBands(col.isos, col.key, col.section)}
                       </CustomScroll>
                     </div>
