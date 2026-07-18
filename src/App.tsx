@@ -10514,6 +10514,9 @@ export default function App() {
           // underneath (TrayMask + calendarCollision keep the drag from leaking below). Drop a
           // task on a person → assignee added; on a project → the task MOVES to that project.
           const trayOpen = edgeDrawer === 'left';
+          // A task drag is in flight — the tray must NOT translate during it (so its drop rows
+          // stay measured on-screen); it only fades. Slides normally when not dragging.
+          const trayDrag = activeType === 'task' || activeType === 'projTask';
           // Single-open accordion, hover-driven: EVERY client starts collapsed, even mid-drag.
           // Lingering over a client header opens ITS projects (and closes whatever was open);
           // rolling onto the next one readjusts. Dropping straight on a client header assigns
@@ -10554,9 +10557,13 @@ export default function App() {
                   drop target without needing a mid-drag hover. */}
               <div
                 onMouseLeave={() => { setEdgeDrawer((d) => (d === 'left' ? null : d)); cancelHoverExpand(); setEdgeExpandedClient(null); }}
-                // Card-gray (#333333) — same material as the rail + calendar cards, no darker
-                // panel behind it. Opaque so it still masks the columns underneath.
-                className={`fixed left-[22px] top-[104px] bottom-[84px] w-[320px] z-40 bg-[#333333] flex flex-col transition-opacity duration-200 ease-out ${trayOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}
+                // Card-gray (#333333) — one flat material, same as the rail + calendar cards.
+                // SLIDE animation, but drag-safe: while a task is being dragged the tray never
+                // translates (it sits at translate-x-0 and only fades), so dnd-kit still measures
+                // its drop rows on-screen and drops keep working. When NOT dragging it slides the
+                // full width in/out with a slow ease-in-out — the text is planted on the panel and
+                // travels with it.
+                className={`fixed left-[22px] top-[104px] bottom-[84px] w-[320px] z-40 bg-[#333333] flex flex-col duration-500 ease-in-out ${trayDrag ? 'transition-opacity' : 'transition-[transform,opacity]'} ${trayOpen ? 'translate-x-0 opacity-100 pointer-events-auto' : trayDrag ? 'translate-x-0 opacity-0 pointer-events-none' : '-translate-x-full opacity-0 pointer-events-none'}`}
               >
                 <TrayMask />
                 {/* Assign To — people. */}
