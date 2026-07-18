@@ -3809,7 +3809,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
       animate={{ opacity: isDragging ? 0 : 1 }}
       transition={{ opacity: { duration: 0.12, ease: 'easeOut' } }}
     >
-      <div onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} onContextMenu={(e) => { if (onQuickEdit) { e.preventDefault(); e.stopPropagation(); onQuickEdit(); } }} {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing px-[10px] py-[6px] flex flex-col justify-center gap-[2px] overflow-hidden h-full">
+      <div onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} onContextMenu={(e) => { if (onQuickEdit) { e.preventDefault(); e.stopPropagation(); onQuickEdit(); } }} {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing px-[10px] py-[6px] flex flex-row flex-wrap items-center content-center gap-x-[12px] gap-y-[1px] overflow-hidden h-full">
         {/* Calendar cards always render Title on line 1, all other meta on line 2 — taskOrder
             setting doesn't apply here. Line 1: checkbox + title. Line 2: client › project,
             assignees, deadline, + button. Checkbox is INLINE with the title so it stays aligned
@@ -9259,7 +9259,7 @@ export default function App() {
                   (each child carries its own min-width). NOTE for un-parking
                   FOCUS_SHOW_INFO / FOCUS_SHOW_REFERENCES: the track template is fixed at
                   five tracks — re-enabling those columns means widening the template. */}
-              <div className="grid grid-cols-[1fr_2fr_1fr_1fr_1fr] gap-0 flex-1 min-h-0 w-full overflow-x-auto">
+              <div className="grid grid-cols-[1fr_2fr_2fr_2fr] gap-0 flex-1 min-h-0 w-full overflow-x-auto">
                 {/* Column 1 — Projects panel: flat master list (milestones pinned on top);
                     clicking a project FILTERS the Dashboard stack + all three calendar
                     columns (focusProjectId). Active row shows an ×; click again to clear.
@@ -9368,20 +9368,12 @@ export default function App() {
                     </div>
                   );
                 })()}
-                {/* Column 1 — the daily Dashboard stack. Same renderer as the list view's
-                    Dashboard column (list-first hierarchy: Work/Admin/Projects → Today/
-                    Tomorrow, then Next → per-list) so the two stay in lockstep — and the
-                    same column the PIP window shows. When a project is selected in the
-                    left panel, the whole stack narrows to that project's tasks. */}
-                {renderColumn('dashboard', focusProjectId, focusClientId)}
-                {/* Columns 4–6 — the calendar unpacked into THREE side-by-side columns:
-                    Today, Tomorrow, Next. Same engine as the calendar view
-                    (focusStripCells ← computeCalendarDistribution over calendarTasks),
-                    same band structure (Admin / Work / Projects), same CalendarCards
-                    (checkbox, two-line meta, drag, hover +/delete). "Next" aggregates the
-                    following week (day+2 … day+8) — dated cards keep their date chips so
-                    the horizon stays readable. The left-panel project filter narrows all
-                    three columns. Headers match the calendar view's day-header format. */}
+                {/* Columns 2–4 — the calendar as THREE wide (2fr) side-by-side day columns:
+                    Today, Tomorrow, and the day after — each a single day (the old list/
+                    Dashboard stack is gone; this IS the dashboard now). Same engine as the
+                    calendar view (focusStripCells ← computeCalendarDistribution), same band
+                    structure (Work / Admin / Projects), same CalendarCards. The left-panel
+                    client filter narrows all three columns. */}
                 {(() => {
                   const stripAnchor = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; })();
                   // One band block (label + cards) per CAL_LIST, aggregated over the
@@ -9453,7 +9445,7 @@ export default function App() {
                   });
                   const d0 = stripAnchor;
                   const d1 = addDaysToDate(stripAnchor, 1);
-                  const nextIsos = [2, 3, 4, 5, 6, 7, 8].map((off) => dateToISO(addDaysToDate(stripAnchor, off)));
+                  const d2 = addDaysToDate(stripAnchor, 2);
                   // Day headers replicate the calendar view's: NB-font weekday + Univers
                   // date number, purple for today with the "(Today)" suffix.
                   const dayHeader = (d: Date, isToday: boolean) => (
@@ -9466,16 +9458,7 @@ export default function App() {
                   const cols: Array<{ key: string; header: React.ReactNode; isos: string[]; section: SectionId }> = [
                     { key: 'fc-today', header: dayHeader(d0, true), isos: [dateToISO(d0)], section: 'today' },
                     { key: 'fc-tomorrow', header: dayHeader(d1, false), isos: [dateToISO(d1)], section: 'tomorrow' },
-                    {
-                      key: 'fc-next',
-                      header: (
-                        <div className="shrink-0 h-[37px] flex items-center gap-2 px-[16px] text-white" style={{ marginBottom: SPACING.dcr }}>
-                          <p className="font-['NB_International:Regular',sans-serif]">Next</p>
-                        </div>
-                      ),
-                      isos: nextIsos,
-                      section: 'next',
-                    },
+                    { key: 'fc-dayafter', header: dayHeader(d2, false), isos: [dateToISO(d2)], section: 'next' },
                   ];
                   return cols.map((col) => (
                     <div key={col.key} className="min-w-[240px] flex flex-col min-h-0 overflow-hidden">
