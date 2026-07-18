@@ -3659,6 +3659,30 @@ const taskMatchesQuery = (t: Task, query: string, projects: Project[], clients: 
     || !!(cli?.short && cli.short.toLowerCase().includes(q));
 };
 
+// Click a sticky band label (Work / Projects / Admin / Personal) → smooth-scroll its column
+// back to the TOP of that category. The clicked <p>'s grandparent is the band container; we
+// animate the CustomScroll's scrollTop by hand (easeOutCubic over ~320ms) because native
+// smooth scrollTo / scrollIntoView are no-ops on this custom overflow container.
+const scrollBandToTop = (e: React.MouseEvent) => {
+  const container = (e.currentTarget as HTMLElement).parentElement?.parentElement; // band container
+  if (!container) return;
+  let sc: HTMLElement | null = container.parentElement;
+  while (sc && sc.scrollHeight <= sc.clientHeight + 1) sc = sc.parentElement;
+  if (!sc) return;
+  const el = sc;
+  const start = el.scrollTop;
+  const target = Math.max(0, start + (container.getBoundingClientRect().top - el.getBoundingClientRect().top));
+  if (Math.abs(target - start) < 1) return;
+  const t0 = performance.now();
+  const ease = (p: number) => 1 - Math.pow(1 - p, 3);
+  const step = (now: number) => {
+    const p = Math.min(1, (now - t0) / 320);
+    el.scrollTop = start + (target - start) * ease(p);
+    if (p < 1) requestAnimationFrame(step);
+  };
+  requestAnimationFrame(step);
+};
+
 // Per-day caps shared by the week calendar and the focus page's mini-calendar strip:
 //   CAL_TASKS_PER_DAY (9)              — global cap on total slots (mandatory + queue)
 //   CAL_QUEUE_CAP_PER_LIST_PER_DAY (3) — per-list cap on queue auto-fill per day
@@ -4152,8 +4176,8 @@ function WeekCalendarMode({
                 const categoryDimmed = !!activeTask && activeTask.list !== listId;
                 return (
                   <CalendarDayDroppable key={listId} id={`cal:${iso}:${listId}`} isEmpty={bucket.length === 0 && dayMilestones.length === 0} className="pb-[37px] last:pb-0">
-                    <div className="group/band h-[20px] px-[16px] flex items-center gap-2 mb-[6px]">
-                      <p className={`${bodyFont} text-[#5e5e5e]`}>{label}</p>
+                    <div className="group/band h-[20px] px-[16px] pb-[6px] flex items-center gap-2 sticky top-0 z-10 bg-[#282828]">
+                      <p onClick={scrollBandToTop} className={`${bodyFont} text-[#5e5e5e] cursor-pointer`}>{label}</p>
                       <button
                         type="button"
                         onClick={() => onAddTaskOnDay(listId, iso)}
@@ -4282,8 +4306,8 @@ function WeekCalendarMode({
                   const cellId = `cal:${nwToken}:${listId}`;
                   return (
                     <CalendarDayDroppable key={listId} id={cellId} isEmpty={bucket.length === 0 && bandMilestones.length === 0} className="pb-[37px] last:pb-0">
-                      <div className="group/band h-[20px] px-[16px] flex items-center gap-2 mb-[6px]">
-                        <p className={`${bodyFont} text-[#5e5e5e]`}>{label}</p>
+                      <div className="group/band h-[20px] px-[16px] pb-[6px] flex items-center gap-2 sticky top-0 z-10 bg-[#282828]">
+                        <p onClick={scrollBandToTop} className={`${bodyFont} text-[#5e5e5e] cursor-pointer`}>{label}</p>
                         <button
                           type="button"
                           onClick={() => onAddTaskOnDay(listId, nwStartIso)}
@@ -9480,8 +9504,8 @@ export default function App() {
                       <div key={`${colKey}-${listId}`} className={cellTasks.length > 0 ? 'pb-[24px] last:pb-0' : 'pb-[12px] last:pb-0'}>
                         {/* Band label — same treatment as the calendar's in-column
                             category labels (grey, 20px row, 16px inset) + hover +. */}
-                        <div className="group/band h-[20px] px-[16px] flex items-center gap-2 mb-[6px]">
-                          <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap text-[#5e5e5e]">{bandLabel}</p>
+                        <div className="group/band h-[20px] px-[16px] pb-[6px] flex items-center gap-2 sticky top-0 z-10 bg-[#282828]">
+                          <p onClick={scrollBandToTop} className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap text-[#5e5e5e] cursor-pointer">{bandLabel}</p>
                           <button
                             type="button"
                             onClick={() => addBlankTaskInSection(listId, section, focusProjectId ? { projectId: focusProjectId } : focusClientId ? { clientId: focusClientId } : undefined)}
