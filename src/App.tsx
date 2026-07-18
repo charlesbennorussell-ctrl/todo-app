@@ -3106,17 +3106,20 @@ function EditableText({ value, onChange, className, autoFocus = false, placehold
   const setEditing = (v: boolean) => { setEditingState(v); onEditingChange?.(v); };
   useEffect(() => { if (autoFocus) onEditingChange?.(true); }, []);
   const ref = useRef<HTMLSpanElement>(null);
+  // Focus whenever editing turns on — not just on autoFocus mount. Without this, clicking a
+  // title flipped it to contentEditable but never placed a caret, so it looked "uneditable"
+  // (you had to click a second time). Now one click puts you straight into the text.
   useEffect(() => {
-    if (autoFocus && ref.current) {
+    if (editing && ref.current && document.activeElement !== ref.current) {
       ref.current.focus();
       const sel = window.getSelection();
       const range = document.createRange();
       range.selectNodeContents(ref.current);
-      range.collapse(true);
+      range.collapse(false);
       sel?.removeAllRanges();
       sel?.addRange(range);
     }
-  }, [autoFocus]);
+  }, [editing]);
   return (
     <span
       ref={ref}
@@ -3733,24 +3736,23 @@ function CalendarCardBody({ task, projects, clients, taskOrder = 'ptc' }: { task
   // stays on the second row alongside assignees + date (legacy two-row calendar layout).
   const clientOnFirstRow = taskOrder !== 'ptc';
   return (
-    <div className="pl-[10px] pr-[10px] py-[6px] flex flex-row items-start gap-[10px]">
-      {!isScheduled && (
-        <div className="shrink-0 flex items-center justify-center pt-[3px]">
-          <TaskCheckbox completed={task.completed} started={task.started} onToggle={() => {}} />
-        </div>
-      )}
-      <div className="flex-1 min-w-0 flex flex-col gap-[2px]">
-        {/* Calendar overlay always shows Title on line 1, meta on line 2. */}
-        <div className="flex flex-row items-center gap-[4px]">
-          <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleColor}`}>{task.title}</span>
-        </div>
-        <div className="flex flex-row items-center gap-[6px]">
-          {client && project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap text-[#656464]`}>{client.short}<Arrowhead dim={task.completed} />{project.name}</p>}
-          {client && !project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${metaColor}`}>{client.short}</p>}
-          {!client && project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap text-[#656464]`}>{project.name}</p>}
-          {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} />)}
-          {task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${isScheduled ? 'text-[#8465ff]' : isLateDeadline(task.deadline) ? 'text-[#FF7171]' : 'text-[#656464]'}`}>{formatDeadline(task.deadline)}</p>}
-        </div>
+    // Mirror the live card's flex-wrap layout so the floating drag copy is the SAME shape/height
+    // (one line when wide, two when narrow) instead of a fixed two-row block.
+    <div className="px-[10px] py-[7px] flex flex-row flex-wrap items-center content-center gap-x-[10px] gap-y-[1px] overflow-hidden h-full">
+      <div className="flex flex-row items-center gap-[10px]">
+        {!isScheduled && (
+          <div className="shrink-0 flex items-center justify-center">
+            <TaskCheckbox completed={task.completed} started={task.started} onToggle={() => {}} />
+          </div>
+        )}
+        <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleColor}`}>{task.title}</span>
+      </div>
+      <div className="flex flex-row items-center gap-[6px]">
+        {client && project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap text-[#656464]`}>{client.short}<Arrowhead dim={task.completed} />{project.name}</p>}
+        {client && !project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${metaColor}`}>{client.short}</p>}
+        {!client && project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap text-[#656464]`}>{project.name}</p>}
+        {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} />)}
+        {task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${isScheduled ? 'text-[#8465ff]' : isLateDeadline(task.deadline) ? 'text-[#FF7171]' : 'text-[#656464]'}`}>{formatDeadline(task.deadline)}</p>}
       </div>
     </div>
   );
@@ -3805,11 +3807,11 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
     <motion.div
       ref={setNodeRef}
       style={style}
-      className={`relative mx-[6px] mb-[4px] group h-[55px] bg-white/[0.03] ${dimmed ? 'opacity-60' : ''}`}
+      className={`relative mx-[6px] mb-[4px] group min-h-[35px] flex bg-white/[0.03] ${dimmed ? 'opacity-60' : ''}`}
       animate={{ opacity: isDragging ? 0 : 1 }}
       transition={{ opacity: { duration: 0.12, ease: 'easeOut' } }}
     >
-      <div onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} onContextMenu={(e) => { if (onQuickEdit) { e.preventDefault(); e.stopPropagation(); onQuickEdit(); } }} {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing px-[10px] py-[6px] flex flex-row flex-wrap items-center content-center gap-x-[12px] gap-y-[1px] overflow-hidden h-full">
+      <div onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} onContextMenu={(e) => { if (onQuickEdit) { e.preventDefault(); e.stopPropagation(); onQuickEdit(); } }} {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing px-[10px] py-[7px] flex flex-row flex-wrap items-center content-center gap-x-[10px] gap-y-[1px] overflow-hidden flex-1">
         {/* Calendar cards always render Title on line 1, all other meta on line 2 — taskOrder
             setting doesn't apply here. Line 1: checkbox + title. Line 2: client › project,
             assignees, deadline, + button. Checkbox is INLINE with the title so it stays aligned
@@ -3820,30 +3822,24 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
               <TaskCheckbox completed={task.completed} started={task.started} onToggle={onToggle} />
             </div>
           )}
-          <div className="flex flex-row items-center gap-[4px] min-w-0" onPointerDown={autoFocusEdit ? (e) => e.stopPropagation() : undefined}>
-            {autoFocusEdit ? (
-              <EditableText
-                value={task.title}
-                onChange={onRename}
-                autoFocus
-                placeholder="New Task"
-                // NO onDiscardIfEmpty here. It hard-deleted the task the instant the autofocused
-                // field blurred — and creating a card triggers a re-render that blurs it right
-                // away, so a fresh task "blinked on and vanished" (no grace at all). The list card
-                // never did this; it leans on the 3-minute blank-sweep (which exempts the newly
-                // created id + the one being edited). Calendar/focus cards now do the same, so a
-                // freshly created task survives until you've had time to type.
-                className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap ${titleColor}`}
-              />
-            ) : (
-              <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleColor}`}>{task.title}</span>
-            )}
+          <div className="flex flex-row items-center gap-[4px] min-w-0">
+            {/* Title is ALWAYS an inline EditableText now — click to edit, drag-in-text to select
+                (EditableText swallows the pointer while editing so it doesn't start a card drag).
+                autoFocus only for a freshly created task. No onDiscardIfEmpty: the 3-min blank-sweep
+                handles empties, so a fresh card never "blinks out". */}
+            <EditableText
+              value={task.title}
+              onChange={onRename}
+              autoFocus={autoFocusEdit}
+              placeholder="New Task"
+              className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleColor}`}
+            />
           </div>
         </div>
         {/* Meta row indents past the checkbox + gap so it lines up under the title text, not under
             the checkbox. 22px = checkbox width (12) + title-row gap (10). When there's no checkbox
             (isScheduled milestones in this branch), the indent collapses to 0. */}
-          <div className={`flex flex-row items-center gap-[6px] ${!isScheduled ? 'pl-[22px]' : ''}`}>
+          <div className="flex flex-row items-center gap-[6px]">
             {/* When completed, all line-2 meta drops to the same faint #383838 — visually quieted to match the title.
                 Only render the client/project paragraph when there's actual non-empty text to show; otherwise an
                 empty <p> sits at the start of the row and the gap-[6px] pushes the next item (e.g. an assignee
@@ -9400,6 +9396,16 @@ export default function App() {
                     }).sort((a, b) => (a.deadline! < b.deadline! ? -1 : a.deadline! > b.deadline! ? 1 : a.title.localeCompare(b.title)));
                     const cellId = `cal:${isos[0]}:${listId}`;
                     const cellTasks = [...bandMilestones, ...bucket];
+                    // Drag-displace (same engine as the calendar view): the SOURCE band leans on
+                    // dnd-kit's native sortable shift; a DESTINATION band opens an insertion gap
+                    // above the card being dragged over so the landing spot is visible. Only the
+                    // drag's own category reacts.
+                    const dAIdx = activeTask ? cellTasks.findIndex((t) => t.id === activeTask.id) : -1;
+                    const dOIdx = overTask ? cellTasks.findIndex((t) => t.id === overTask.id) : -1;
+                    const dActiveInBucket = dAIdx >= 0;
+                    const dOverInBucket = dOIdx >= 0;
+                    const dSameCategory = !!activeTask && activeTask.list === listId;
+                    const dSlotH = (activeRectHeight ?? 40) + 4;
                     // Every band renders now (even empty) so a task can be created in ANY
                     // category on ANY day — the label carries a hover-reveal +. Empty bands
                     // are just the quiet grey label until you hover.
@@ -9419,7 +9425,12 @@ export default function App() {
                           </button>
                         </div>
                         <SortableContext items={cellTasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
-                          {cellTasks.map((t) => (
+                          {cellTasks.map((t, index) => {
+                            let insertionGap = 0;
+                            if (dSameCategory && activeTask && overTask && t.id !== activeTask.id && !dActiveInBucket && dOverInBucket && index === dOIdx) {
+                              insertionGap = dSlotH;
+                            }
+                            return (
                             <CalendarCard
                               key={t.id}
                               task={t}
@@ -9434,17 +9445,20 @@ export default function App() {
                               categoryDimmed={!!activeTask && activeTask.list !== listId}
                               projects={projects}
                               clients={clients}
+                              displacementOffset={0}
+                              insertionGap={insertionGap}
                               taskOrder={taskOrder}
                               autoFocusEdit={t.id === newId}
                             />
-                          ))}
+                            );
+                          })}
                         </SortableContext>
                       </div>
                     );
                   });
                   const d0 = stripAnchor;
                   const d1 = addDaysToDate(stripAnchor, 1);
-                  const d2 = addDaysToDate(stripAnchor, 2);
+                  const nextIsos = [2, 3, 4, 5, 6, 7, 8].map((off) => dateToISO(addDaysToDate(stripAnchor, off)));
                   // Day headers replicate the calendar view's: NB-font weekday + Univers
                   // date number, purple for today with the "(Today)" suffix.
                   const dayHeader = (d: Date, isToday: boolean) => (
@@ -9457,7 +9471,16 @@ export default function App() {
                   const cols: Array<{ key: string; header: React.ReactNode; isos: string[]; section: SectionId }> = [
                     { key: 'fc-today', header: dayHeader(d0, true), isos: [dateToISO(d0)], section: 'today' },
                     { key: 'fc-tomorrow', header: dayHeader(d1, false), isos: [dateToISO(d1)], section: 'tomorrow' },
-                    { key: 'fc-dayafter', header: dayHeader(d2, false), isos: [dateToISO(d2)], section: 'next' },
+                    {
+                      key: 'fc-next',
+                      header: (
+                        <div className="shrink-0 h-[37px] flex items-center gap-2 px-[16px] text-white" style={{ marginBottom: SPACING.dcr }}>
+                          <p className="font-['NB_International:Regular',sans-serif]">Next</p>
+                        </div>
+                      ),
+                      isos: nextIsos,
+                      section: 'next',
+                    },
                   ];
                   return cols.map((col) => (
                     <div key={col.key} className="min-w-[240px] flex flex-col min-h-0 overflow-hidden">
