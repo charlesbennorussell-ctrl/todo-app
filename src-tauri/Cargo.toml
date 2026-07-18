@@ -1,6 +1,6 @@
 [package]
 name = "ctrl-project"
-version = "0.1.74"
+version = "0.1.75"
 description = "Ctrl-Project — todo + project planner"
 authors = ["benno"]
 edition = "2021"

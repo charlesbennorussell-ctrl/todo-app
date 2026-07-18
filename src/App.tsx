@@ -1568,7 +1568,29 @@ function SectionHeader({ title, onAdd, sticky, tall, accent }: { title: string; 
 //                  top + dateHeight (37 or 74). Categories are scoped to their
 //                  date wrapper so they auto-clear when the date band ends.
 function StickyOverlay({ scrollElRef }: { scrollElRef: React.RefObject<HTMLDivElement | null> }) {
-  const [active, setActive] = useState<{ date: string | null; dateTall: boolean; dateAccent: boolean; category: string | null }>({ date: null, dateTall: false, dateAccent: false, category: null });
+  const [active, setActive] = useState<{ date: string | null; dateTall: boolean; dateAccent: boolean; category: string | null; dateHasAdd: boolean; catHasAdd: boolean }>({ date: null, dateTall: false, dateAccent: false, category: null, dateHasAdd: false, catHasAdd: false });
+  // The overlay's + re-finds the currently-stuck header from the LIVE DOM at click time
+  // (an element ref would go stale/detached across re-renders) and clicks its hidden inline
+  // AddPlus, so the pinned header keeps its quick-add.
+  const clickAdd = (tier: 'date' | 'category') => () => {
+    const el = scrollElRef.current;
+    if (!el) return;
+    const containerTop = el.getBoundingClientRect().top;
+    const dateEls = Array.from(el.querySelectorAll<HTMLElement>('[data-sticky-tier="date"]'));
+    let dateEl: HTMLElement | null = null;
+    for (const d of dateEls) if (d.getBoundingClientRect().top <= containerTop + 1) dateEl = d;
+    if (tier === 'date') { (dateEl?.querySelector('[data-add-plus]') as HTMLButtonElement | null)?.click(); return; }
+    // category: topmost category header within the active date's wrapper, at the flush-below threshold.
+    const wrapper = dateEl?.parentElement;
+    if (!wrapper) return;
+    const tall = dateEl?.dataset.stickyTall === 'true';
+    const threshold = containerTop + (tall ? 74 : 37) + 1;
+    let catEl: HTMLElement | null = null;
+    for (const c of Array.from(wrapper.querySelectorAll<HTMLElement>('[data-sticky-tier="category"]'))) {
+      if (c.getBoundingClientRect().top <= threshold) catEl = c;
+    }
+    (catEl?.querySelector('[data-add-plus]') as HTMLButtonElement | null)?.click();
+  };
 
   useEffect(() => {
     const el = scrollElRef.current;
@@ -1589,6 +1611,7 @@ function StickyOverlay({ scrollElRef }: { scrollElRef: React.RefObject<HTMLDivEl
       const nextDateTall = activeDateEl?.dataset.stickyTall === 'true';
       const nextDateAccent = activeDateEl?.dataset.stickyAccent === 'true';
       let nextCategory: string | null = null;
+      let activeCatEl: HTMLElement | null = null;
       if (activeDateEl) {
         // Scope categories to the active date's wrapper so Tomorrow/Next bands
         // (which have no categories) cleanly clear the category slot.
@@ -1597,11 +1620,13 @@ function StickyOverlay({ scrollElRef }: { scrollElRef: React.RefObject<HTMLDivEl
           const catEls = Array.from(wrapper.querySelectorAll<HTMLElement>('[data-sticky-tier="category"]'));
           const catThreshold = containerTop + (nextDateTall ? 74 : 37);
           for (const cEl of catEls) {
-            if (cEl.getBoundingClientRect().top <= catThreshold + 1) nextCategory = cEl.dataset.stickyLabel || null;
+            if (cEl.getBoundingClientRect().top <= catThreshold + 1) { nextCategory = cEl.dataset.stickyLabel || null; activeCatEl = cEl; }
           }
         }
       }
-      setActive((prev) => (prev.date === nextDate && prev.dateTall === nextDateTall && prev.dateAccent === nextDateAccent && prev.category === nextCategory ? prev : { date: nextDate, dateTall: nextDateTall, dateAccent: nextDateAccent, category: nextCategory }));
+      const nextDateHasAdd = !!activeDateEl?.querySelector('[data-add-plus]');
+      const nextCatHasAdd = !!activeCatEl?.querySelector('[data-add-plus]');
+      setActive((prev) => (prev.date === nextDate && prev.dateTall === nextDateTall && prev.dateAccent === nextDateAccent && prev.category === nextCategory && prev.dateHasAdd === nextDateHasAdd && prev.catHasAdd === nextCatHasAdd ? prev : { date: nextDate, dateTall: nextDateTall, dateAccent: nextDateAccent, category: nextCategory, dateHasAdd: nextDateHasAdd, catHasAdd: nextCatHasAdd }));
     };
     const schedule = () => {
       if (rafId) return;
@@ -1663,9 +1688,12 @@ function StickyOverlay({ scrollElRef }: { scrollElRef: React.RefObject<HTMLDivEl
               // Buttery ease-out-expo, slightly longer than typical UI feedback
               // so the swap feels like a deliberate transition, not a flicker.
               transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
-              className="absolute inset-0 box-border flex flex-row gap-2 items-center px-[31px]"
+              className="group absolute inset-0 box-border flex flex-row gap-2 items-center px-[31px]"
             >
               <p className={`font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap ${active.dateAccent ? 'text-[#8465ff]' : 'text-[#656464]'}`}>{active.date}</p>
+              {active.dateHasAdd && (
+                <button type="button" onClick={clickAdd('date')} className="pointer-events-auto opacity-0 group-hover:opacity-100 text-[#656464] hover:text-white transition-opacity" aria-label="Add task"><Plus size={14} /></button>
+              )}
             </motion.div>
           )}
         </AnimatePresence>
@@ -1680,9 +1708,12 @@ function StickyOverlay({ scrollElRef }: { scrollElRef: React.RefObject<HTMLDivEl
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
-              className="absolute inset-0 box-border flex flex-row gap-2 items-center px-[31px]"
+              className="group absolute inset-0 box-border flex flex-row gap-2 items-center px-[31px]"
             >
               <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[#656464] text-[14px] whitespace-nowrap">{active.category}</p>
+              {active.catHasAdd && (
+                <button type="button" onClick={clickAdd('category')} className="pointer-events-auto opacity-0 group-hover:opacity-100 text-[#656464] hover:text-white transition-opacity" aria-label="Add task"><Plus size={14} /></button>
+              )}
             </motion.div>
           )}
         </AnimatePresence>
@@ -1709,12 +1740,15 @@ function EdgeDropRow({ id, children }: { id: string; children: React.ReactNode }
 
 // The focus panel's "Projects" title, doubling as the un-nest drop target: dragging a
 // sub-project onto it promotes it back to top level (focusnest:__root__ → parentId cleared).
-function ProjectsHeaderDropZone() {
+function ProjectsHeaderDropZone({ onClearFilter }: { onClearFilter?: () => void }) {
   const { setNodeRef, isOver } = useDroppable({ id: 'focusnest:__root__' });
+  // Clicking the title (the empty space above the lists) clears any active filter — the
+  // low-friction "click off the filter" gesture, alongside the explicit Clear-filter row.
   return (
     <div
       ref={setNodeRef}
-      className={`shrink-0 group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] transition-colors ${isOver ? 'bg-[#8465ff]/20' : ''}`}
+      onClick={onClearFilter}
+      className={`shrink-0 group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] transition-colors ${onClearFilter ? 'cursor-pointer' : ''} ${isOver ? 'bg-[#8465ff]/20' : ''}`}
       style={{ marginBottom: SPACING.dcr }}
     >
       <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">Projects{isOver ? ' — drop to un-nest' : ''}</p>
@@ -1753,7 +1787,7 @@ function FocusProjectRow({
       {...attributes}
       {...listeners}
       onClick={onClick}
-      className={`group h-[37px] w-full text-left box-border flex flex-row gap-2 items-center px-[31px] cursor-grab active:cursor-grabbing transition-colors ${isDragging ? 'opacity-40' : ''} ${isOver ? 'bg-[#8465ff]/20' : active ? 'bg-white/[0.075]' : 'hover:bg-white/[0.03]'}`}
+      className={`group h-[37px] w-full text-left box-border flex flex-row gap-2 items-center px-[31px] cursor-grab active:cursor-grabbing transition-colors ${isDragging ? 'opacity-40' : ''} ${isOver ? 'bg-[#8465ff]/20' : active ? 'bg-[#8465ff]/15' : 'hover:bg-white/[0.03]'}`}
       style={{ paddingLeft: 31 + depth * 16 }}
     >
       {expandable ? (
@@ -1770,7 +1804,7 @@ function FocusProjectRow({
       {client?.short && depth === 0 && (
         <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap text-[#656464]">{client.short}</span>
       )}
-      <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis text-white">{project.name || 'Untitled'}</span>
+      <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis ${active ? 'text-[#8465ff]' : 'text-white'}`}>{project.name || 'Untitled'}</span>
       {count > 0 && <span className="text-[#474747] text-[12px]">{count}</span>}
       {active && <X size={14} className="ml-auto text-[#a8a8a8]" />}
     </div>
@@ -3097,8 +3131,10 @@ function SettingsRow({ children }: { children: React.ReactNode }) {
 }
 
 function AddPlus({ onClick }: { onClick: () => void }) {
+  // data-add-plus lets the StickyOverlay find + click this button for the header that's
+  // currently pinned at the top (whose inline + is hidden behind the overlay).
   return (
-    <button onClick={onClick} className="opacity-0 group-hover:opacity-100 text-[#656464] hover:text-white transition-opacity"><Plus size={14} /></button>
+    <button data-add-plus onClick={onClick} className="opacity-0 group-hover:opacity-100 text-[#656464] hover:text-white transition-opacity"><Plus size={14} /></button>
   );
 }
 
@@ -6361,14 +6397,14 @@ export default function App() {
   // records which edge pulled it out. Opened by hovering/clicking the thin edge bars or by
   // dragging a task card into the edge zones; drops on drawer rows reassign.
   const [edgeDrawer, setEdgeDrawer] = useState<'left' | 'right' | null>(null);
-  // Client groups expanded in the edge tray's project list (default collapsed — the tray
-  // shows client headers; click one to reveal its projects, OR linger over one). Keyed by id.
-  const [edgeExpandedClients, setEdgeExpandedClients] = useState<Set<string>>(new Set());
+  // SINGLE-OPEN accordion in the edge tray: at most one client's projects showing at a time.
+  // Lingering over a client header opens it (and closes whichever was open); roll off → null.
+  const [edgeExpandedClient, setEdgeExpandedClient] = useState<string | null>(null);
   // Dwell timer for "linger over a client header → its accordion opens" in the tray.
   const trayHoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // Same collapse model for the focus page's left project-filter panel — client headers
-  // collapse the "sub-projects" so the user scans the big picture and expands on demand.
-  const [focusExpandedClients, setFocusExpandedClients] = useState<Set<string>>(new Set());
+  // SINGLE-OPEN accordion in the focus page's left project-filter panel — opening one client
+  // closes the others, so only one is expanded at a time.
+  const [focusExpandedClient, setFocusExpandedClient] = useState<string | null>(null);
   // Which PARENT projects are expanded (accordion) to show their sub-projects.
   const [focusExpandedProjects, setFocusExpandedProjects] = useState<Set<string>>(new Set());
   // Drag-to-accordion: while dragging a project, hovering a collapsed parent for a beat
@@ -9126,9 +9162,21 @@ export default function App() {
                   };
                   return (
                     <div className="flex-1 min-w-[280px] flex flex-col min-h-0 overflow-hidden">
-                      {/* Header doubles as the un-nest drop zone: drag a sub-project up here to
-                          promote it back to top level (focusnest:__root__). */}
-                      <ProjectsHeaderDropZone />
+                      {/* Header doubles as the un-nest drop zone AND a click-to-clear-filter
+                          target (clicking above the lists clears the active filter). */}
+                      <ProjectsHeaderDropZone onClearFilter={(focusClientId || focusProjectId) ? () => { setFocusClientId(null); setFocusProjectId(null); } : undefined} />
+                      {/* Explicit, discoverable filter-clear (best practice) — only when a
+                          filter is active. Sits pinned above the list. */}
+                      {(focusClientId || focusProjectId) && (
+                        <button
+                          type="button"
+                          onClick={() => { setFocusClientId(null); setFocusProjectId(null); }}
+                          className="shrink-0 h-[30px] w-full box-border flex flex-row gap-2 items-center px-[31px] text-[#8465ff] hover:bg-white/[0.03] transition-colors"
+                        >
+                          <X size={13} />
+                          <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px]">Clear filter</span>
+                        </button>
+                      )}
                       <CustomScroll>
                         {topMilestones.length > 0 && (
                           <>
@@ -9139,27 +9187,29 @@ export default function App() {
                         {proj2SortedClients.map((c) => {
                           const clientTop = projects.filter((pp) => pp.clientId === c.id && isTopLevel(pp));
                           if (clientTop.length === 0) return null;
-                          const expanded = focusExpandedClients.has(c.id);
+                          const expanded = focusExpandedClient === c.id;
                           const clientActive = focusClientId === c.id && !focusProjectId;
                           const hasActive = clientActive || projects.some((p) => p.clientId === c.id && p.id === focusProjectId);
                           return (
                             <Fragment key={c.id}>
                               {/* Click a client → FILTER the dashboard to all its tasks AND open
-                                  its accordion. Clicking the active client again clears the
-                                  filter. Picking a sub-project then narrows to that project. */}
+                                  its accordion (single-open: closes whatever else was open).
+                                  Clicking the active client again clears the filter. Picking a
+                                  sub-project then narrows to that project. Active = purple. */}
                               <button
                                 type="button"
                                 onClick={() => {
                                   setFocusProjectId(null);
-                                  setFocusClientId((cur) => (cur === c.id ? null : c.id));
-                                  setFocusExpandedClients((prev) => { const n = new Set(prev); n.add(c.id); return n; });
+                                  const nowActive = focusClientId !== c.id;
+                                  setFocusClientId(nowActive ? c.id : null);
+                                  setFocusExpandedClient(nowActive ? c.id : null);
                                 }}
-                                className={`group h-[37px] w-full text-left box-border flex flex-row gap-2 items-center px-[31px] transition-colors ${clientActive ? 'bg-white/[0.075]' : 'hover:bg-white/[0.03]'}`}
+                                className={`group h-[37px] w-full text-left box-border flex flex-row gap-2 items-center px-[31px] transition-colors ${clientActive ? 'bg-[#8465ff]/15' : 'hover:bg-white/[0.03]'}`}
                               >
                                 <span
                                   role="button"
                                   tabIndex={-1}
-                                  onClick={(e) => { e.stopPropagation(); setFocusExpandedClients((prev) => { const n = new Set(prev); n.has(c.id) ? n.delete(c.id) : n.add(c.id); return n; }); }}
+                                  onClick={(e) => { e.stopPropagation(); setFocusExpandedClient((cur) => (cur === c.id ? null : c.id)); }}
                                   className="shrink-0 -ml-[2px] p-[2px] text-[#5e5e5e] hover:text-white transition-colors cursor-pointer"
                                 >
                                   <ChevronRight size={12} className={`transition-transform ${expanded ? 'rotate-90' : ''}`} />
@@ -10232,11 +10282,11 @@ export default function App() {
           // underneath (TrayMask + calendarCollision keep the drag from leaking below). Drop a
           // task on a person → assignee added; on a project → the task MOVES to that project.
           const trayOpen = edgeDrawer === 'left';
+          // Single-open accordion, hover-driven: lingering over a client header opens ITS
+          // projects and closes whatever was open; rolling onto the next one readjusts.
           const hoverExpand = (cid: string) => {
             if (trayHoverTimerRef.current) clearTimeout(trayHoverTimerRef.current);
-            trayHoverTimerRef.current = setTimeout(() => {
-              setEdgeExpandedClients((prev) => { const n = new Set(prev); n.add(cid); return n; });
-            }, 300);
+            trayHoverTimerRef.current = setTimeout(() => { setEdgeExpandedClient(cid); }, 250);
           };
           const cancelHoverExpand = () => { if (trayHoverTimerRef.current) { clearTimeout(trayHoverTimerRef.current); trayHoverTimerRef.current = null; } };
           return (
@@ -10249,9 +10299,10 @@ export default function App() {
                 <button
                   type="button"
                   // Click opens (same as hover); the tray's onMouseLeave closes it when the
-                  // cursor leaves. No toggle — avoids the "stuck" ambiguity.
+                  // cursor leaves. No toggle — avoids the "stuck" ambiguity. The bar is the
+                  // same card-gray as the tray + calendar cards (one material language).
                   onClick={() => setEdgeDrawer('left')}
-                  className="h-full w-full bg-white/[0.08] hover:bg-white/[0.14] transition-colors flex items-center justify-center"
+                  className="h-full w-full bg-[#333333] hover:bg-[#3a3a3a] transition-colors flex items-center justify-center"
                   aria-label="Assign drawer"
                   title="Assign project / person"
                 >
@@ -10262,8 +10313,10 @@ export default function App() {
                   aligns with the column content (top-[104px]). TrayMask covers the whole area
                   so a drag over any part of it stops affecting the columns below. */}
               <div
-                onMouseLeave={() => { setEdgeDrawer((d) => (d === 'left' ? null : d)); cancelHoverExpand(); }}
-                className={`fixed left-[22px] border-r top-[104px] bottom-[84px] w-[320px] z-40 bg-[#1f1f1f] border-[#333333] flex flex-col transition-transform duration-200 ease-out ${trayOpen ? 'translate-x-0' : '-translate-x-[342px]'}`}
+                onMouseLeave={() => { setEdgeDrawer((d) => (d === 'left' ? null : d)); cancelHoverExpand(); setEdgeExpandedClient(null); }}
+                // Card-gray (#333333) — same material as the rail + calendar cards, no darker
+                // panel behind it. Opaque so it still masks the columns underneath.
+                className={`fixed left-[22px] top-[104px] bottom-[84px] w-[320px] z-40 bg-[#333333] flex flex-col transition-transform duration-200 ease-out ${trayOpen ? 'translate-x-0' : '-translate-x-[342px]'}`}
               >
                 <TrayMask />
                 {/* Assign To — people. */}
@@ -10289,15 +10342,15 @@ export default function App() {
                   {proj2SortedClients.map((c) => {
                     const clientProjects = projects.filter((p) => p.clientId === c.id);
                     if (clientProjects.length === 0) return null;
-                    const expanded = edgeExpandedClients.has(c.id);
+                    const expanded = edgeExpandedClient === c.id;
                     return (
                       <Fragment key={c.id}>
                         <button
                           type="button"
                           onMouseEnter={() => hoverExpand(c.id)}
                           onMouseLeave={cancelHoverExpand}
-                          onClick={() => { cancelHoverExpand(); setEdgeExpandedClients((prev) => { const n = new Set(prev); n.has(c.id) ? n.delete(c.id) : n.add(c.id); return n; }); }}
-                          className="group h-[37px] w-full text-left box-border flex flex-row gap-2 items-center px-[31px] hover:bg-white/[0.03] transition-colors"
+                          onClick={() => { cancelHoverExpand(); setEdgeExpandedClient((cur) => (cur === c.id ? null : c.id)); }}
+                          className="group h-[37px] w-full text-left box-border flex flex-row gap-2 items-center px-[31px] hover:bg-white/[0.05] transition-colors"
                         >
                           <ChevronRight size={12} className={`text-[#5e5e5e] transition-transform ${expanded ? 'rotate-90' : ''}`} />
                           <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis text-white">{c.name || c.short}</span>
