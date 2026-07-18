@@ -1857,16 +1857,16 @@ function BottomBar({ mode, onSetMode, onAdd }: { mode: AppMode; onSetMode: (m: A
           alignment with the leftmost column's checkboxes. Settings stays at the standard
           35px right gutter. */}
       <div className="flex flex-row gap-10 items-center">
-        <button onClick={() => onSetMode('focus')} className={iconClass(mode === 'focus')}><LayoutDashboard size={22} /></button>
-        <button onClick={() => onSetMode('dashboard')} className={iconClass(mode === 'dashboard')}><List size={22} /></button>
-        <button onClick={() => onSetMode('projectView')} className={iconClass(mode === 'projectView')}><FolderTree size={22} /></button>
-        <button onClick={() => onSetMode('calendar')} className={iconClass(mode === 'calendar')}><CalendarIcon size={22} /></button>
-        <motion.button onClick={onAdd} whileHover={{ scale: 1.06 }} whileTap={{ scale: 0.94 }} className="size-[27px] rounded-full bg-[#7363FF] flex items-center justify-center shadow-lg">
+        <button title="Focus" aria-label="Focus" onClick={() => onSetMode('focus')} className={iconClass(mode === 'focus')}><LayoutDashboard size={22} /></button>
+        <button title="List" aria-label="List" onClick={() => onSetMode('dashboard')} className={iconClass(mode === 'dashboard')}><List size={22} /></button>
+        <button title="Projects" aria-label="Projects" onClick={() => onSetMode('projectView')} className={iconClass(mode === 'projectView')}><FolderTree size={22} /></button>
+        <button title="Calendar" aria-label="Calendar" onClick={() => onSetMode('calendar')} className={iconClass(mode === 'calendar')}><CalendarIcon size={22} /></button>
+        <motion.button title="Add task" aria-label="Add task" onClick={onAdd} whileHover={{ scale: 1.06 }} whileTap={{ scale: 0.94 }} className="size-[27px] rounded-full bg-[#7363FF] flex items-center justify-center shadow-lg">
           <Plus size={16} color="#232323" strokeWidth={2.5} />
         </motion.button>
       </div>
       {/* Settings — pinned to the right edge with the same 35px gutter. */}
-      <button onClick={() => onSetMode('settings')} className={iconClass(mode === 'settings')}><SettingsIcon size={22} /></button>
+      <button title="Settings" aria-label="Settings" onClick={() => onSetMode('settings')} className={iconClass(mode === 'settings')}><SettingsIcon size={22} /></button>
     </div>
   );
 }
@@ -3852,8 +3852,14 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
             {client?.short && project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : 'text-[#656464]'}`}>{client.short}<Arrowhead dim={task.completed || categoryDimmed} />{project.name}</p>}
             {client?.short && !project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : metaColor}`}>{client.short}</p>}
             {!client?.short && project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : 'text-[#656464]'}`}>{project.name}</p>}
-            {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed || categoryDimmed} />)}
             {task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : isLateDeadline(task.deadline) ? 'text-[#FF7171]' : 'text-[#656464]'}`}>{formatDeadline(task.deadline)}</p>}
+            {/* Assignees AFTER the date — hidden at rest, fade in on card-hover (~200ms), and on
+                roll-off linger ~1s then fade out over 500ms (asymmetric group-hover transition). */}
+            {task.assignees.length > 0 && (
+              <span className="flex flex-row items-center gap-[6px] transition-opacity opacity-0 duration-500 delay-1000 group-hover:opacity-100 group-hover:duration-200 group-hover:delay-0">
+                {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed || categoryDimmed} />)}
+              </span>
+            )}
             {/* + button hugs the inline task info on the second row. Trash stays pinned at top-right via absolute. */}
             {onAddSibling && (
               <button
@@ -5425,7 +5431,7 @@ export default function App() {
     setCurrentUserShortState(s);
     try { window.localStorage.setItem('todo-app-user-short', s); } catch {}
   }, []);
-  const [mode, setMode] = useState<AppMode>('dashboard');
+  const [mode, setMode] = useState<AppMode>('focus');
   const [showAdd, setShowAdd] = useState(false);
   const [prefillList, setPrefillList] = useState<ListId | null>(null);
   const [editingTask, setEditingTask] = useState<Task | null>(null);
@@ -8460,7 +8466,7 @@ export default function App() {
   // the band's iso to suppress exactly those. Chips for OTHER days still render, which is
   // how an overdue task inside Today keeps its red late date. Dashboard-milestones callsite
   // passes nothing and keeps all dates.
-  const renderReadonlyBucket = (list: Task[], omitDeadlineIso?: string) => (
+  const renderReadonlyBucket = (list: Task[], omitDeadlineIso?: string, titleOnly?: boolean) => (
     <>
       {list.map((task) => {
         const project = task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
@@ -8478,8 +8484,10 @@ export default function App() {
               {/* Use the shared taskOrderSlots so dashboard milestones honor the user's chosen
                   meta order (cpt / tcp / ptc, etc.) — same as regular task rows do. */}
               {(() => {
-                const showClient = !!client;
-                const showProject = !!project;
+                // titleOnly (milestones column): drop the client / project meta entirely — just
+                // the milestone name + its date read cleanly in a narrow column.
+                const showClient = !titleOnly && !!client;
+                const showProject = !titleOnly && !!project;
                 const metaCls = `font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap ${task.completed ? 'text-[#474747]' : 'text-[#656464]'}`;
                 return taskOrderSlots(taskOrder, showProject, showClient).map((slot, i) => {
                   if (slot === 'project' && project) return <p key={`p-${i}`} className={metaCls}>{project.name}</p>;
@@ -8490,7 +8498,7 @@ export default function App() {
                 });
               })()}
             </div>
-            {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} />)}
+            {!titleOnly && task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} />)}
             {task.deadline && task.deadline !== omitDeadlineIso && (
               <>
                 {!isScheduled && <DeadlineArrow dim={task.completed} />}
@@ -9276,7 +9284,7 @@ export default function App() {
                   (each child carries its own min-width). NOTE for un-parking
                   FOCUS_SHOW_INFO / FOCUS_SHOW_REFERENCES: the track template is fixed at
                   five tracks — re-enabling those columns means widening the template. */}
-              <div className="grid grid-cols-[1fr_2fr_2fr_2fr] gap-0 flex-1 min-h-0 w-full overflow-x-auto">
+              <div className="grid grid-cols-[1fr_1fr_2fr_2fr_2fr] gap-0 flex-1 min-h-0 w-full overflow-x-auto">
                 {/* Column 1 — Projects panel: flat master list (milestones pinned on top);
                     clicking a project FILTERS the Dashboard stack + all three calendar
                     columns (focusProjectId). Active row shows an ×; click again to clear.
@@ -9288,20 +9296,7 @@ export default function App() {
                   // expands on demand. Clicking a project FILTERS (not navigates) — the
                   // center Dashboard stack and the three calendar columns narrow to it.
                   // The active project highlights + shows an ×; click again to clear.
-                  // Milestones are grouped by their effective LIST in the universal section
-                  // sequence (Work / Projects / Admin), then deadline within — matching how
-                  // everything else on the page is ordered.
-                  const listRank = (t: Task) => { const idx = listSequence.indexOf(effectiveListFor(t)); return idx < 0 ? 99 : idx; };
-                  const clientOfM = (t: Task) => t.clientId ?? (t.projectId ? projects.find((p) => p.id === t.projectId)?.clientId : undefined);
-                  const topMilestones = visibleTasks
-                    .filter((t) => t.type === 'scheduled' && (focusProjectId ? t.projectId === focusProjectId : focusClientId ? clientOfM(t) === focusClientId : true))
-                    .sort((a, b) => {
-                      if (listRank(a) !== listRank(b)) return listRank(a) - listRank(b);
-                      const ad = a.deadline || '￿';
-                      const bd = b.deadline || '￿';
-                      if (ad !== bd) return ad < bd ? -1 : 1;
-                      return a.title.localeCompare(b.title);
-                    });
+                  // (Milestones now live in their own dedicated column — see below.)
                   // Project nesting: a project with a parentId renders indented under its
                   // parent (accordion), and NOT in its own client group. `childrenOf` maps a
                   // parent id → its sub-projects; `isTopLevel` = no parent (or orphaned parent).
@@ -9355,12 +9350,6 @@ export default function App() {
                         <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px]">Clear Filter</span>
                       </button>
                       <CustomScroll>
-                        {topMilestones.length > 0 && (
-                          <>
-                            {renderReadonlyBucket(topMilestones)}
-                            <Spacer />
-                          </>
-                        )}
                         {/* CLIENTS ONLY — the filter is a flat roster of every client. Muted list-
                             gray by default; the SELECTED one goes white (no purple anywhere). Click a
                             client to filter the dashboard to its tasks; click again (or the X) to clear. */}
@@ -9384,12 +9373,35 @@ export default function App() {
                     </div>
                   );
                 })()}
-                {/* Columns 2–4 — the calendar as THREE wide (2fr) side-by-side day columns:
-                    Today, Tomorrow, and the day after — each a single day (the old list/
-                    Dashboard stack is gone; this IS the dashboard now). Same engine as the
-                    calendar view (focusStripCells ← computeCalendarDistribution), same band
-                    structure (Work / Admin / Projects), same CalendarCards. The left-panel
-                    client filter narrows all three columns. */}
+                {/* Column 2 — MILESTONES, in their own narrow column (same 1fr width as the filter).
+                    Grouped by effective list then deadline, like everything else. Rendered
+                    title-only (no client / project meta) — just the milestone name + its date. */}
+                {(() => {
+                  const clientOfMs = (t: Task) => t.clientId ?? (t.projectId ? projects.find((p) => p.id === t.projectId)?.clientId : undefined);
+                  const msRank = (t: Task) => { const idx = listSequence.indexOf(effectiveListFor(t)); return idx < 0 ? 99 : idx; };
+                  const milestones = visibleTasks
+                    .filter((t) => t.type === 'scheduled' && (focusProjectId ? t.projectId === focusProjectId : focusClientId ? clientOfMs(t) === focusClientId : true))
+                    .sort((a, b) => {
+                      if (msRank(a) !== msRank(b)) return msRank(a) - msRank(b);
+                      const ad = a.deadline || '￿'; const bd = b.deadline || '￿';
+                      if (ad !== bd) return ad < bd ? -1 : 1;
+                      return a.title.localeCompare(b.title);
+                    });
+                  return (
+                    <div className="flex-1 min-w-[280px] flex flex-col min-h-0 overflow-hidden">
+                      <div className="shrink-0 h-[37px] flex items-center px-[31px]" style={{ marginBottom: SPACING.dcr }}>
+                        <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">Milestones</p>
+                      </div>
+                      <CustomScroll>
+                        {renderReadonlyBucket(milestones, undefined, true)}
+                      </CustomScroll>
+                    </div>
+                  );
+                })()}
+                {/* Columns 3–5 — the calendar as THREE wide (2fr) side-by-side day columns:
+                    Today, Tomorrow, and Next. Same engine as the calendar view (focusStripCells ←
+                    computeCalendarDistribution), same band structure (Work / Admin / Projects),
+                    same CalendarCards. The left-panel client filter narrows all three columns. */}
                 {(() => {
                   const stripAnchor = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; })();
                   // One band block (label + cards) per CAL_LIST, aggregated over the
