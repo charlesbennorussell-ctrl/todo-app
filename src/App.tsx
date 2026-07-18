@@ -1,7 +1,7 @@
-﻿import { Fragment, memo, useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect } from 'react';
+import { Fragment, memo, useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect } from 'react';
 import { flushSync } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
-import { Plus, X, List, FolderTree, SlidersHorizontal as SettingsIcon, Folder, Trash2, Calendar as CalendarIcon, ChevronLeft, ChevronRight, ArrowUp, LayoutDashboard, Heart, FileText } from 'lucide-react';
+import { Plus, X, List, FolderTree, SlidersHorizontal as SettingsIcon, Folder, Trash2, Calendar as CalendarIcon, ChevronLeft, ChevronRight, ArrowUp, LayoutDashboard, Heart, FileText, Search } from 'lucide-react';
 import {
   DndContext,
   KeyboardSensor,
@@ -968,7 +968,7 @@ function SortableTaskItem({
         : { transform: CSS.Transform.toString(transform), transition: !isAnyDragging ? 'none' : `transform ${MOTION.base}ms ${MOTION.easeOut}` });
   const isScheduled = task.type === 'scheduled';
   const isNext = task.section === 'next' || task.section === 'tomorrow';
-  const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID;
+  const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID || task.list === 'personal';
   // Expired milestone: deadline is strictly before today's day boundary. Renders in a faint
   // purple so it's visible (lingering) but visually quieted vs. live milestones.
   const isExpiredMilestone = isScheduled && !!task.deadline && task.deadline < todayISO();
@@ -1778,7 +1778,7 @@ function ProjectsHeaderDropZone({ onClearFilter }: { onClearFilter?: () => void 
       className={`shrink-0 group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] transition-colors ${onClearFilter ? 'cursor-pointer' : ''} ${isOver ? 'bg-[#8465ff]/20' : ''}`}
       style={{ marginBottom: SPACING.dcr }}
     >
-      <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">Projects{isOver ? ' — drop to un-nest' : ''}</p>
+      <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">Client / Projects{isOver ? ' — drop to un-nest' : ''}</p>
     </div>
   );
 }
@@ -1857,10 +1857,20 @@ function BottomBar({ mode, onSetMode, onAdd }: { mode: AppMode; onSetMode: (m: A
           alignment with the leftmost column's checkboxes. Settings stays at the standard
           35px right gutter. */}
       <div className="flex flex-row gap-10 items-center">
-        <button title="Focus" aria-label="Focus" onClick={() => onSetMode('focus')} className={iconClass(mode === 'focus')}><LayoutDashboard size={22} /></button>
-        <button title="List" aria-label="List" onClick={() => onSetMode('dashboard')} className={iconClass(mode === 'dashboard')}><List size={22} /></button>
-        <button title="Projects" aria-label="Projects" onClick={() => onSetMode('projectView')} className={iconClass(mode === 'projectView')}><FolderTree size={22} /></button>
-        <button title="Calendar" aria-label="Calendar" onClick={() => onSetMode('calendar')} className={iconClass(mode === 'calendar')}><CalendarIcon size={22} /></button>
+        {/* Order: Focus, Calendar, List, Project. Each icon carries a styled hover tooltip
+            (the native title= delay/skin read as missing). Focus stays first so its glyph
+            center keeps aligning with the leftmost column's checkboxes (see comment above). */}
+        {([
+          { m: 'focus', label: 'Focus', Icon: LayoutDashboard },
+          { m: 'calendar', label: 'Calendar', Icon: CalendarIcon },
+          { m: 'dashboard', label: 'List', Icon: List },
+          { m: 'projectView', label: 'Project', Icon: FolderTree },
+        ] as { m: AppMode; label: string; Icon: React.ComponentType<{ size?: number }> }[]).map(({ m, label, Icon }) => (
+          <div key={m} className="group relative flex items-center">
+            <button aria-label={label} onClick={() => onSetMode(m)} className={iconClass(mode === m)}><Icon size={22} /></button>
+            <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 rounded bg-[#333333] text-white text-[11px] whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity">{label}</span>
+          </div>
+        ))}
         <motion.button title="Add task" aria-label="Add task" onClick={onAdd} whileHover={{ scale: 1.06 }} whileTap={{ scale: 0.94 }} className="size-[27px] rounded-full bg-[#7363FF] flex items-center justify-center shadow-lg">
           <Plus size={16} color="#232323" strokeWidth={2.5} />
         </motion.button>
@@ -3618,7 +3628,7 @@ function CalendarColumnDroppable({ date, children }: { date: string; children: R
   // independently-scrolling content area (the caller provides the inner structure:
   // a shrink-0 day-name row plus a flex-1 overflow-y-auto wrapper for the bands).
   return (
-    <div ref={setNodeRef} className="min-w-[200px] border-r border-[#333333] last:border-r-0 flex flex-col h-full min-h-0 overflow-hidden">
+    <div ref={setNodeRef} className="min-w-[200px] flex flex-col h-full min-h-0 overflow-hidden">
       {children}
     </div>
   );
@@ -3628,7 +3638,26 @@ const CAL_LISTS: { id: ListId; label: string }[] = [
   { id: 'admin', label: 'Admin' },
   { id: 'work', label: 'Work' },
   { id: 'projects', label: 'Projects' },
+  { id: 'personal', label: 'Personal' },
 ];
+
+// A task is "private" (Personal) when it lives in the Personal CATEGORY (list) or under the
+// legacy Personal CLIENT — either way it's scoped to its assignees, so only the owner sees it.
+const isPrivateTask = (t: Task) => t.list === 'personal' || t.clientId === PERSONAL_CLIENT_ID;
+
+// Focus-page live search — does a task match the query? Checks its title + its project name +
+// its client's name/short (case-insensitive). An empty query matches everything.
+const taskMatchesQuery = (t: Task, query: string, projects: Project[], clients: Client[]): boolean => {
+  const q = query.trim().toLowerCase();
+  if (!q) return true;
+  const proj = t.projectId ? projects.find((p) => p.id === t.projectId) : undefined;
+  const cid = t.clientId ?? proj?.clientId;
+  const cli = cid ? clients.find((c) => c.id === cid) : undefined;
+  return t.title.toLowerCase().includes(q)
+    || !!(proj?.name && proj.name.toLowerCase().includes(q))
+    || !!(cli?.name && cli.name.toLowerCase().includes(q))
+    || !!(cli?.short && cli.short.toLowerCase().includes(q));
+};
 
 // Per-day caps shared by the week calendar and the focus page's mini-calendar strip:
 //   CAL_TASKS_PER_DAY (9)              — global cap on total slots (mandatory + queue)
@@ -3732,7 +3761,7 @@ function CalendarCardBody({ task, projects, clients, taskOrder = 'ptc' }: { task
   const client = resolvedClientId ? clients.find((c) => c.id === resolvedClientId) : undefined;
   const isScheduled = task.type === 'scheduled';
   const isNext = task.section === 'next' || task.section === 'tomorrow';
-  const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID;
+  const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID || task.list === 'personal';
   const titleColor = task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : isNext ? 'text-[#a8a8a8]' : 'text-white';
   const metaColor = isScheduled ? 'text-[#8465ff]' : 'text-[#656464]';
   // Whether the client lives ON the first row (combined with project per the slot helper) —
@@ -3794,7 +3823,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
   const style = { transform: CSS.Transform.toString(transform), transition: isAnyDragging ? `transform ${MOTION.base}ms ${MOTION.easeOut}` : 'none' };
   const isScheduled = task.type === 'scheduled';
   const isNext = task.section === 'next' || task.section === 'tomorrow';
-  const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID;
+  const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID || task.list === 'personal';
   // Category-dim color: 5% brighter than the completed-task #383838 (rgb 56 → 69 = #454545).
   // Wins over every other state — when the user is dragging across categories, ALL non-source
   // cards drop to this single muted gray regardless of whether they're scheduled, completed,
@@ -3825,13 +3854,13 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
             setting doesn't apply here. Line 1: checkbox + title. Line 2: client › project,
             assignees, deadline, + button. Checkbox is INLINE with the title so it stays aligned
             with the title cap-height when the whole content block is vertically centered. */}
-        <div className="flex flex-row items-center gap-[10px]">
+        <div className="flex flex-row items-center gap-[10px] w-full pr-5">
           {!isScheduled && (
             <div onPointerDown={(e) => e.stopPropagation()} className="shrink-0 flex items-center justify-center">
               <TaskCheckbox completed={task.completed} started={task.started} onToggle={onToggle} />
             </div>
           )}
-          <div className="flex flex-row items-center gap-[4px] min-w-0">
+          <div className="flex flex-row items-center gap-[4px] min-w-0 flex-1">
             {/* Title is ALWAYS an inline EditableText now — click to edit, drag-in-text to select
                 (EditableText swallows the pointer while editing so it doesn't start a card drag).
                 autoFocus only for a freshly created task. No onDiscardIfEmpty: the 3-min blank-sweep
@@ -3844,6 +3873,20 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
               className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleColor}`}
             />
           </div>
+          {/* + moved to the END of line 1 (it used to sit on the meta row where it read as
+              another meta chip and confused the layout). Hover-reveal, ml-auto hugs the right,
+              and the row's pr-5 keeps it clear of the absolute trash button. */}
+          {onAddSibling && (
+            <button
+              type="button"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => { e.stopPropagation(); onAddSibling(); }}
+              className="shrink-0 ml-auto p-[2px] opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity"
+              aria-label="Add task in same project"
+            >
+              <Plus size={12} />
+            </button>
+          )}
         </div>
         {/* Meta row indents past the checkbox + gap so it lines up under the title text, not under
             the checkbox. 22px = checkbox width (12) + title-row gap (10). When there's no checkbox
@@ -3861,21 +3904,9 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
             {/* Assignees AFTER the date — hidden at rest, fade in on card-hover (~200ms), and on
                 roll-off linger ~1s then fade out over 500ms (asymmetric group-hover transition). */}
             {task.assignees.length > 0 && (
-              <span className="flex flex-row items-center gap-[6px] transition-opacity opacity-0 duration-500 delay-1000 group-hover:opacity-100 group-hover:duration-200 group-hover:delay-0">
+              <span className="flex flex-row items-center gap-[6px] linger-reveal">
                 {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed || categoryDimmed} />)}
               </span>
-            )}
-            {/* + button hugs the inline task info on the second row. Trash stays pinned at top-right via absolute. */}
-            {onAddSibling && (
-              <button
-                type="button"
-                onPointerDown={(e) => e.stopPropagation()}
-                onClick={(e) => { e.stopPropagation(); onAddSibling(); }}
-                className="p-[2px] opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity"
-                aria-label="Add task in same project"
-              >
-                <Plus size={12} />
-              </button>
             )}
           </div>
       </div>
@@ -3981,7 +4012,7 @@ function WeekCalendarMode({
     const project = task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
     const resolvedClientId = task.clientId ?? project?.clientId;
     const client = resolvedClientId ? clients.find((c) => c.id === resolvedClientId) : undefined;
-    const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID;
+    const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID || task.list === 'personal';
     // Milestone calendar cards match regular calendar cards: square + no stroke.
     // The card background is a faint-purple tint — a quieter twin of the regular task card's
     // white tint. Title always on line 1; meta on line 2. Expired milestones (deadline before
@@ -4491,7 +4522,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
         </div>
         {/* Task display order — three options. Persisted per-browser via localStorage. */}
         <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-0">
-          <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Task order</p>
+          <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Task Order</p>
         </div>
         <div className="px-[31px] mb-[37px] flex flex-col gap-2">
           {([
@@ -4516,34 +4547,23 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
             );
           })}
         </div>
-        {/* Section sequence — the UNIVERSAL Work / Projects / Admin order. One setting
-            drives every surface: list-view columns, dashboard-stack blocks, project-view
+        {/* Section sequence — the UNIVERSAL Work / Projects / Admin / Personal order. One
+            setting drives every surface: list-view columns, dashboard-stack blocks, project-view
             columns, calendar bands (and their queue-fill priority), and the focus page's
             day columns. */}
         <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-0">
-          <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Section sequence</p>
+          <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Section Sequence</p>
         </div>
         <div className="px-[31px] mb-[37px] flex flex-col gap-2">
-          {([
-            ['work', 'projects', 'admin'],
-            ['work', 'admin', 'projects'],
-            ['projects', 'work', 'admin'],
-            ['projects', 'admin', 'work'],
-            ['admin', 'work', 'projects'],
-            ['admin', 'projects', 'work'],
-          ] as ListId[][]).map((seq) => {
-            const active = seq.join(',') === listSequence.join(',');
-            return (
-              <button
-                key={seq.join(',')}
-                type="button"
-                onClick={() => onSetListSequence(seq)}
-                className={`text-left text-[13px] transition-colors ${active ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}
-              >
-                {seq.map((l) => LIST_TITLES[l]).join('   ')}
-              </button>
-            );
-          })}
+          {/* Per-category up/down reorder — scales to any number of categories (now four,
+              including Personal). This order drives every surface. */}
+          {listSequence.map((l, i) => (
+            <div key={l} className="flex flex-row items-center gap-3 h-[26px]">
+              <span className="text-[13px] text-white w-[90px]">{LIST_TITLES[l]}</span>
+              <button type="button" disabled={i === 0} onClick={() => { const n = [...listSequence]; [n[i - 1], n[i]] = [n[i], n[i - 1]]; onSetListSequence(n); }} className="text-[14px] leading-none text-[#656464] hover:text-white disabled:opacity-20 disabled:hover:text-[#656464] transition-colors" aria-label={`Move ${LIST_TITLES[l]} up`}>&uarr;</button>
+              <button type="button" disabled={i === listSequence.length - 1} onClick={() => { const n = [...listSequence]; [n[i + 1], n[i]] = [n[i], n[i + 1]]; onSetListSequence(n); }} className="text-[14px] leading-none text-[#656464] hover:text-white disabled:opacity-20 disabled:hover:text-[#656464] transition-colors" aria-label={`Move ${LIST_TITLES[l]} down`}>&darr;</button>
+            </div>
+          ))}
         </div>
         {/* Maintenance — clean up "ghost" projects (blank name, no tasks). Runs
             automatically 5s after load, but this triggers it on demand. */}
@@ -4611,7 +4631,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
             preserved). The midnight refill keeps Tomorrow at 5 tasks even while hidden — flip
             back on and you see the buffer ready to go. */}
         <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-0">
-          <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Tomorrow section</p>
+          <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Tomorrow Section</p>
         </div>
         <div className="px-[31px] mb-[37px] flex flex-row gap-4">
           <button type="button" onClick={() => onSetTomorrowEnabled(true)} className={`text-[13px] transition-colors ${tomorrowEnabled ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>On</button>
@@ -4621,7 +4641,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
             case. Brand-name vocabulary + ALL-CAPS acronyms are preserved; small words ("and",
             "the", "of"…) stay lowercase. Off → leave titles exactly as typed. */}
         <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-0">
-          <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Title case auto-correct</p>
+          <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Title Case Auto-Correct</p>
         </div>
         <div className="px-[31px] mb-[37px] flex flex-row gap-4">
           <button type="button" onClick={() => onSetCaseMode('off')} className={`text-[13px] transition-colors ${caseMode === 'off' ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>Off</button>
@@ -4875,7 +4895,7 @@ function ProjectTaskRow({ task, listId, onToggle, onRename, onDelete, onEdit, on
   const client = resolvedClientId ? clients.find((c) => c.id === resolvedClientId) : undefined;
   // Personal-client tasks render the hollow assignee badge regardless of whether project context is shown.
   const ownerProject = task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
-  const isPersonal = (task.clientId ?? ownerProject?.clientId) === PERSONAL_CLIENT_ID;
+  const isPersonal = (task.clientId ?? ownerProject?.clientId) === PERSONAL_CLIENT_ID || task.list === 'personal';
   return (
     <Displaced offset={displacementOffset} gap={insertionGap} active={!!isAnyDragging}>
     {/* Whole-card drag â€” see SortableTaskItem for the rationale. */}
@@ -5226,9 +5246,9 @@ function TaskQuickEdit({
           <Pill active={task.section === 'next'} onClick={() => apply({ section: 'next' })}>Next</Pill>
         </div>
 
-        {/* List: Work / Projects / Admin */}
+        {/* List: Work / Projects / Admin / Personal */}
         <div className="px-[31px] flex flex-row gap-4 items-center">
-          {(['work', 'projects', 'admin'] as ListId[]).map((l) => (
+          {LISTS.map((l) => (
             <Pill key={l} active={task.list === l} onClick={() => apply({ list: l })}>{LIST_TITLES[l]}</Pill>
           ))}
         </div>
@@ -5445,7 +5465,7 @@ export default function App() {
   // Projects view: slide-out Resources/Clients assignment tray (left edge).
   // Auto-opens while a drag approaches the left edge; chevron handle toggles
   // it manually for adding/renaming people and clients.
-  const [assignTrayOpen, setAssignTrayOpen] = useState(false);
+  // (assignTrayOpen removed — the Projects view now uses the shared master assign drawer.)
   // 'edit' = double-click, panel stays open until you click off. 'quick' = right-click,
   // panel closes after a single change is applied (one-shot mode for quick re-categorising).
   const [editMode, setEditMode] = useState<'edit' | 'quick'>('edit');
@@ -5469,11 +5489,17 @@ export default function App() {
   // surface hardcoded its own order and they had all drifted apart. Persisted
   // per-browser, set from Settings → Section sequence.
   const [listSequence, setListSequenceState] = useState<ListId[]>(() => {
-    const fallback: ListId[] = ['work', 'projects', 'admin'];
+    const fallback: ListId[] = ['work', 'projects', 'admin', 'personal'];
     if (typeof window === 'undefined') return fallback;
     try {
       const v = JSON.parse(window.localStorage.getItem('todo-app-list-sequence') || 'null');
-      if (Array.isArray(v) && v.length === 3 && fallback.every((l) => v.includes(l))) return v as ListId[];
+      if (Array.isArray(v) && v.length >= 3) {
+        // Keep the user's saved order, drop anything unknown, and append any category that's
+        // missing — this migrates old 3-item sequences by adding 'personal' at the end.
+        const seq = (v as ListId[]).filter((l) => fallback.includes(l));
+        for (const l of fallback) if (!seq.includes(l)) seq.push(l);
+        if (seq.length === fallback.length) return seq;
+      }
     } catch {}
     return fallback;
   });
@@ -6495,6 +6521,8 @@ export default function App() {
   // narrows to just that project.
   const [focusProjectId, setFocusProjectId] = useState<string | null>(null);
   const [focusClientId, setFocusClientId] = useState<string | null>(null);
+  // Focus-page live search query — filters the day columns + the Milestone / Goals column.
+  const [focusSearch, setFocusSearch] = useState('');
   // Edge assign rails: which slide-out drawer is open. Both sides now show the SAME
   // unified tray (Assign To people on top, Assign Project below). 'left' | 'right' just
   // records which edge pulled it out. Opened by hovering/clicking the thin edge bars or by
@@ -7972,7 +8000,7 @@ export default function App() {
         // STEP B — snapshot fill Today AND Tomorrow from the queue. Each list pulls up to
         // TARGET (3) queue tasks per day. After this snapshot the calendar leaves today +
         // tomorrow alone for the rest of the day; only Wed+ keeps re-distributing in real-time.
-        const lists: ListId[] = ['work', 'projects', 'admin'];
+        const lists: ListId[] = LISTS;
         for (const targetSection of ['today', 'tomorrow'] as const) {
           for (const listId of lists) {
             const cmp = (a: Task, b: Task) => a.order - b.order;
@@ -8184,7 +8212,7 @@ export default function App() {
     const yesterday = (() => { const d = new Date(); d.setHours(d.getHours() - 4); d.setDate(d.getDate() - 1); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; })();
     return tasks.filter((t) => {
       if (t.trashed) return false;
-      if (t.clientId === PERSONAL_CLIENT_ID && !t.assignees.includes(currentUserShort)) return false;
+      if (isPrivateTask(t) && !t.assignees.includes(currentUserShort)) return false;
       if (t.completed) {
         // Recently revived tasks ALWAYS stay visible inside the revive window — gives
         // the user a 10-min grace to re-check after an accidental un-check.
@@ -8209,7 +8237,7 @@ export default function App() {
 
   // Calendar view bypasses the completedDay filter — historical completions stay visible there.
   const calendarTasks = useMemo(
-    () => tasks.filter((t) => !t.trashed && (t.clientId !== PERSONAL_CLIENT_ID || t.assignees.includes(currentUserShort))),
+    () => tasks.filter((t) => !t.trashed && (!isPrivateTask(t) || t.assignees.includes(currentUserShort))),
     [tasks, currentUserShort]
   );
 
@@ -8230,7 +8258,7 @@ export default function App() {
   // scoping still applies — other users don't see your trashed Personal items.
   const trashedTasks = useMemo(
     () => tasks
-      .filter((t) => t.trashed && (t.clientId !== PERSONAL_CLIENT_ID || t.assignees.includes(currentUserShort)))
+      .filter((t) => t.trashed && (!isPrivateTask(t) || t.assignees.includes(currentUserShort)))
       .sort((a, b) => (b.trashedAt ?? 0) - (a.trashedAt ?? 0)),
     [tasks, currentUserShort]
   );
@@ -8242,7 +8270,7 @@ export default function App() {
     return tasks
       .filter((t) => {
         if (t.trashed) return false;
-        if (t.clientId === PERSONAL_CLIENT_ID && !t.assignees.includes(currentUserShort)) return false;
+        if (isPrivateTask(t) && !t.assignees.includes(currentUserShort)) return false;
         if (t.completed) return true;
         if (t.revivedAt && now - t.revivedAt < REVIVE_WINDOW_MS) return true;
         return false;
@@ -8323,7 +8351,7 @@ export default function App() {
     const dashBuckets = ['milestones', 'inbox', 'today', 'tomorrow', 'next'] as const;
     for (const s of dashBuckets) {
       const agg: Task[] = [];
-      for (const l of ['work', 'projects', 'admin'] as ListId[]) {
+      for (const l of LISTS) {
         for (const t of (m[`${l}:${s}`] || [])) {
           if (t.assignees.length === 0 || t.assignees.includes(currentUserShort)) agg.push(t);
         }
@@ -8353,7 +8381,7 @@ export default function App() {
     // Per-list dashboard sub-sections under Today: each list's today tasks for the
     // current user (or unassigned — same rule as the aggregate above). Order
     // preserved from the underlying today bucket.
-    for (const l of ['work', 'projects', 'admin'] as ListId[]) {
+    for (const l of LISTS) {
       const agg = (m[`${l}:today`] || []).filter((t) => t.assignees.length === 0 || t.assignees.includes(currentUserShort));
       m[`dashboard:list:${l}`] = agg;
     }
@@ -8503,7 +8531,7 @@ export default function App() {
         const client = resolvedClientId ? clients.find((c) => c.id === resolvedClientId) : undefined;
         const isScheduled = task.type === 'scheduled';
         const isNext = task.section === 'next' || task.section === 'tomorrow';
-        const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID;
+        const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID || task.list === 'personal';
         const titleColor = isScheduled ? 'text-[#8465ff]' : task.completed ? 'text-[#474747]' : isNext ? 'text-[#a8a8a8]' : 'text-white';
         const metaColor = task.completed ? 'text-[#474747]' : isScheduled ? 'text-[#8465ff]' : 'text-[#656464]';
         return (
@@ -9071,20 +9099,14 @@ export default function App() {
       onDragMove={(ev) => {
         const ae = ev.activatorEvent as PointerEvent | null;
         const x = (ae && typeof ae.clientX === 'number' ? ae.clientX : 0) + ev.delta.x;
-        // Projects view: dragging a card toward the LEFT EDGE slides out the
-        // Resources/Clients assignment tray; moving well away closes it again.
-        if (mode === 'projectView') {
-          if (x < 90) setAssignTrayOpen(true);
-          else if (x > 400) setAssignTrayOpen(false);
-        }
         // Left-only assign tray: enter the left edge zone while dragging a task → the tray
         // pulls out; drift back toward the middle → it tucks away.
         if (activeType === 'task' || activeType === 'projTask') {
-          if (x < 110 && mode !== 'projectView' && mode !== 'settings') setEdgeDrawer('left');
+          if (x < 110 && mode !== 'settings') setEdgeDrawer('left');
           else if (x > 360) setEdgeDrawer(null);
         }
       }}
-      onDragEnd={(ev) => { setAssignTrayOpen(false); setEdgeDrawer(null); handleDragEnd(ev); }}
+      onDragEnd={(ev) => { setEdgeDrawer(null); handleDragEnd(ev); }}
       measuring={measuringConfig}
       // NO axis lock on task drags any more — cards must be able to travel horizontally
       // into the edge assign drawers (and the Projects-view tray). The category lock is
@@ -9167,51 +9189,6 @@ export default function App() {
               <TopHeader viewName="Projects" />
             </div>
             <div className="flex flex-row gap-0 flex-1 min-h-0 overflow-x-auto mobile-carousel">
-            {/* v-next: Resources + Clients moved into a slide-out ASSIGNMENT
-                TRAY on the left edge — the three project columns get the full
-                width. The tray auto-opens while a card is dragged toward the
-                left edge (drop on a person/client row to assign — those rows
-                were already droppables), and the chevron handle toggles it for
-                managing people/clients by hand. */}
-            <div
-              className={`absolute left-0 top-0 bottom-0 z-40 w-[300px] bg-[#1f1f1f] border-r border-white/5 shadow-2xl transition-transform duration-200 flex flex-col ${assignTrayOpen ? 'translate-x-0' : '-translate-x-full'}`}
-              style={{ paddingTop: SPACING.topMargin }}
-            >
-              <CustomScroll>
-                <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]">
-                  <p className="font-['NB_International:Regular',sans-serif] text-[#5e5e5e] text-[14.333px]">Resources</p>
-                  <AddPlus onClick={addPerson} />
-                </div>
-                {people.map((p) => (
-                  <ResourceRow key={p.id} person={p} bodyFont={proj2BodyFont} onDelete={() => requestDeleteResource(p.id)} />
-                ))}
-                <Spacer />
-                <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]">
-                  <p className="font-['NB_International:Regular',sans-serif] text-[#5e5e5e] text-[14.333px]">Clients</p>
-                  <AddPlus onClick={addBlankClient} />
-                </div>
-                {proj2SortedClients.map((c) => (
-                  <ClientRow
-                    key={c.id}
-                    client={c}
-                    autoFocus={c.id === newId}
-                    bodyFont={proj2BodyFont}
-                    onRenameName={(v) => renameClient(c.id, v)}
-                    onRenameShort={(v) => renameClientShort(c.id, v)}
-                    onDelete={() => deleteClient(c.id)}
-                    currentUserShort={currentUserShort}
-                  />
-                ))}
-              </CustomScroll>
-            </div>
-            <button
-              type="button"
-              onClick={() => setAssignTrayOpen((o) => !o)}
-              title="Resources & Clients"
-              className={`absolute top-1/2 -translate-y-1/2 z-50 h-[64px] w-[18px] flex items-center justify-center text-[#656464] hover:text-white bg-[#1f1f1f] border border-white/5 rounded-r transition-all duration-200 ${assignTrayOpen ? 'left-[300px]' : 'left-0'}`}
-            >
-              <ChevronRight size={14} className={`transition-transform ${assignTrayOpen ? 'rotate-180' : ''}`} />
-            </button>
             {/* Column order = the universal section sequence from Settings. */}
             {listSequence.map((l) => renderProjectGroupedColumn(l))}
             </div>
@@ -9370,17 +9347,26 @@ export default function App() {
                       {/* Header doubles as the un-nest drop zone AND a click-to-clear-filter
                           target (clicking above the lists clears the active filter). */}
                       <ProjectsHeaderDropZone onClearFilter={(focusClientId || focusProjectId) ? () => { setFocusClientId(null); setFocusProjectId(null); } : undefined} />
-                      {/* ALWAYS rendered so it reserves its row height — toggling a filter no longer
-                          shoves the client list down (Personal used to "jump" a line and crowd this
-                          button). Invisible + inert when nothing is filtered. White, no purple. */}
-                      <button
-                        type="button"
-                        onClick={() => { setFocusClientId(null); setFocusProjectId(null); }}
-                        className={`shrink-0 h-[30px] w-full box-border flex flex-row gap-2 items-center px-[31px] text-white hover:bg-white/[0.03] transition-opacity ${(focusClientId || focusProjectId) ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
-                      >
-                        <X size={13} />
-                        <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px]">Clear Filter</span>
-                      </button>
+                      {/* Search — the FIRST content row (aligned with the first milestone and the
+                          day columns' Work band). A yellow magnifier + a chrome-less input that
+                          live-filters the day columns and the Milestone / Goals column as you type.
+                          The X clears the search AND any active client/project filter. */}
+                      <div className="shrink-0 h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px]">
+                        <Search size={14} className="shrink-0 text-[#e0b000]" />
+                        <input
+                          value={focusSearch}
+                          onChange={(e) => setFocusSearch(e.target.value)}
+                          placeholder="Search"
+                          className="focus-search-input flex-1 min-w-0 bg-transparent border-0 outline-none text-white text-[14px]"
+                        />
+                        {(focusSearch || focusClientId || focusProjectId) && (
+                          <button type="button" onClick={() => { setFocusSearch(''); setFocusClientId(null); setFocusProjectId(null); }} className="shrink-0 text-[#a8a8a8] hover:text-white transition-colors" aria-label="Clear search and filter">
+                            <X size={13} />
+                          </button>
+                        )}
+                      </div>
+                      {/* Full carriage-return gap between Search and the client list (Personal first). */}
+                      <div className="shrink-0 h-[37px]" aria-hidden />
                       <CustomScroll>
                         {/* CLIENTS ONLY — the filter is a flat roster of every client. Muted list-
                             gray by default; the SELECTED one goes white (no purple anywhere). Click a
@@ -9412,7 +9398,7 @@ export default function App() {
                   const clientOfMs = (t: Task) => t.clientId ?? (t.projectId ? projects.find((p) => p.id === t.projectId)?.clientId : undefined);
                   const msRank = (t: Task) => { const idx = listSequence.indexOf(effectiveListFor(t)); return idx < 0 ? 99 : idx; };
                   const milestones = visibleTasks
-                    .filter((t) => t.type === 'scheduled' && (focusProjectId ? t.projectId === focusProjectId : focusClientId ? clientOfMs(t) === focusClientId : true))
+                    .filter((t) => t.type === 'scheduled' && taskMatchesQuery(t, focusSearch, projects, clients) && (focusProjectId ? t.projectId === focusProjectId : focusClientId ? clientOfMs(t) === focusClientId : true))
                     .sort((a, b) => {
                       if (msRank(a) !== msRank(b)) return msRank(a) - msRank(b);
                       const ad = a.deadline || '￿'; const bd = b.deadline || '￿';
@@ -9422,7 +9408,7 @@ export default function App() {
                   return (
                     <div className="flex-1 min-w-0 flex flex-col min-h-0 overflow-hidden">
                       <div className="group shrink-0 h-[37px] flex items-center gap-2 px-[31px]" style={{ marginBottom: SPACING.dcr }}>
-                        <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">Milestones</p>
+                        <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">Milestone / Goals</p>
                         {/* + creates a new milestone (a scheduled task dated today) and opens the
                             editor so you can set its title + date. Inherits the active filter. */}
                         <button
@@ -9459,7 +9445,7 @@ export default function App() {
                     const isoSet = new Set(isos);
                     // Filter helper — project narrows to one, else client narrows to all its tasks.
                     const clientOfT = (t: Task) => t.clientId ?? (t.projectId ? projects.find((p) => p.id === t.projectId)?.clientId : undefined);
-                    const passesFilter = (t: Task) => focusProjectId ? t.projectId === focusProjectId : focusClientId ? clientOfT(t) === focusClientId : true;
+                    const passesFilter = (t: Task) => taskMatchesQuery(t, focusSearch, projects, clients) && (focusProjectId ? t.projectId === focusProjectId : focusClientId ? clientOfT(t) === focusClientId : true);
                     const bucketAll = isos.flatMap((iso) => focusStripCells[`${iso}:${listId}`] || []);
                     const bucket = bucketAll.filter(passesFilter);
                     // Milestones dated inside this column's window, band-matched by
@@ -10506,7 +10492,7 @@ export default function App() {
             (people) on top, then Assign Project (grouped by client, collapsed)
             below. On the Projects view the LEFT edge belongs to the existing
             Resources/Clients tray, so only the right rail shows there. */}
-        {!PIP_MODE && mode !== 'settings' && mode !== 'projectView' && (() => {
+        {!PIP_MODE && mode !== 'settings' && (() => {
           // Assign rail + tray. The rail is a FULL-HEIGHT lighter bar living in the far-left
           // gutter (the pl-[22px] on the wrapper reserves the space) — ONLY the bar is the
           // hotspot, so it never overlaps or intercepts a column. Hover/click the bar (or drag
@@ -10526,45 +10512,22 @@ export default function App() {
             trayHoverTimerRef.current = setTimeout(() => { setEdgeExpandedClient(cid); }, 250);
           };
           const cancelHoverExpand = () => { if (trayHoverTimerRef.current) { clearTimeout(trayHoverTimerRef.current); trayHoverTimerRef.current = null; } };
-          return (
-            <>
-              {/* Rail — full-height, lighter, in its own gutter. Chevron centered. */}
-              <div
-                onMouseEnter={() => setEdgeDrawer('left')}
-                className="fixed left-0 top-[104px] bottom-[84px] w-[22px] z-40 flex items-center justify-center"
-              >
-                <button
-                  type="button"
-                  // Click opens (same as hover); the tray's onMouseLeave closes it when the
-                  // cursor leaves. No toggle — avoids the "stuck" ambiguity. The bar is the
-                  // same card-gray as the tray + calendar cards (one material language).
-                  onClick={() => setEdgeDrawer('left')}
-                  className="h-full w-full bg-[#333333] hover:bg-[#3a3a3a] transition-colors flex items-center justify-center"
-                  aria-label="Assign drawer"
-                  title="Assign project / person"
-                >
-                  <ChevronRight size={12} className="text-[#a8a8a8] shrink-0" />
-                </button>
-              </div>
-              {/* Tray — opaque, sits just right of the rail (left-[22px]); first row aligns with
-                  the column content (top-[104px]). It is ALWAYS mounted and revealed via opacity
-                  (NOT an off-screen translate): dnd-kit measures droppable rects once at drag
-                  start, so a tray translated off-screen at that moment would have all its rows
-                  measured off-screen and never detect the cursor when it slid in mid-drag — which
-                  is exactly why drops did nothing. Kept on-screen + gated in calendarCollision
-                  (edgeDrawerRef) so it only intercepts while actually open. While a task is being
-                  dragged every client is force-expanded so every project row is a live, measured
-                  drop target without needing a mid-drag hover. */}
-              <div
-                onMouseLeave={() => { setEdgeDrawer((d) => (d === 'left' ? null : d)); cancelHoverExpand(); setEdgeExpandedClient(null); }}
-                // Card-gray (#333333) — one flat material, same as the rail + calendar cards.
-                // SLIDE animation, but drag-safe: while a task is being dragged the tray never
-                // translates (it sits at translate-x-0 and only fades), so dnd-kit still measures
-                // its drop rows on-screen and drops keep working. When NOT dragging it slides the
-                // full width in/out with a slow ease-in-out — the text is planted on the panel and
-                // travels with it.
-                className={`fixed left-[22px] top-[104px] bottom-[84px] w-[320px] z-40 bg-[#333333] flex flex-col duration-500 ease-in-out ${trayDrag ? 'transition-opacity' : 'transition-[transform,opacity]'} ${trayOpen ? 'translate-x-0 opacity-100 pointer-events-auto' : trayDrag ? 'translate-x-0 opacity-0 pointer-events-none' : '-translate-x-full opacity-0 pointer-events-none'}`}
-              >
+                    return (
+            /* Monolithic assign drawer — the rail is merged into the panel. Closed: the 320px
+               body translates off-screen-left and only the 22px chevron handle (absolute, added
+               as the last child) stays visible. Open: translateX(0). Drag-safe: during a task
+               drag the transform is pinned to 0 and only opacity animates, so dnd-kit keeps every
+               drop row measured on-screen. One flat #333333 material, 300ms ease-in-out. */
+            <div
+              onMouseEnter={() => setEdgeDrawer('left')}
+              onMouseLeave={() => { setEdgeDrawer((d) => (d === 'left' ? null : d)); cancelHoverExpand(); setEdgeExpandedClient(null); }}
+              className={`fixed left-0 top-[104px] bottom-[84px] w-[320px] z-40 bg-[#333333] flex flex-col duration-300 ease-in-out ${trayDrag ? 'transition-opacity' : 'transition-[transform,opacity]'}`}
+              style={{
+                transform: (trayOpen || trayDrag) ? 'translateX(0)' : 'translateX(-320px)',
+                opacity: (trayDrag && !trayOpen) ? 0 : 1,
+                pointerEvents: trayOpen ? 'auto' : (trayDrag ? 'none' : 'auto'),
+              }}
+            >
                 <TrayMask />
                 {/* Assign To — people. */}
                 <div className="shrink-0 h-[37px] flex items-center px-[31px]">
@@ -10620,8 +10583,21 @@ export default function App() {
                     </EdgeDropRow>
                   ))}
                 </CustomScroll>
+                {/* Chevron handle — the visible sliver when the drawer is closed. Absolute at the
+                    panel's right edge (right:-22) so it sits just past the 320px body; being a
+                    child, it slides out WITH the drawer. Full-height, same #333333, no hover tint
+                    (one monolithic material). Rotates 180° when open to read as "close". */}
+                <button
+                  type="button"
+                  onClick={() => setEdgeDrawer('left')}
+                  style={{ right: -22 }}
+                  className="absolute top-0 bottom-0 w-[22px] bg-[#333333] flex items-center justify-center"
+                  aria-label="Assign drawer"
+                  title="Assign project / person"
+                >
+                  <ChevronRight size={12} className={`text-[#a8a8a8] shrink-0 transition-transform duration-300 ${trayOpen ? 'rotate-180' : ''}`} />
+                </button>
               </div>
-            </>
           );
         })()}
         {!PIP_MODE && <BottomBar mode={mode} onSetMode={setMode} onAdd={addAndEditTask} />}

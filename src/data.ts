@@ -1,6 +1,6 @@
 export type Assignee = string;
 export type SectionId = 'inbox' | 'today' | 'tomorrow' | 'next';
-export type ListId = 'dashboard' | 'work' | 'projects' | 'admin';
+export type ListId = 'dashboard' | 'work' | 'projects' | 'admin' | 'personal';
 export type AppMode = 'dashboard' | 'projectView' | 'calendar' | 'focus' | 'settings';
 
 export interface Task {
@@ -57,12 +57,14 @@ export interface Project { id: string; name: string; clientId?: string; list?: L
 export interface Client { id: string; name: string; short: string; }
 export interface Person { id: string; name: string; short: string; }
 
-export const LIST_TITLES: Record<ListId, string> = { dashboard: 'Dashboard', work: 'Work', projects: 'Projects', admin: 'Admin' };
-// List view shows THREE columns — the Dashboard column was removed from the
+export const LIST_TITLES: Record<ListId, string> = { dashboard: 'Dashboard', work: 'Work', projects: 'Projects', admin: 'Admin', personal: 'Personal' };
+// List view shows the category columns — the Dashboard column was removed from the
 // main board (it lives on in PIP quick-view via renderColumn('dashboard'),
 // which doesn't read this array). 'dashboard' stays in ListId/LIST_TITLES
 // for the PIP title and the app mode of the same name.
-export const LISTS: ListId[] = ['work', 'projects', 'admin'];
+// 'personal' is the private 4th category: tasks there are scoped to their assignees
+// (only the owner sees them) and render with the hollow (stroke) assignee badge.
+export const LISTS: ListId[] = ['work', 'projects', 'admin', 'personal'];
 
 // Id of the special "Personal" client. Tasks under this client are scoped to their assignees
 // only — they never show on anyone else's dashboard, list, or project view.
