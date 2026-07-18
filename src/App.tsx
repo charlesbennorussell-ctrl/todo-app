@@ -3762,7 +3762,7 @@ function CalendarCardBody({ task, projects, clients, taskOrder = 'ptc' }: { task
   );
 }
 
-function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onDelete, onEdit, onQuickEdit, onAddSibling, isAnyDragging, dimmed, categoryDimmed, displacementOffset = 0, insertionGap = 0, taskOrder = 'ptc', autoFocusEdit = false }: {
+function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onDelete, onEdit, onQuickEdit, onAddSibling, isAnyDragging, dimmed, categoryDimmed, displacementOffset = 0, insertionGap = 0, taskOrder = 'ptc', autoFocusEdit = false, stacked = false }: {
   task: Task; cellId: string; projects: Project[]; clients: Client[];
   onToggle: () => void; onRename: (title: string) => void; onDelete: () => void; onEdit: () => void;
   onQuickEdit?: () => void;
@@ -3771,6 +3771,10 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
   // user can start typing immediately — list-view parity. Blurring while still empty
   // discards the task via onDelete.
   autoFocusEdit?: boolean;
+  // stacked = force the two-line layout (title on line 1, meta on line 2) instead of the
+  // responsive one-line-when-wide flow. The Calendar view sets this so every card is uniformly
+  // two lines (no mix of one- and two-liners).
+  stacked?: boolean;
   isAnyDragging: boolean; dimmed?: boolean;
   // Cards in OTHER bands than the active drag's source category get muted so the drag's
   // landing options stay visually loud. Same flavor as the completed-task gray, just brighter.
@@ -3816,7 +3820,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
       animate={{ opacity: isDragging ? 0 : 1 }}
       transition={{ opacity: { duration: 0.12, ease: 'easeOut' } }}
     >
-      <div onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} onContextMenu={(e) => { if (onQuickEdit) { e.preventDefault(); e.stopPropagation(); onQuickEdit(); } }} {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing px-[10px] py-[7px] flex flex-row flex-wrap items-center content-center gap-x-[10px] gap-y-[1px] overflow-hidden flex-1">
+      <div onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} onContextMenu={(e) => { if (onQuickEdit) { e.preventDefault(); e.stopPropagation(); onQuickEdit(); } }} {...attributes} {...listeners} className={`cursor-grab active:cursor-grabbing px-[10px] py-[7px] overflow-hidden flex-1 ${stacked ? 'flex flex-col justify-center gap-[2px]' : 'flex flex-row flex-wrap items-center content-center gap-x-[10px] gap-y-[1px]'}`}>
         {/* Calendar cards always render Title on line 1, all other meta on line 2 — taskOrder
             setting doesn't apply here. Line 1: checkbox + title. Line 2: client › project,
             assignees, deadline, + button. Checkbox is INLINE with the title so it stays aligned
@@ -3843,8 +3847,9 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
         </div>
         {/* Meta row indents past the checkbox + gap so it lines up under the title text, not under
             the checkbox. 22px = checkbox width (12) + title-row gap (10). When there's no checkbox
-            (isScheduled milestones in this branch), the indent collapses to 0. */}
-          <div className="flex flex-row items-center gap-[6px]">
+            (isScheduled milestones in this branch), the indent collapses to 0. In stacked mode the
+            row reserves a min-height so even a meta-less task still reads as two lines (no mix). */}
+          <div className={`flex flex-row items-center gap-[6px] ${stacked ? 'min-h-[15px]' : ''}`}>
             {/* When completed, all line-2 meta drops to the same faint #383838 — visually quieted to match the title.
                 Only render the client/project paragraph when there's actual non-empty text to show; otherwise an
                 empty <p> sits at the start of the row and the gap-[6px] pushes the next item (e.g. an assignee
@@ -4168,6 +4173,7 @@ function WeekCalendarMode({
                               insertionGap={insertionGap}
                               taskOrder={taskOrder}
                               autoFocusEdit={t.id === newTaskId}
+                              stacked
                             />
                           );
                         })}
@@ -4286,6 +4292,7 @@ function WeekCalendarMode({
                               insertionGap={insertionGap}
                               taskOrder={taskOrder}
                               autoFocusEdit={t.id === newTaskId}
+                              stacked
                             />
                           );
                         })}
@@ -9411,8 +9418,24 @@ export default function App() {
                     });
                   return (
                     <div className="flex-1 min-w-[280px] flex flex-col min-h-0 overflow-hidden">
-                      <div className="shrink-0 h-[37px] flex items-center px-[31px]" style={{ marginBottom: SPACING.dcr }}>
+                      <div className="group shrink-0 h-[37px] flex items-center gap-2 px-[31px]" style={{ marginBottom: SPACING.dcr }}>
                         <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">Milestones</p>
+                        {/* + creates a new milestone (a scheduled task dated today) and opens the
+                            editor so you can set its title + date. Inherits the active filter. */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const id = `task-${Date.now()}`;
+                            const ms: Task = { id, title: '', type: 'scheduled', assignees: currentUserShort ? [currentUserShort] : [], completed: false, list: 'work', section: 'today', deadline: todayISO(), order: 0, createdAt: Date.now(), ...(focusProjectId ? { projectId: focusProjectId } : focusClientId ? { clientId: focusClientId } : {}) };
+                            setTasks((prev) => [...prev, ms]);
+                            setNewId(id);
+                            openEdit(ms);
+                          }}
+                          className="opacity-0 group-hover:opacity-100 text-[#656464] hover:text-white transition-opacity"
+                          aria-label="Add milestone"
+                        >
+                          <Plus size={14} />
+                        </button>
                       </div>
                       <CustomScroll>
                         {renderReadonlyBucket(milestones, undefined, true)}
@@ -9479,35 +9502,41 @@ export default function App() {
                             <Plus size={14} />
                           </button>
                         </div>
-                        <SortableContext items={cellTasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
-                          {cellTasks.map((t, index) => {
-                            let insertionGap = 0;
-                            if (dSameCategory && activeTask && overTask && t.id !== activeTask.id && !dActiveInBucket && dOverInBucket && index === dOIdx) {
-                              insertionGap = dSlotH;
-                            }
-                            return (
-                            <CalendarCard
-                              key={t.id}
-                              task={t}
-                              cellId={cellId}
-                              onToggle={() => toggleTask(t.id)}
-                              onRename={(title) => renameTask(t.id, title)}
-                              onDelete={() => deleteTask(t.id)}
-                              onEdit={() => openEdit(t)}
-                              onQuickEdit={() => openQuick(t)}
-                              onAddSibling={() => addSiblingTask(t, isos[0])}
-                              isAnyDragging={!!activeTask}
-                              categoryDimmed={!!activeTask && activeTask.list !== listId}
-                              projects={projects}
-                              clients={clients}
-                              displacementOffset={0}
-                              insertionGap={insertionGap}
-                              taskOrder={taskOrder}
-                              autoFocusEdit={t.id === newId}
-                            />
-                            );
-                          })}
-                        </SortableContext>
+                        {/* Wrap the cards in the SAME droppable cell the calendar view uses, so a
+                            drop anywhere in the band (including an empty one) registers as this
+                            cal:<day>:<list> target — without it, focus-mode drops fell through and
+                            snapped back to Next. min-h keeps empty bands droppable. */}
+                        <CalendarDayDroppable id={cellId} isEmpty={cellTasks.length === 0}>
+                          <SortableContext items={cellTasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
+                            {cellTasks.map((t, index) => {
+                              let insertionGap = 0;
+                              if (dSameCategory && activeTask && overTask && t.id !== activeTask.id && !dActiveInBucket && dOverInBucket && index === dOIdx) {
+                                insertionGap = dSlotH;
+                              }
+                              return (
+                              <CalendarCard
+                                key={t.id}
+                                task={t}
+                                cellId={cellId}
+                                onToggle={() => toggleTask(t.id)}
+                                onRename={(title) => renameTask(t.id, title)}
+                                onDelete={() => deleteTask(t.id)}
+                                onEdit={() => openEdit(t)}
+                                onQuickEdit={() => openQuick(t)}
+                                onAddSibling={() => addSiblingTask(t, isos[0])}
+                                isAnyDragging={!!activeTask}
+                                categoryDimmed={!!activeTask && activeTask.list !== listId}
+                                projects={projects}
+                                clients={clients}
+                                displacementOffset={0}
+                                insertionGap={insertionGap}
+                                taskOrder={taskOrder}
+                                autoFocusEdit={t.id === newId}
+                              />
+                              );
+                            })}
+                          </SortableContext>
+                        </CalendarDayDroppable>
                       </div>
                     );
                   });
