@@ -4404,7 +4404,7 @@ function BackupSection({
   );
 }
 
-function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePersonShort, onDeletePerson, currentUserShort, onSetCurrentUser, taskOrder, onSetTaskOrder, listSequence, onSetListSequence, tomorrowEnabled, onSetTomorrowEnabled, caseMode, onSetCaseMode, trashedTasks, completedTasks, projects, clients, onUntrashTask, onPurgeTask, onToggleTask, onPurgeEmptyProjects, liveBackupAt, dailyBackupAt, onDownloadBackup, onRestoreFromFile, onRestoreFromSlot }: {
+function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePersonShort, onDeletePerson, currentUserShort, onSetCurrentUser, taskOrder, onSetTaskOrder, listSequence, onSetListSequence, tomorrowEnabled, onSetTomorrowEnabled, caseMode, onSetCaseMode, trashedTasks, completedTasks, projects, clients, onUntrashTask, onPurgeTask, onToggleTask, onPurgeEmptyProjects, onListClosedOutProjects, onRemoveProjectsByIds, liveBackupAt, dailyBackupAt, onDownloadBackup, onRestoreFromFile, onRestoreFromSlot }: {
   people: Person[]; newId: string | null;
   onAddPerson: () => void;
   onRenamePerson: (id: string, name: string) => void;
@@ -4417,6 +4417,8 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
   listSequence: ListId[];
   onSetListSequence: (v: ListId[]) => void;
   onPurgeEmptyProjects: () => number;
+  onListClosedOutProjects: () => { id: string; name: string }[];
+  onRemoveProjectsByIds: (ids: string[]) => number;
   tomorrowEnabled: boolean;
   onSetTomorrowEnabled: (v: boolean) => void;
   caseMode: 'off' | 'title';
@@ -4436,6 +4438,9 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
 }) {
   const bodyFont = "font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap";
   const [purgeMsg, setPurgeMsg] = useState('');
+  // Two-click confirm for "Remove closed-out projects": holds the ids surfaced on the first
+  // click until the second click removes them (or another action clears it).
+  const [closedOutIds, setClosedOutIds] = useState<string[] | null>(null);
   return (
     // Fixed header + SCROLLING body. Previously the whole page was one non-scrolling block, so
     // on a viewport shorter than the settings content (~1300px) the lower sections — Local
@@ -4527,6 +4532,23 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
             className="text-[13px] text-[#656464] hover:text-white transition-colors"
           >
             Clean up empty projects
+          </button>
+          {/* Remove NAMED but task-less projects — the "closed-out ghosts" (Mindmap, Dome-0,
+              etc.) the auto-purge leaves alone. Two-click: first lists exactly which projects
+              have zero tasks; second removes them. Anything with tasks, or that has
+              sub-projects, is never listed, so this can't delete live work. */}
+          <button
+            type="button"
+            onClick={() => {
+              if (closedOutIds) { const n = onRemoveProjectsByIds(closedOutIds); setPurgeMsg(`Removed ${n} closed-out project${n === 1 ? '' : 's'}.`); setClosedOutIds(null); return; }
+              const list = onListClosedOutProjects();
+              if (!list.length) { setPurgeMsg('No closed-out projects — every named project has tasks.'); return; }
+              setClosedOutIds(list.map((p) => p.id));
+              setPurgeMsg(`${list.length} project${list.length === 1 ? '' : 's'} with no tasks: ${list.map((p) => p.name).join(', ')}. Click again to remove.`);
+            }}
+            className={`text-[13px] transition-colors ${closedOutIds ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}
+          >
+            {closedOutIds ? `Confirm — remove ${closedOutIds.length} closed-out project${closedOutIds.length === 1 ? '' : 's'}` : 'Remove closed-out projects'}
           </button>
           {purgeMsg && <p className="text-[#8465ff] text-[12px]">{purgeMsg}</p>}
         </div>
@@ -6662,6 +6684,10 @@ export default function App() {
   // current tasks without re-binding on every change.
   const tasksRef = useRef(tasks);
   useEffect(() => { tasksRef.current = tasks; }, [tasks]);
+  // Same live mirror for projects — the closed-out-project cleanup (a stable useCallback,
+  // triggered from Settings) reads the current list without re-binding on every change.
+  const projectsRef = useRef(projects);
+  useEffect(() => { projectsRef.current = projects; }, [projects]);
   // Gallery-container dimension tracking — Zoom All needs to know how much
   // room the sectioned content has so we can binary-search the largest row
   // height that still fits everything in the viewport. Using a state-based
@@ -7027,6 +7053,25 @@ export default function App() {
       return removed > 0 ? kept : prev;
     });
     return removed;
+  }, []);
+  // "Closed-out" projects — the NAMED, task-less strays that the ghost purge deliberately
+  // leaves alone (it only removes untitled ones, so it never deletes something you titled).
+  // These are what pile up at the bottom of the project lists after a project's tasks are
+  // all cleared. A project counts as closed-out only if it has a name, is referenced by NO
+  // task at all (any status), and isn't a parent of other projects (so nesting is never
+  // orphaned). Returned for display; removal is a separate, explicit step.
+  const listClosedOutProjects = useCallback((): { id: string; name: string }[] => {
+    const usedIds = new Set(tasksRef.current.map((t) => t.projectId).filter(Boolean) as string[]);
+    const parentIds = new Set(projectsRef.current.map((p) => p.parentId).filter(Boolean) as string[]);
+    return projectsRef.current
+      .filter((p) => (p.name || '').trim() && !usedIds.has(p.id) && !parentIds.has(p.id) && p.id !== newlyCreatedIdRef.current)
+      .map((p) => ({ id: p.id, name: p.name }));
+  }, []);
+  const removeProjectsByIds = useCallback((ids: string[]): number => {
+    if (!ids.length) return 0;
+    const idSet = new Set(ids);
+    setProjects((prev) => prev.filter((p) => !idSet.has(p.id)));
+    return ids.length;
   }, []);
   const renameProject = useCallback((id: string, name: string) => {
     setProjects((prev) => prev.map((p) => (p.id === id ? { ...p, name } : p)));
@@ -10289,6 +10334,8 @@ export default function App() {
             listSequence={listSequence}
             onSetListSequence={setListSequence}
             onPurgeEmptyProjects={purgeEmptyProjects}
+            onListClosedOutProjects={listClosedOutProjects}
+            onRemoveProjectsByIds={removeProjectsByIds}
             tomorrowEnabled={tomorrowEnabled}
             onSetTomorrowEnabled={setTomorrowEnabled}
             caseMode={caseMode}
