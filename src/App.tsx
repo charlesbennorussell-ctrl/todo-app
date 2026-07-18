@@ -9313,7 +9313,10 @@ export default function App() {
                   (each child carries its own min-width). NOTE for un-parking
                   FOCUS_SHOW_INFO / FOCUS_SHOW_REFERENCES: the track template is fixed at
                   five tracks — re-enabling those columns means widening the template. */}
-              <div className="grid grid-cols-[1fr_1fr_2fr_2fr_2fr] gap-0 flex-1 min-h-0 w-full overflow-x-auto">
+              {/* Filter + Milestones are fixed-narrow (same width, sized to fit their names + a
+                  small buffer) instead of stretchy 1fr tracks; the three day columns split the
+                  freed space, so the calendar gets wider. */}
+              <div className="grid grid-cols-[210px_210px_1fr_1fr_1fr] gap-0 flex-1 min-h-0 w-full overflow-x-auto">
                 {/* Column 1 — Projects panel: flat master list (milestones pinned on top);
                     clicking a project FILTERS the Dashboard stack + all three calendar
                     columns (focusProjectId). Active row shows an ×; click again to clear.
@@ -9363,7 +9366,7 @@ export default function App() {
                     );
                   };
                   return (
-                    <div className="flex-1 min-w-[280px] flex flex-col min-h-0 overflow-hidden">
+                    <div className="flex-1 min-w-0 flex flex-col min-h-0 overflow-hidden">
                       {/* Header doubles as the un-nest drop zone AND a click-to-clear-filter
                           target (clicking above the lists clears the active filter). */}
                       <ProjectsHeaderDropZone onClearFilter={(focusClientId || focusProjectId) ? () => { setFocusClientId(null); setFocusProjectId(null); } : undefined} />
@@ -9417,7 +9420,7 @@ export default function App() {
                       return a.title.localeCompare(b.title);
                     });
                   return (
-                    <div className="flex-1 min-w-[280px] flex flex-col min-h-0 overflow-hidden">
+                    <div className="flex-1 min-w-0 flex flex-col min-h-0 overflow-hidden">
                       <div className="group shrink-0 h-[37px] flex items-center gap-2 px-[31px]" style={{ marginBottom: SPACING.dcr }}>
                         <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">Milestones</p>
                         {/* + creates a new milestone (a scheduled task dated today) and opens the
