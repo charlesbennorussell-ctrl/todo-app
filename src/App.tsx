@@ -9326,18 +9326,17 @@ export default function App() {
                       {/* Header doubles as the un-nest drop zone AND a click-to-clear-filter
                           target (clicking above the lists clears the active filter). */}
                       <ProjectsHeaderDropZone onClearFilter={(focusClientId || focusProjectId) ? () => { setFocusClientId(null); setFocusProjectId(null); } : undefined} />
-                      {/* Explicit, discoverable filter-clear (best practice) — only when a
-                          filter is active. Sits pinned above the list. */}
-                      {(focusClientId || focusProjectId) && (
-                        <button
-                          type="button"
-                          onClick={() => { setFocusClientId(null); setFocusProjectId(null); }}
-                          className="shrink-0 h-[30px] w-full box-border flex flex-row gap-2 items-center px-[31px] text-[#8465ff] hover:bg-white/[0.03] transition-colors"
-                        >
-                          <X size={13} />
-                          <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px]">Clear filter</span>
-                        </button>
-                      )}
+                      {/* ALWAYS rendered so it reserves its row height — toggling a filter no longer
+                          shoves the client list down (Personal used to "jump" a line and crowd this
+                          button). Invisible + inert when nothing is filtered. White, no purple. */}
+                      <button
+                        type="button"
+                        onClick={() => { setFocusClientId(null); setFocusProjectId(null); }}
+                        className={`shrink-0 h-[30px] w-full box-border flex flex-row gap-2 items-center px-[31px] text-white hover:bg-white/[0.03] transition-opacity ${(focusClientId || focusProjectId) ? 'opacity-100' : 'opacity-0 pointer-events-none'}`}
+                      >
+                        <X size={13} />
+                        <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px]">Clear Filter</span>
+                      </button>
                       <CustomScroll>
                         {topMilestones.length > 0 && (
                           <>
@@ -9345,9 +9344,9 @@ export default function App() {
                             <Spacer />
                           </>
                         )}
-                        {/* CLIENTS ONLY — the filter is a flat roster of every client, no project
-                            sub-categories, no expansion. Click a client to filter the dashboard to
-                            all its tasks; click again (or the X) to clear. Active = purple. */}
+                        {/* CLIENTS ONLY — the filter is a flat roster of every client. Muted list-
+                            gray by default; the SELECTED one goes white (no purple anywhere). Click a
+                            client to filter the dashboard to its tasks; click again (or the X) to clear. */}
                         {proj2SortedClients.map((c) => {
                           const clientActive = focusClientId === c.id && !focusProjectId;
                           return (
@@ -9355,9 +9354,9 @@ export default function App() {
                               key={c.id}
                               type="button"
                               onClick={() => { setFocusProjectId(null); setFocusClientId(focusClientId === c.id ? null : c.id); }}
-                              className={`group h-[37px] w-full text-left box-border flex flex-row gap-2 items-center px-[31px] transition-colors ${clientActive ? 'bg-[#8465ff]/15' : 'hover:bg-white/[0.03]'}`}
+                              className={`group h-[37px] w-full text-left box-border flex flex-row gap-2 items-center px-[31px] transition-colors ${clientActive ? '' : 'hover:bg-white/[0.03]'}`}
                             >
-                              <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis ${clientActive ? 'text-[#8465ff]' : 'text-white'}`}>
+                              <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis ${clientActive ? 'text-white' : 'text-[#656464]'}`}>
                                 {c.name || (c.id === PERSONAL_CLIENT_ID ? 'Personal' : c.short)}
                               </span>
                               {clientActive && <X size={14} className="ml-auto text-[#a8a8a8]" />}
