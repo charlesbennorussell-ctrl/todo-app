@@ -1385,15 +1385,6 @@ function SortableTaskItem({
             />
           )}
         </div>
-        {/* Assignees hide at density >= 5. They're also hidden by default and fade in on
-            row-hover (opacity only, so the reserved width doesn't shift the row) — the
-            circles were visual noise at rest. The badge stays visible while dragging so the
-            floating overlay still reads who owns it. */}
-        {density < 5 && task.assignees.length > 0 && (
-          <span className={`flex flex-row items-center gap-2 transition-opacity duration-200 ${(isDragOverlay || isDragging || hovered) ? 'opacity-100' : 'opacity-0'}`}>
-            {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} faint={isExpiredMilestone} />)}
-          </span>
-        )}
         {(() => {
           // Three render cases:
           //   1. Has a real deadline → DeadlineArrow + formatted date (existing behavior)
@@ -1465,6 +1456,16 @@ function SortableTaskItem({
             </>
           );
         })()}
+        {/* Assignees — now AFTER the date. Hidden at rest; fade IN on row-hover (~200ms), and on
+            roll-off they LINGER ~1s then fade OUT over 500ms. The asymmetry is pure CSS: the
+            not-hovered class carries duration-500 + delay-[1000ms], the hovered class fades in
+            fast with no delay. Stays lit while dragging so the overlay still shows who owns it.
+            opacity-only (reserved width) so appearing never nudges the row's other content. */}
+        {density < 5 && task.assignees.length > 0 && (
+          <span className={`flex flex-row items-center gap-2 transition-opacity ${(isDragOverlay || isDragging || hovered) ? 'opacity-100 duration-200' : 'opacity-0 duration-500 delay-1000'}`}>
+            {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} faint={isExpiredMilestone} />)}
+          </span>
+        )}
         {/* "Has Focus content" indicator. Shows when the task (or its parent project) has any
             brief / notes / sub-tasks / reference images attached. Always visible (not hover-
             reveal) so the eye can scan the column for "what has stuff" at a glance. Click jumps
@@ -7795,7 +7796,14 @@ export default function App() {
           //     Week lands the card at the top of its category, then reorder by hand)
           //   - else → append
           let insertAt = toBucket.length;
-          if (intendedOverTaskId) {
+          // Deferring a task from today/tomorrow INTO Next → land it at the TOP of its category.
+          // You're kicking it a few days down the road, not filing it away — it should be the
+          // next thing to resurface, not buried at the bottom. (The distribution orders by
+          // task.order, so order 0 = first.)
+          const deferringToNext = targetSection === 'next' && srcTask.section !== 'next';
+          if (deferringToNext) {
+            insertAt = 0;
+          } else if (intendedOverTaskId) {
             const idx = toBucket.findIndex((t) => t.id === intendedOverTaskId);
             if (idx >= 0) insertAt = idx;
             else if (isNextWeekDrop) insertAt = 0;
@@ -8941,7 +8949,13 @@ export default function App() {
       }
     }
     const base = edgeHits.length ? collisions.filter((c) => !String(c.id).startsWith('edge:')) : collisions;
-    if (mode !== 'calendar') return base;
+    // The focus page's day columns use the SAME calendar engine as the Calendar view, so it needs
+    // the same collision handling — most importantly the CATEGORY LOCK: a task-card collision is
+    // redirected to a cell in the DRAGGED task's own list (activeList), so dropping a Projects
+    // card onto the Work band keeps it a Projects task (lands in Projects) instead of flipping to
+    // Work. Hold Ctrl/Cmd to override (allowListChange). Without extending this to focus mode, a
+    // focus-view drop onto another card fell through to the reorder path and changed categories.
+    if (mode !== 'calendar' && mode !== 'focus') return base;
     const activeCellId = args.active.data.current?.calendarCellId as string | undefined;
     const activeTask = args.active.data.current?.task as Task | undefined;
     if (!activeCellId || !activeTask) return base;
