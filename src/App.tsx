@@ -1814,7 +1814,7 @@ function FocusProjectRow({
       {...listeners}
       onClick={onClick}
       className={`group h-[37px] w-full text-left box-border flex flex-row gap-2 items-center px-[31px] cursor-grab active:cursor-grabbing transition-colors ${isDragging ? 'opacity-40' : ''} ${isOver ? 'bg-[#8465ff]/20' : active ? 'bg-[#8465ff]/15' : 'hover:bg-white/[0.03]'}`}
-      style={{ paddingLeft: 31 + depth * 16 }}
+      style={{ paddingLeft: 31 + depth * 24 }}
     >
       {expandable ? (
         <button
@@ -10530,7 +10530,9 @@ export default function App() {
                         />
                         {expanded && clientProjects.map((p) => (
                           <EdgeDropRow key={p.id} id={`edge:project:${p.id}`}>
-                            <span className="pl-[20px] font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis text-white">{p.name || 'Untitled'}</span>
+                            {/* Indent projects clearly UNDER the client name (which sits past the
+                                chevron at ~51px) so the hierarchy reads at a glance. */}
+                            <span className="pl-[44px] font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis text-[#c8c8c8]">{p.name || 'Untitled'}</span>
                           </EdgeDropRow>
                         ))}
                       </Fragment>
