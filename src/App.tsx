@@ -9532,6 +9532,7 @@ export default function App() {
                                 insertionGap={insertionGap}
                                 taskOrder={taskOrder}
                                 autoFocusEdit={t.id === newId}
+                                stacked
                               />
                               );
                             })}
