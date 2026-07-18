@@ -3938,7 +3938,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
         type="button"
         onPointerDown={(e) => e.stopPropagation()}
         onClick={(e) => { e.stopPropagation(); onDelete(); }}
-        className="absolute top-1 right-1 p-1 opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity"
+        className="absolute top-2 right-1 p-1 opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity"
         aria-label="Delete task"
       >
         <Trash2 size={12} />
@@ -9172,19 +9172,10 @@ export default function App() {
           modals) are position:fixed → unaffected by this padding; only the flowing mode views
           shift right into place. PIP has no rail, so no gutter there. */}
       <div className={`relative h-screen bg-[#282828] overflow-hidden ${PIP_MODE ? '' : 'pl-[22px]'}`}>
-        {/* PIP quick-view: the whole app collapses to the daily Dashboard stack.
-            Opened by the Tauri shell in a tall, narrow, always-on-top window at
-            ?pip=1 (global shortcut Ctrl+Win+Space). No TopHeader, no BottomBar —
-            renderColumn('dashboard') brings its own "Dashboard — <name>" title,
-            checkboxes, drag, and live Liveblocks sync, so edits made here land
-            in the main window instantly. */}
-        {PIP_MODE && (
-          <div className="h-full flex flex-col" style={{ paddingTop: 18, paddingBottom: 12 }}>
-            <div className="flex flex-row flex-1 min-h-0">
-              {renderColumn('dashboard')}
-            </div>
-          </div>
-        )}
+        {/* PIP quick-view: an always-on-top mini-window (?pip=1, opened by the Tauri shell's
+            global shortcut) that renders the FOCUS view below with NO BottomBar / tray chrome.
+            Edits sync live via Liveblocks, so changes here land in the main window instantly.
+            The focus block's guard (PIP_MODE || mode === 'focus') is what fires it in PIP. */}
         {!PIP_MODE && mode === 'dashboard' && (
           <div className="h-full flex flex-col" style={{ paddingTop: SPACING.topMargin, paddingBottom: 76 }}>
             <div className="shrink-0">
@@ -9243,7 +9234,7 @@ export default function App() {
             newTaskId={newId}
           />
         )}
-        {!PIP_MODE && mode === 'focus' && (() => {
+        {(PIP_MODE || mode === 'focus') && (() => {
           // Project Focus mode — three-column dashboard pinned to a single project.
           //   Col 1: the user's Dashboard (Today + Tomorrow), same renderer as list view.
           //   Col 2: "<Project Name> — Information", with an editable Brief block and a
@@ -9317,7 +9308,7 @@ export default function App() {
               {/* Filter + Milestones are fixed-narrow (same width, sized to fit their names + a
                   small buffer) instead of stretchy 1fr tracks; the three day columns split the
                   freed space, so the calendar gets wider. */}
-              <div className="grid grid-cols-[210px_210px_1fr_1fr_1fr] gap-0 flex-1 min-h-0 w-full overflow-x-auto">
+              <div className="grid grid-cols-[225px_225px_1fr_1fr_1fr] gap-0 flex-1 min-h-0 w-full overflow-x-auto">
                 {/* Column 1 — Projects panel: flat master list (milestones pinned on top);
                     clicking a project FILTERS the Dashboard stack + all three calendar
                     columns (focusProjectId). Active row shows an ×; click again to clear.
@@ -9374,17 +9365,17 @@ export default function App() {
                       {/* Search — the FIRST content row (aligned with the first milestone and the
                           day columns' Work band). A yellow magnifier + a chrome-less input that
                           live-filters the day columns and the Milestone / Goals column as you type.
-                          The X clears the search AND any active client/project filter. */}
+                          The X shows ONLY when there's search text, and clears just the search. */}
                       <div className="shrink-0 h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px]">
-                        <Search size={14} className="shrink-0 text-[#e0b000]" />
+                        <Search size={12} className="shrink-0 text-[#656464]" />
                         <input
                           value={focusSearch}
                           onChange={(e) => setFocusSearch(e.target.value)}
                           placeholder="Search"
                           className="focus-search-input flex-1 min-w-0 bg-transparent border-0 outline-none text-white text-[14px]"
                         />
-                        {(focusSearch || focusClientId || focusProjectId) && (
-                          <button type="button" onClick={() => { setFocusSearch(''); setFocusClientId(null); setFocusProjectId(null); }} className="shrink-0 text-[#a8a8a8] hover:text-white transition-colors" aria-label="Clear search and filter">
+                        {focusSearch && (
+                          <button type="button" onClick={() => setFocusSearch('')} className="shrink-0 text-[#a8a8a8] hover:text-white transition-colors" aria-label="Clear search">
                             <X size={13} />
                           </button>
                         )}
@@ -9432,7 +9423,7 @@ export default function App() {
                   return (
                     <div className="flex-1 min-w-0 flex flex-col min-h-0 overflow-hidden">
                       <div className="group shrink-0 h-[37px] flex items-center gap-2 px-[31px]" style={{ marginBottom: SPACING.dcr }}>
-                        <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">Milestone / Goals</p>
+                        <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">Milestones</p>
                         {/* + creates a new milestone (a scheduled task dated today) and opens the
                             editor so you can set its title + date. Inherits the active filter. */}
                         <button

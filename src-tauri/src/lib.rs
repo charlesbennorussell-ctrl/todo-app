@@ -10,7 +10,7 @@ use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
 const PIP_URL: &str = "https://charlesbennorussell-ctrl.github.io/todo-app/?pip=1";
 const PIP_LABEL: &str = "pip";
-const PIP_WIDTH: f64 = 520.0;
+const PIP_WIDTH: f64 = 1080.0;
 
 fn toggle_pip(app: &AppHandle) {
     // Window already exists → toggle visibility. Hidden (not destroyed) so
@@ -45,7 +45,7 @@ fn toggle_pip(app: &AppHandle) {
         PIP_LABEL,
         WebviewUrl::External(PIP_URL.parse().expect("PIP_URL is a valid URL")),
     )
-    .title("Ctrl-Project — Quick Dashboard")
+    .title("Ctrl-Project — Focus")
     .inner_size(width, height)
     .position(x, y)
     .always_on_top(true)
@@ -81,7 +81,7 @@ pub fn run() {
                 // Fallback chain if the OS reserves it: Ctrl+Win+Space, then
                 // Ctrl+Alt+Space.
                 let shortcuts = app.global_shortcut();
-                let combos = ["ctrl+space", "ctrl+super+space", "ctrl+alt+space"];
+                let combos = ["ctrl+alt+f", "ctrl+alt+space", "ctrl+shift+space"];
                 let mut registered = None;
                 for combo in combos {
                     match shortcuts.register(combo) {
