@@ -8117,6 +8117,28 @@ export default function App() {
     setProjects((prev) => prev.map((p) => (!p.list && projectListMap[p.id] ? { ...p, list: projectListMap[p.id] } : p)));
   }, [projects, tasks, projectListMap, setProjects]);
 
+  // One-time list-alignment sweep: a task's CATEGORY should always follow its project's pinned
+  // list — a task under a Projects-pinned project belongs in the Projects band, never Work.
+  // Drags used to be able to split a project's tasks across categories; this consolidates any
+  // that diverged (only the `list` field changes, only when it differs from the project's pin,
+  // only for pinned projects). Runs once, 6s after mount so project pins + Liveblocks have
+  // settled. Going forward the category-lock keeps them from diverging again.
+  const listAlignRef = useRef(false);
+  useEffect(() => {
+    if (listAlignRef.current) return;
+    listAlignRef.current = true;
+    const h = window.setTimeout(() => {
+      const pin = new Map<string, ListId>();
+      for (const p of projectsRef.current) if (p.list) pin.set(p.id, p.list);
+      const misaligned = tasksRef.current.filter((t) => !t.trashed && t.projectId && pin.has(t.projectId) && t.list !== pin.get(t.projectId));
+      if (misaligned.length === 0) return;
+      const ids = new Set(misaligned.map((t) => t.id));
+      setTasks((prev) => prev.map((t) => (ids.has(t.id) && t.projectId && pin.has(t.projectId) ? { ...t, list: pin.get(t.projectId)! } : t)));
+      console.log(`[list-align] moved ${misaligned.length} task(s) into their project's category`);
+    }, 6000);
+    return () => window.clearTimeout(h);
+  }, []);
+
   // One-time ghost purge: 5s after mount (Liveblocks has synced, no in-flight rename),
   // remove blank-named projects that carry no tasks — the "untitled project ghosts" the
   // user can't otherwise clear. Delayed + one-shot so it never races a project being named.
