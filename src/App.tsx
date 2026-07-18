@@ -3126,9 +3126,12 @@ function EditableText({ value, onChange, className, autoFocus = false, placehold
       contentEditable={editing}
       suppressContentEditableWarning
       data-placeholder={placeholder || ''}
-      // While editing, swallow pointerdown so clicks within the text place a caret
-      // instead of bubbling to the row's drag listeners.
+      // While editing, swallow pointerdown AND mousedown so a click/drag inside the text
+      // places a caret or selects text instead of starting a card drag. The card drag runs on
+      // MouseSensor (mousedown), so stopping only pointerdown wasn't enough — a drag-to-select
+      // still grabbed the card. Stopping both keeps selection inside the field.
       onPointerDown={(e) => { if (editing) e.stopPropagation(); }}
+      onMouseDown={(e) => { if (editing) e.stopPropagation(); }}
       onClick={() => setEditing(true)}
       onBlur={(e) => {
         const next = (e.currentTarget.textContent || '').trim();
@@ -3807,7 +3810,8 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
     <motion.div
       ref={setNodeRef}
       style={style}
-      className={`relative mx-[6px] mb-[4px] group min-h-[35px] flex bg-white/[0.03] ${dimmed ? 'opacity-60' : ''}`}
+      data-cal-card={task.id}
+      className={`relative mx-[6px] mb-[4px] group min-h-[45px] flex bg-white/[0.03] ${dimmed ? 'opacity-60' : ''}`}
       animate={{ opacity: isDragging ? 0 : 1 }}
       transition={{ opacity: { duration: 0.12, ease: 'easeOut' } }}
     >
@@ -7280,7 +7284,10 @@ export default function App() {
       // without the card backdrop.
       const taskId = (e.active.data.current?.task as Task | undefined)?.id;
       if (taskId) {
-        const el = document.querySelector(`[data-task-row="${taskId}"]`) as HTMLElement | null;
+        // Calendar/focus cards carry data-cal-card; list rows carry data-task-row. Measure
+        // whichever exists so the drag overlay always locks to the REAL card size + layout
+        // instead of falling back to the stubby default width (which wrapped to two rows).
+        const el = (document.querySelector(`[data-cal-card="${taskId}"]`) || document.querySelector(`[data-task-row="${taskId}"]`)) as HTMLElement | null;
         if (el) {
           const r = el.getBoundingClientRect();
           if (r.width > 0) { setActiveRectWidth(r.width); setActiveRectHeight(r.height); }
