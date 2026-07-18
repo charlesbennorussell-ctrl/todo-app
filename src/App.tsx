@@ -4404,7 +4404,7 @@ function BackupSection({
   );
 }
 
-function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePersonShort, onDeletePerson, currentUserShort, onSetCurrentUser, taskOrder, onSetTaskOrder, listSequence, onSetListSequence, tomorrowEnabled, onSetTomorrowEnabled, caseMode, onSetCaseMode, trashedTasks, completedTasks, projects, clients, onUntrashTask, onPurgeTask, onToggleTask, onPurgeEmptyProjects, onListClosedOutProjects, onRemoveProjectsByIds, liveBackupAt, dailyBackupAt, onDownloadBackup, onRestoreFromFile, onRestoreFromSlot }: {
+function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePersonShort, onDeletePerson, currentUserShort, onSetCurrentUser, taskOrder, onSetTaskOrder, listSequence, onSetListSequence, tomorrowEnabled, onSetTomorrowEnabled, caseMode, onSetCaseMode, trashedTasks, completedTasks, projects, clients, onUntrashTask, onPurgeTask, onToggleTask, onPurgeEmptyProjects, onListClosedOutProjects, onRemoveProjectsByIds, onListStragglerProjects, onDeleteStragglerProject, liveBackupAt, dailyBackupAt, onDownloadBackup, onRestoreFromFile, onRestoreFromSlot }: {
   people: Person[]; newId: string | null;
   onAddPerson: () => void;
   onRenamePerson: (id: string, name: string) => void;
@@ -4419,6 +4419,8 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
   onPurgeEmptyProjects: () => number;
   onListClosedOutProjects: () => { id: string; name: string }[];
   onRemoveProjectsByIds: (ids: string[]) => number;
+  onListStragglerProjects: () => { id: string; name: string; taskCount: number }[];
+  onDeleteStragglerProject: (id: string) => void;
   tomorrowEnabled: boolean;
   onSetTomorrowEnabled: (v: boolean) => void;
   caseMode: 'off' | 'title';
@@ -4441,6 +4443,10 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
   // Two-click confirm for "Remove closed-out projects": holds the ids surfaced on the first
   // click until the second click removes them (or another action clears it).
   const [closedOutIds, setClosedOutIds] = useState<string[] | null>(null);
+  // Straggler-project manager: null = collapsed; array = the client-less projects to show with
+  // per-row delete. Kept in local state so deleting one drops it from the list immediately
+  // (the App-side refs update a tick later).
+  const [stragglers, setStragglers] = useState<{ id: string; name: string; taskCount: number }[] | null>(null);
   return (
     // Fixed header + SCROLLING body. Previously the whole page was one non-scrolling block, so
     // on a viewport shorter than the settings content (~1300px) the lower sections — Local
@@ -4551,6 +4557,36 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
             {closedOutIds ? `Confirm — remove ${closedOutIds.length} closed-out project${closedOutIds.length === 1 ? '' : 's'}` : 'Remove closed-out projects'}
           </button>
           {purgeMsg && <p className="text-[#8465ff] text-[12px]">{purgeMsg}</p>}
+          {/* Straggler manager — the client-less projects piling up at the bottom of the lists
+              (Mindmap, Dome-0, Project Dash, Moving…). Shows each with its live task count so
+              you know what it is, and a Delete that removes the project + tucks any tasks into
+              the recoverable Trash. Works whether or not the project still has tasks. */}
+          <button
+            type="button"
+            onClick={() => setStragglers((cur) => (cur ? null : onListStragglerProjects()))}
+            className="text-[13px] text-[#656464] hover:text-white transition-colors mt-1"
+          >
+            {stragglers ? 'Hide straggler projects' : 'Manage straggler projects (no client)'}
+          </button>
+          {stragglers && stragglers.length === 0 && (
+            <p className="text-[#656464] text-[12px]">No straggler projects — every project has a client.</p>
+          )}
+          {stragglers && stragglers.length > 0 && (
+            <div className="flex flex-col gap-1 w-full max-w-[420px]">
+              {stragglers.map((s) => (
+                <div key={s.id} className="flex flex-row items-center justify-between gap-3 py-[3px] border-b border-white/[0.06]">
+                  <span className="text-[13px] text-white truncate">{s.name} <span className="text-[#656464]">· {s.taskCount} task{s.taskCount === 1 ? '' : 's'}</span></span>
+                  <button
+                    type="button"
+                    onClick={() => { onDeleteStragglerProject(s.id); setStragglers((prev) => (prev ? prev.filter((x) => x.id !== s.id) : prev)); setPurgeMsg(`Removed "${s.name}"${s.taskCount > 0 ? ` — ${s.taskCount} task${s.taskCount === 1 ? '' : 's'} moved to Trash` : ''}.`); }}
+                    className="shrink-0 text-[12px] text-[#656464] hover:text-[#ff6b6b] transition-colors"
+                  >
+                    Delete
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
         {/* Tomorrow section toggle. Off → tomorrow tasks visually fall back into Next (data
             preserved). The midnight refill keeps Tomorrow at 5 tasks even while hidden — flip
@@ -6688,6 +6724,8 @@ export default function App() {
   // triggered from Settings) reads the current list without re-binding on every change.
   const projectsRef = useRef(projects);
   useEffect(() => { projectsRef.current = projects; }, [projects]);
+  const clientsRef = useRef(clients);
+  useEffect(() => { clientsRef.current = clients; }, [clients]);
   // Gallery-container dimension tracking — Zoom All needs to know how much
   // room the sectioned content has so we can binary-search the largest row
   // height that still fits everything in the viewport. Using a state-based
@@ -7072,6 +7110,25 @@ export default function App() {
     const idSet = new Set(ids);
     setProjects((prev) => prev.filter((p) => !idSet.has(p.id)));
     return ids.length;
+  }, []);
+  // "Straggler" projects — the ones with no client (or a client that no longer exists) that pile
+  // up at the bottom of the project lists. Returned with a live (non-trashed) task count so the
+  // user can see what each actually is before deciding to remove it.
+  const listStragglerProjects = useCallback((): { id: string; name: string; taskCount: number }[] => {
+    const clientIds = new Set(clientsRef.current.map((c) => c.id));
+    const counts = new Map<string, number>();
+    tasksRef.current.forEach((t) => { if (t.projectId && !t.trashed) counts.set(t.projectId, (counts.get(t.projectId) || 0) + 1); });
+    return projectsRef.current
+      .filter((p) => !p.clientId || !clientIds.has(p.clientId))
+      .map((p) => ({ id: p.id, name: p.name || 'Untitled', taskCount: counts.get(p.id) || 0 }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, []);
+  // Remove a straggler project. Any tasks it holds are moved to Trash (recoverable in
+  // Settings → Trash), never hard-deleted, and any sub-projects are promoted to top level so
+  // nesting is never left dangling.
+  const deleteStragglerProject = useCallback((id: string) => {
+    setTasks((prev) => prev.map((t) => (t.projectId === id && !t.trashed ? { ...t, trashed: true, trashedAt: Date.now(), revivedAt: undefined } : t)));
+    setProjects((prev) => prev.filter((p) => p.id !== id).map((p) => (p.parentId === id ? { ...p, parentId: undefined } : p)));
   }, []);
   const renameProject = useCallback((id: string, name: string) => {
     setProjects((prev) => prev.map((p) => (p.id === id ? { ...p, name } : p)));
@@ -10336,6 +10393,8 @@ export default function App() {
             onPurgeEmptyProjects={purgeEmptyProjects}
             onListClosedOutProjects={listClosedOutProjects}
             onRemoveProjectsByIds={removeProjectsByIds}
+            onListStragglerProjects={listStragglerProjects}
+            onDeleteStragglerProject={deleteStragglerProject}
             tomorrowEnabled={tomorrowEnabled}
             onSetTomorrowEnabled={setTomorrowEnabled}
             caseMode={caseMode}
