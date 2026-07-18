@@ -1688,11 +1688,11 @@ function StickyOverlay({ scrollElRef }: { scrollElRef: React.RefObject<HTMLDivEl
               // Buttery ease-out-expo, slightly longer than typical UI feedback
               // so the swap feels like a deliberate transition, not a flicker.
               transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
-              className="group absolute inset-0 box-border flex flex-row gap-2 items-center px-[31px]"
+              className="group absolute inset-0 box-border flex flex-row gap-2 items-center px-[31px] pointer-events-auto"
             >
               <p className={`font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap ${active.dateAccent ? 'text-[#8465ff]' : 'text-[#656464]'}`}>{active.date}</p>
               {active.dateHasAdd && (
-                <button type="button" onClick={clickAdd('date')} className="pointer-events-auto opacity-0 group-hover:opacity-100 text-[#656464] hover:text-white transition-opacity" aria-label="Add task"><Plus size={14} /></button>
+                <button type="button" onClick={clickAdd('date')} className="opacity-0 group-hover:opacity-100 text-[#656464] hover:text-white transition-opacity" aria-label="Add task"><Plus size={14} /></button>
               )}
             </motion.div>
           )}
@@ -1708,11 +1708,11 @@ function StickyOverlay({ scrollElRef }: { scrollElRef: React.RefObject<HTMLDivEl
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
-              className="group absolute inset-0 box-border flex flex-row gap-2 items-center px-[31px]"
+              className="group absolute inset-0 box-border flex flex-row gap-2 items-center px-[31px] pointer-events-auto"
             >
               <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[#656464] text-[14px] whitespace-nowrap">{active.category}</p>
               {active.catHasAdd && (
-                <button type="button" onClick={clickAdd('category')} className="pointer-events-auto opacity-0 group-hover:opacity-100 text-[#656464] hover:text-white transition-opacity" aria-label="Add task"><Plus size={14} /></button>
+                <button type="button" onClick={clickAdd('category')} className="opacity-0 group-hover:opacity-100 text-[#656464] hover:text-white transition-opacity" aria-label="Add task"><Plus size={14} /></button>
               )}
             </motion.div>
           )}
@@ -1735,6 +1735,32 @@ function EdgeDropRow({ id, children }: { id: string; children: React.ReactNode }
     <div ref={setNodeRef} className={`h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px] transition-colors ${isOver ? 'bg-[#8465ff]/30' : 'hover:bg-white/[0.04]'}`}>
       {children}
     </div>
+  );
+}
+
+// A CLIENT header inside the assign tray. Doubles as a drop target (`edge:client:<id>` →
+// assign the task straight to the client) AND the accordion toggle (hover to open its
+// projects, click to pin). isOver → purple, same "drop here to assign" cue as the rows.
+function EdgeClientRow({
+  client, count, expanded, onMouseEnter, onMouseLeave, onClick,
+}: {
+  client: Client; count: number; expanded: boolean;
+  onMouseEnter: () => void; onMouseLeave: () => void; onClick: () => void;
+}) {
+  const { setNodeRef, isOver } = useDroppable({ id: `edge:client:${client.id}` });
+  return (
+    <button
+      ref={setNodeRef}
+      type="button"
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
+      onClick={onClick}
+      className={`group h-[37px] w-full text-left box-border flex flex-row gap-2 items-center px-[31px] transition-colors ${isOver ? 'bg-[#8465ff]/30' : 'hover:bg-white/[0.05]'}`}
+    >
+      <ChevronRight size={12} className={`text-[#5e5e5e] transition-transform ${expanded ? 'rotate-90' : ''}`} />
+      <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis text-white">{client.name || client.short}</span>
+      <span className="text-[#474747] text-[12px]">{count}</span>
+    </button>
   );
 }
 
@@ -6397,6 +6423,13 @@ export default function App() {
   // records which edge pulled it out. Opened by hovering/clicking the thin edge bars or by
   // dragging a task card into the edge zones; drops on drawer rows reassign.
   const [edgeDrawer, setEdgeDrawer] = useState<'left' | 'right' | null>(null);
+  // Mirror of edgeDrawer for the collision fn (which is a useCallback and would otherwise
+  // capture a stale value). The tray's drop rows are always MOUNTED (so dnd-kit measures them
+  // at their real on-screen position), so collision must only honour edge hits while the tray
+  // is actually open — otherwise a normal first-column drag would be captured by the invisible
+  // tray sitting over it.
+  const edgeDrawerRef = useRef<'left' | 'right' | null>(null);
+  useEffect(() => { edgeDrawerRef.current = edgeDrawer; }, [edgeDrawer]);
   // SINGLE-OPEN accordion in the edge tray: at most one client's projects showing at a time.
   // Lingering over a client header opens it (and closes whichever was open); roll off → null.
   const [edgeExpandedClient, setEdgeExpandedClient] = useState<string | null>(null);
@@ -7546,6 +7579,11 @@ export default function App() {
           const proj = projects.find((p) => p.id === pid);
           const targetList: ListId = proj?.list ?? dragged.list;
           setTasks((prev) => prev.map((t) => (t.id === dragged.id ? { ...t, projectId: pid, list: targetList } : t)));
+        } else if (overIdStr.startsWith('edge:client:')) {
+          // Assign the task directly to a CLIENT (top level): set clientId and detach it from
+          // any specific project so it lives at the client, not under a sub-project.
+          const cid = overIdStr.slice('edge:client:'.length);
+          setTasks((prev) => prev.map((t) => (t.id === dragged.id ? { ...t, clientId: cid, projectId: undefined } : t)));
         } else if (overIdStr.startsWith('edge:person:')) {
           const short = overIdStr.slice('edge:person:'.length);
           setTasks((prev) => prev.map((t) => (t.id === dragged.id && !t.assignees.includes(short) ? { ...t, assignees: [...t.assignees, short] } : t)));
@@ -8773,14 +8811,20 @@ export default function App() {
     // → just suppresses the columns underneath), so dropping on a row assigns while dropping
     // in a gap/header simply does nothing instead of leaking to the columns below.
     const edgeHits = collisions.filter((c) => String(c.id).startsWith('edge:'));
-    if (edgeHits.length) {
-      const specific = edgeHits.find((c) => c.id !== 'edge:__mask__');
-      return [specific || edgeHits[0]];
+    // The tray's droppables are always mounted (for correct measurement), so they collide even
+    // when the tray is shut. Only honour them while it's actually OPEN; otherwise drop them from
+    // consideration so a normal drag over the first column behaves as if the tray weren't there.
+    if (edgeDrawerRef.current === 'left') {
+      if (edgeHits.length) {
+        const specific = edgeHits.find((c) => c.id !== 'edge:__mask__');
+        return [specific || edgeHits[0]];
+      }
     }
-    if (mode !== 'calendar') return collisions;
+    const base = edgeHits.length ? collisions.filter((c) => !String(c.id).startsWith('edge:')) : collisions;
+    if (mode !== 'calendar') return base;
     const activeCellId = args.active.data.current?.calendarCellId as string | undefined;
     const activeTask = args.active.data.current?.task as Task | undefined;
-    if (!activeCellId || !activeTask) return collisions;
+    if (!activeCellId || !activeTask) return base;
     const activeList = activeTask.list;
     const allowListChange = ctrlDownRef.current;
 
@@ -8798,7 +8842,7 @@ export default function App() {
     const cellHits: typeof collisions = [];
     let columnHit: { id: string; date: string } | null = null;
     const seen = new Set<string>();
-    for (const c of collisions) {
+    for (const c of base) {
       const id = String(c.id);
       if (id.startsWith('col:')) {
         if (!columnHit) columnHit = { id, date: id.split(':')[1] };
@@ -10282,6 +10326,9 @@ export default function App() {
           // underneath (TrayMask + calendarCollision keep the drag from leaking below). Drop a
           // task on a person → assignee added; on a project → the task MOVES to that project.
           const trayOpen = edgeDrawer === 'left';
+          // While a task is in flight every client is force-expanded, so all project rows are
+          // mounted (and thus measured by dnd-kit at drag start) and droppable without a hover.
+          const trayDragActive = activeType === 'task' || activeType === 'projTask';
           // Single-open accordion, hover-driven: lingering over a client header opens ITS
           // projects and closes whatever was open; rolling onto the next one readjusts.
           const hoverExpand = (cid: string) => {
@@ -10309,14 +10356,20 @@ export default function App() {
                   <ChevronRight size={12} className="text-[#a8a8a8] shrink-0" />
                 </button>
               </div>
-              {/* Tray — opaque, opens from just right of the rail (left-[22px]). Its first row
-                  aligns with the column content (top-[104px]). TrayMask covers the whole area
-                  so a drag over any part of it stops affecting the columns below. */}
+              {/* Tray — opaque, sits just right of the rail (left-[22px]); first row aligns with
+                  the column content (top-[104px]). It is ALWAYS mounted and revealed via opacity
+                  (NOT an off-screen translate): dnd-kit measures droppable rects once at drag
+                  start, so a tray translated off-screen at that moment would have all its rows
+                  measured off-screen and never detect the cursor when it slid in mid-drag — which
+                  is exactly why drops did nothing. Kept on-screen + gated in calendarCollision
+                  (edgeDrawerRef) so it only intercepts while actually open. While a task is being
+                  dragged every client is force-expanded so every project row is a live, measured
+                  drop target without needing a mid-drag hover. */}
               <div
                 onMouseLeave={() => { setEdgeDrawer((d) => (d === 'left' ? null : d)); cancelHoverExpand(); setEdgeExpandedClient(null); }}
                 // Card-gray (#333333) — same material as the rail + calendar cards, no darker
                 // panel behind it. Opaque so it still masks the columns underneath.
-                className={`fixed left-[22px] top-[104px] bottom-[84px] w-[320px] z-40 bg-[#333333] flex flex-col transition-transform duration-200 ease-out ${trayOpen ? 'translate-x-0' : '-translate-x-[342px]'}`}
+                className={`fixed left-[22px] top-[104px] bottom-[84px] w-[320px] z-40 bg-[#333333] flex flex-col transition-opacity duration-200 ease-out ${trayOpen ? 'opacity-100 pointer-events-auto' : 'opacity-0 pointer-events-none'}`}
               >
                 <TrayMask />
                 {/* Assign To — people. */}
@@ -10331,31 +10384,29 @@ export default function App() {
                     </EdgeDropRow>
                   ))}
                 </div>
-                {/* Two-line-space breather before the Assign Project section. */}
+                {/* Two-line-space breather before the Assign Client / Project section. */}
                 <div className="shrink-0 h-[74px]" aria-hidden />
                 <div className="shrink-0 h-[37px] flex items-center px-[31px]">
-                  <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Assign Project</p>
+                  <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Assign Client / Project</p>
                 </div>
-                {/* Projects grouped by client, COLLAPSED — client headers expand on click OR on
-                    linger (300ms hover). Clientless projects list flat. */}
+                {/* Projects grouped by client. Drop on the CLIENT header → assign the client;
+                    expand (hover-linger or click, and always while dragging) → drop on a PROJECT.
+                    Clientless projects list flat below. */}
                 <CustomScroll>
                   {proj2SortedClients.map((c) => {
                     const clientProjects = projects.filter((p) => p.clientId === c.id);
                     if (clientProjects.length === 0) return null;
-                    const expanded = edgeExpandedClient === c.id;
+                    const expanded = trayDragActive || edgeExpandedClient === c.id;
                     return (
                       <Fragment key={c.id}>
-                        <button
-                          type="button"
+                        <EdgeClientRow
+                          client={c}
+                          count={clientProjects.length}
+                          expanded={expanded}
                           onMouseEnter={() => hoverExpand(c.id)}
                           onMouseLeave={cancelHoverExpand}
                           onClick={() => { cancelHoverExpand(); setEdgeExpandedClient((cur) => (cur === c.id ? null : c.id)); }}
-                          className="group h-[37px] w-full text-left box-border flex flex-row gap-2 items-center px-[31px] hover:bg-white/[0.05] transition-colors"
-                        >
-                          <ChevronRight size={12} className={`text-[#5e5e5e] transition-transform ${expanded ? 'rotate-90' : ''}`} />
-                          <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis text-white">{c.name || c.short}</span>
-                          <span className="text-[#474747] text-[12px]">{clientProjects.length}</span>
-                        </button>
+                        />
                         {expanded && clientProjects.map((p) => (
                           <EdgeDropRow key={p.id} id={`edge:project:${p.id}`}>
                             <span className="pl-[20px] font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis text-white">{p.name || 'Untitled'}</span>
