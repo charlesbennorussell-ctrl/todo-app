@@ -5823,17 +5823,21 @@ export default function App() {
       try {
         const w = gw();
         if (w.label && w.label !== 'main') return;
-        const TW = 1053, TH = 932;
-        // Closed-loop sizing: this machine's DPI bookkeeping mangles size requests
-        // unpredictably (every native attempt AND the naive JS request landed wrong),
-        // so request the target, MEASURE what actually happened (innerWidth/Height =
-        // true logical px), then re-request scaled by the observed error. Converges in
-        // one correction; the OS height clamp (near-full-height target) self-limits.
-        await w.setSize(new LS(TW, TH));
-        await new Promise((r) => setTimeout(r, 250));
-        const aw = window.innerWidth, ah = window.innerHeight;
-        if (aw > 0 && ah > 0 && (Math.abs(aw - TW) > 8 || Math.abs(ah - TH) > 8)) {
-          await w.setSize(new LS(Math.round(TW * (TW / aw)), Math.round(TH * (TH / ah))));
+        // Closed-loop sizing. This machine's DPI pipeline mangles every size request
+        // (native + JS alike), so trust only observation:
+        //   HEIGHT — the goal is "almost top to bottom": request an absurd 2000 and let
+        //   the OS clamp to the work area. Deterministic max height, no oscillation.
+        //   WIDTH — converge on the user's measured 1579 PHYSICAL px: observe
+        //   innerWidth x devicePixelRatio (ground truth regardless of how request
+        //   units get scaled) and re-scale the request until it lands within 12px.
+        const TARGET_PHYS_W = 1579;
+        let reqW = 1053;
+        for (let i = 0; i < 5; i++) {
+          await w.setSize(new LS(Math.round(reqW), 2000));
+          await new Promise((r) => setTimeout(r, 250));
+          const awPhys = window.innerWidth * (window.devicePixelRatio || 1);
+          if (awPhys <= 0 || Math.abs(awPhys - TARGET_PHYS_W) <= 12) break;
+          reqW = reqW * (TARGET_PHYS_W / awPhys);
         }
         await w.center();
       } catch { /* not in Tauri / capability absent in old builds */ }
@@ -8549,11 +8553,16 @@ export default function App() {
         });
       } else {
         // 3-tier sort: pending \u2192 started \u2192 completed (each past their grace window).
+        // Section-aware completed placement (user policy): in TODAY / TOMORROW a finished
+        // task sinks to the bottom; in NEXT it flips to the TOP and stays there. Started
+        // keeps its middle tier everywhere; grace windows unchanged.
         // Within a tier (and within freshly-toggled tasks still in grace): deadline ascending,
         // undated tasks below dated, manual order as the final tiebreaker.
+        const completedOnTop = k.endsWith(':next');
+        const tierFor = (t: Task) => { const b = tier(t); return b === 2 && completedOnTop ? -1 : b; };
         m[k].sort((a, b) => {
-          const at = tier(a);
-          const bt = tier(b);
+          const at = tierFor(a);
+          const bt = tierFor(b);
           if (at !== bt) return at - bt;
           const ad = a.deadline;
           const bd = b.deadline;
@@ -8589,12 +8598,14 @@ export default function App() {
           return a.title.localeCompare(b.title);
         });
       } else {
-        // Dashboard aggregates carry over per-list bucket order, but post-grace
-        // started + completed tasks sink in the aggregate too (3-tier, matching
-        // the per-list sort above).
+        // Dashboard aggregates carry over per-list bucket order, with the same
+        // section-aware completed placement as the per-list sort: sink in
+        // today/tomorrow, TOP in next.
+        const aggCompletedOnTop = s === 'next';
+        const aggTier = (t: Task) => { const b = tier(t); return b === 2 && aggCompletedOnTop ? -1 : b; };
         agg.sort((a, b) => {
-          const at = tier(a);
-          const bt = tier(b);
+          const at = aggTier(a);
+          const bt = aggTier(b);
           return at === bt ? 0 : at - bt;
         });
       }
