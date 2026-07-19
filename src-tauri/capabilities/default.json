@@ -10,6 +10,7 @@
     "core:default",
     "global-shortcut:default",
     "core:window:allow-hide",
-    "core:window:allow-show"
+    "core:window:allow-show",
+    "allow-set-pip-shortcut"
   ]
 }
