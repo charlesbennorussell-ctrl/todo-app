@@ -5819,11 +5819,25 @@ export default function App() {
     const gw = t?.window?.getCurrentWindow;
     const LS = t?.window?.LogicalSize;
     if (!gw || !LS) return;
-    try {
-      const w = gw();
-      if (w.label && w.label !== 'main') return;
-      w.setSize(new LS(1053, 932)).then(() => w.center()).catch(() => { /* capability absent in old builds */ });
-    } catch { /* not in Tauri */ }
+    (async () => {
+      try {
+        const w = gw();
+        if (w.label && w.label !== 'main') return;
+        const TW = 1053, TH = 932;
+        // Closed-loop sizing: this machine's DPI bookkeeping mangles size requests
+        // unpredictably (every native attempt AND the naive JS request landed wrong),
+        // so request the target, MEASURE what actually happened (innerWidth/Height =
+        // true logical px), then re-request scaled by the observed error. Converges in
+        // one correction; the OS height clamp (near-full-height target) self-limits.
+        await w.setSize(new LS(TW, TH));
+        await new Promise((r) => setTimeout(r, 250));
+        const aw = window.innerWidth, ah = window.innerHeight;
+        if (aw > 0 && ah > 0 && (Math.abs(aw - TW) > 8 || Math.abs(ah - TH) > 8)) {
+          await w.setSize(new LS(Math.round(TW * (TW / aw)), Math.round(TH * (TH / ah))));
+        }
+        await w.center();
+      } catch { /* not in Tauri / capability absent in old builds */ }
+    })();
   }, []);
   const wheelDragRef = useRef(false);
   useEffect(() => { wheelDragRef.current = !!activeId; }, [activeId]);
