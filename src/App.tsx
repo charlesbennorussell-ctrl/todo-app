@@ -562,7 +562,7 @@ function TopHeader({ viewName }: { viewName: string }) {
   );
 }
 
-function TaskCheckbox({ completed, started = false, onToggle }: { completed: boolean; started?: boolean; onToggle: () => void }) {
+function TaskCheckbox({ completed, started = false, onToggle, accent }: { completed: boolean; started?: boolean; onToggle: () => void; accent?: string }) {
   // Three visual states (cycled by repeated clicks — see toggleTask):
   //   pending   → empty box with grey 1.5px stroke
   //   started   → solid mid-grey fill (no tick), reading as "in progress" / "I've begun this"
@@ -571,8 +571,10 @@ function TaskCheckbox({ completed, started = false, onToggle }: { completed: boo
   // apart at a glance — pending=#0 fill, started=#656464 fill (matches the idle stroke), and
   // completed=#383838 fill (matches the faded text). Pre-2-stage tasks (no `started` property)
   // default to pending — backwards-compatible with existing storage.
-  const idleStroke = '#656464';
-  const startedFill = '#656464';
+  // `accent` (today-card purple) recolors the pending stroke + started fill; the completed
+  // fill keeps the universal faded-done look so "done" reads the same everywhere.
+  const idleStroke = accent || '#656464';
+  const startedFill = accent || '#656464';
   const doneFill = '#383838';
   // Tick stroke is the page background color so the check reads as a cut-out shape from the
   // muted fill — same look as the original design, just on the dimmer fill.
@@ -3995,17 +3997,28 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
     data: { type: 'task', task, calendarCellId: cellId },
     transition: { duration: 350, easing: 'cubic-bezier(0.16, 1, 0.3, 1)' },
   });
-  const style = { transform: CSS.Transform.toString(transform), transition: isAnyDragging ? `transform ${MOTION.base}ms ${MOTION.easeOut}` : 'none' };
+  // Today wash — same faint purple as the milestone card (inline: Tailwind arbitrary hex
+  // alpha was unreliable here). Kept during category-dim so the "this is today" location
+  // cue stays put while the text mutes.
+  const style: React.CSSProperties = {
+    transform: CSS.Transform.toString(transform),
+    transition: isAnyDragging ? `transform ${MOTION.base}ms ${MOTION.easeOut}` : 'none',
+    ...(cellId.startsWith(`cal:${todayISO()}:`) ? { backgroundColor: 'rgba(132, 101, 255, 0.10)' } : {}),
+  };
   const isScheduled = task.type === 'scheduled';
   const isNext = task.section === 'next' || task.section === 'tomorrow';
   const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID || task.list === 'personal';
+  // TODAY cards go full milestone-purple (faint purple wash, purple checkbox/meta/badges,
+  // WHITE title) — "what today is" reads at a glance. Keyed to the CELL the card renders in,
+  // so dragging a card off today reverts it to the normal palette automatically.
+  const isTodayCard = cellId.startsWith(`cal:${todayISO()}:`);
   // Category-dim color: 5% brighter than the completed-task #383838 (rgb 56 → 69 = #454545).
   // Wins over every other state — when the user is dragging across categories, ALL non-source
   // cards drop to this single muted gray regardless of whether they're scheduled, completed,
   // next, or normal.
   const DIM = 'text-[#454545]';
-  const titleColor = categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : isNext ? 'text-[#a8a8a8]' : 'text-white';
-  const metaColor = categoryDimmed ? DIM : isScheduled ? 'text-[#8465ff]' : 'text-[#656464]';
+  const titleColor = categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : isTodayCard ? 'text-white' : isNext ? 'text-[#a8a8a8]' : 'text-white';
+  const metaColor = categoryDimmed ? DIM : (isScheduled || isTodayCard) ? 'text-[#8465ff]' : 'text-[#656464]';
   // Source-collapse: outer wrapper uses max-height (CSS can't transition from auto, but it CAN
   // transition from a fixed max-height to 0) + marginBottom so the column reflows when this card
   // becomes the active drag.
@@ -4020,7 +4033,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
       ref={setNodeRef}
       style={style}
       data-cal-card={task.id}
-      className={`relative mx-[6px] mb-[4px] group min-h-[45px] flex bg-white/[0.03] ${dimmed ? 'opacity-60' : ''}`}
+      className={`relative mx-[6px] mb-[4px] group min-h-[45px] flex ${isTodayCard ? '' : 'bg-white/[0.03]'} ${dimmed ? 'opacity-60' : ''}`}
       animate={{ opacity: isDragging ? 0 : 1 }}
       transition={{ opacity: { duration: 0.12, ease: 'easeOut' } }}
     >
@@ -4032,7 +4045,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
         <div className="flex flex-row items-center gap-[10px] w-full pr-5">
           {!isScheduled && (
             <div onPointerDown={(e) => e.stopPropagation()} className="shrink-0 flex items-center justify-center">
-              <TaskCheckbox completed={task.completed} started={task.started} onToggle={onToggle} />
+              <TaskCheckbox completed={task.completed} started={task.started} onToggle={onToggle} accent={isTodayCard && !categoryDimmed ? '#8465ff' : undefined} />
             </div>
           )}
           <div className="flex flex-row items-center gap-[4px] min-w-0">
@@ -4073,18 +4086,18 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
                 Only render the client/project paragraph when there's actual non-empty text to show; otherwise an
                 empty <p> sits at the start of the row and the gap-[6px] pushes the next item (e.g. an assignee
                 circle) 6px to the right, making it look indented. */}
-            {client?.short && project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : 'text-[#656464]'}`}>{client.short}<Arrowhead dim={task.completed || categoryDimmed} />{project.name}</p>}
+            {client?.short && project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : metaColor}`}>{client.short}<Arrowhead dim={task.completed || categoryDimmed} tone={isTodayCard ? 'milestone' : 'default'} />{project.name}</p>}
             {client?.short && !project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : metaColor}`}>{client.short}</p>}
-            {!client?.short && project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : 'text-[#656464]'}`}>{project.name}</p>}
+            {!client?.short && project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : metaColor}`}>{project.name}</p>}
             {/* Deadline arrow — the same glyph list view puts before dates (small variant for
                 the tighter card meta). Milestones get it too, tinted milestone purple. */}
-            {task.deadline && <DeadlineArrow small dim={task.completed || categoryDimmed} color={isScheduled ? '#8465ff' : undefined} />}
-            {task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : isLateDeadline(task.deadline) ? 'text-[#FF7171]' : 'text-[#656464]'}`}>{formatDeadline(task.deadline)}</p>}
+            {task.deadline && <DeadlineArrow small dim={task.completed || categoryDimmed} color={(isScheduled || isTodayCard) ? '#8465ff' : undefined} />}
+            {task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : isLateDeadline(task.deadline) ? 'text-[#FF7171]' : isTodayCard ? 'text-[#8465ff]' : 'text-[#656464]'}`}>{formatDeadline(task.deadline)}</p>}
             {/* Assignees AFTER the date — hidden at rest, fade in on card-hover (~200ms), and on
                 roll-off linger ~1s then fade out over 500ms (asymmetric group-hover transition). */}
             {task.assignees.length > 0 && (
               <span className="flex flex-row items-center gap-[6px] linger-reveal">
-                {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed || categoryDimmed} />)}
+                {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={(isScheduled || isTodayCard) ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed || categoryDimmed} />)}
               </span>
             )}
           </div>
