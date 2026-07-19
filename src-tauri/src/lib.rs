@@ -182,12 +182,37 @@ pub fn run() {
                     use tauri_plugin_autostart::ManagerExt;
                     let _ = app.autolaunch().enable();
                 }
-                // Default window size is enforced from the WEB side on page load (see the
-                // sizing effect in App.tsx). Every Rust-side attempt — config sizing, setup
-                // set_size (logical AND physical), even a 500ms-deferred thread — got mangled
-                // by scale_factor() reporting 1.0, landing the window at 1069x906 PHYSICAL.
-                // The webview knows the true devicePixelRatio, and the JS setSize converts
-                // with the live scale in core, so that's where the sizing lives now.
+                // Default window size via raw Win32 SetWindowPos — every Tauri/tao sizing
+                // path on this machine mis-scales (corrupted DPI bookkeeping: requests land
+                // as physical-at-scale-1), and the webview's innerWidth agrees with the
+                // REQUEST rather than reality, so closed-loop correction through those
+                // sensors is blind. SetWindowPos is physical-in/physical-out (the process is
+                // per-monitor-DPI aware): width = the user's measured 1579px, height = the
+                // monitor work area ("almost top to bottom"), centered horizontally.
+                #[cfg(windows)]
+                if let Some(main) = app.get_webview_window("main") {
+                    let m2 = main.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(800));
+                        if let Ok(hwnd) = m2.hwnd() {
+                            use windows_sys::Win32::Foundation::RECT;
+                            use windows_sys::Win32::UI::WindowsAndMessaging::{
+                                SetWindowPos, SystemParametersInfoW, SPI_GETWORKAREA, SWP_NOZORDER,
+                            };
+                            unsafe {
+                                let mut wa = RECT { left: 0, top: 0, right: 1920, bottom: 1040 };
+                                SystemParametersInfoW(SPI_GETWORKAREA, 0, &mut wa as *mut RECT as *mut _, 0);
+                                let wa_w = wa.right - wa.left;
+                                let wa_h = wa.bottom - wa.top;
+                                let w: i32 = if wa_w < 1579 { wa_w } else { 1579 };
+                                let h: i32 = wa_h;
+                                let x = wa.left + (wa_w - w) / 2;
+                                let y = wa.top;
+                                SetWindowPos(hwnd.0 as _, std::ptr::null_mut(), x, y, w, h, SWP_NOZORDER);
+                            }
+                        }
+                    });
+                }
                 if std::env::args().any(|a| a == "--hidden") {
                     if let Some(main) = app.get_webview_window("main") {
                         let _ = main.hide();

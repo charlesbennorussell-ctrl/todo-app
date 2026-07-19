@@ -5808,41 +5808,9 @@ export default function App() {
   // ghost is skipped), scrolls it directly, and stops the event there. dnd-kit tracks ancestor
   // scrolls mid-drag, so droppable hit-testing stays correct while the list moves. Outside a
   // drag it returns immediately and CustomScroll's buttery lerp keeps handling the wheel.
-  // Desktop default window size — applied from the WEB side because every Rust-side sizing
-  // path mis-scales on this machine (scale_factor() reads 1.0 during startup, landing the
-  // window at 1069x906 PHYSICAL). By page-load the webview knows the real DPI, and the JS
-  // setSize(LogicalSize) converts with the live scale in core. Main window only (not PIP),
-  // once per load; no-op in plain browsers.
-  useEffect(() => {
-    if (PIP_MODE) return;
-    const t = (window as unknown as { __TAURI__?: { window?: { getCurrentWindow?: () => { label?: string; setSize: (s: unknown) => Promise<void>; center: () => Promise<void> }; LogicalSize?: new (w: number, h: number) => unknown } } }).__TAURI__;
-    const gw = t?.window?.getCurrentWindow;
-    const LS = t?.window?.LogicalSize;
-    if (!gw || !LS) return;
-    (async () => {
-      try {
-        const w = gw();
-        if (w.label && w.label !== 'main') return;
-        // Closed-loop sizing. This machine's DPI pipeline mangles every size request
-        // (native + JS alike), so trust only observation:
-        //   HEIGHT — the goal is "almost top to bottom": request an absurd 2000 and let
-        //   the OS clamp to the work area. Deterministic max height, no oscillation.
-        //   WIDTH — converge on the user's measured 1579 PHYSICAL px: observe
-        //   innerWidth x devicePixelRatio (ground truth regardless of how request
-        //   units get scaled) and re-scale the request until it lands within 12px.
-        const TARGET_PHYS_W = 1579;
-        let reqW = 1053;
-        for (let i = 0; i < 5; i++) {
-          await w.setSize(new LS(Math.round(reqW), 2000));
-          await new Promise((r) => setTimeout(r, 250));
-          const awPhys = window.innerWidth * (window.devicePixelRatio || 1);
-          if (awPhys <= 0 || Math.abs(awPhys - TARGET_PHYS_W) <= 12) break;
-          reqW = reqW * (TARGET_PHYS_W / awPhys);
-        }
-        await w.center();
-      } catch { /* not in Tauri / capability absent in old builds */ }
-    })();
-  }, []);
+  // (Default window sizing moved to the Rust shell via raw Win32 SetWindowPos — every
+  // Tauri-layer sizing path mis-scales on this machine, and the webview's own innerWidth
+  // reports the REQUEST rather than reality, so no web-side loop can even observe truth.)
   const wheelDragRef = useRef(false);
   useEffect(() => { wheelDragRef.current = !!activeId; }, [activeId]);
   useEffect(() => {
