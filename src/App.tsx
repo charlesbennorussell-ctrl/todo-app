@@ -3683,6 +3683,55 @@ const scrollBandToTop = (e: React.MouseEvent) => {
   requestAnimationFrame(step);
 };
 
+// Shared milestone card — the purple-tinted two-line card (title on line 1; client › project,
+// assignees, date on line 2). Extracted from WeekCalendarMode's local MilestoneCard so the
+// focus page's "Coming Up" section renders the IDENTICAL format. `onClick` (focus page) filters
+// to the milestone's project — or seeds the live search with its title when it has no project.
+function MilestoneCardView({ task, projects, clients, showDate, categoryDimmed = false, onEdit, onQuickEdit, onAddSibling, onClick }: {
+  task: Task; projects: Project[]; clients: Client[]; showDate: boolean; categoryDimmed?: boolean;
+  onEdit: () => void; onQuickEdit?: () => void; onAddSibling?: () => void; onClick?: () => void;
+}) {
+  const project = task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
+  const resolvedClientId = task.clientId ?? project?.clientId;
+  const client = resolvedClientId ? clients.find((c) => c.id === resolvedClientId) : undefined;
+  const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID || task.list === 'personal';
+  // Expired milestones (deadline before today) render in faint purple — a permanent record.
+  const isExpired = !!task.deadline && task.deadline < todayISO();
+  const milestonePurpleClass = isExpired ? 'text-[#4f4290]' : 'text-[#8465ff]';
+  const DIM = 'text-[#454545]';
+  const titleClass = categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : milestonePurpleClass;
+  // Inline style because Tailwind arbitrary opacity on hex colors wasn't reliably generating the CSS.
+  const cardBgStyle: React.CSSProperties = { backgroundColor: 'rgba(132, 101, 255, 0.10)' };
+  return (
+    <div onClick={onClick} onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onQuickEdit?.(); }} style={cardBgStyle} className="relative mx-[6px] mb-[4px] group cursor-pointer h-[55px]">
+      <div className="px-[10px] py-[6px] flex flex-col justify-center gap-[2px] h-full">
+        <div className="flex flex-row items-center gap-[4px]">
+          <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleClass}`}>{task.title}</span>
+        </div>
+        {/* Line 2 always reserves height so meta-less milestones don't render shorter. */}
+        <div className="flex flex-row items-center gap-[6px] min-h-[15px]">
+          {client?.short && project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${titleClass}`}>{client.short}<Arrowhead dim={task.completed || categoryDimmed} tone="milestone" faint={isExpired} />{project.name}</p>}
+          {client?.short && !project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${titleClass}`}>{client.short}</p>}
+          {!client?.short && project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${titleClass}`}>{project.name}</p>}
+          {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone="scheduled" hollow={isPersonal} dim={task.completed || categoryDimmed} faint={isExpired} />)}
+          {showDate && task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${titleClass}`}>{formatDeadline(task.deadline)}</p>}
+          {onAddSibling && (
+            <button
+              type="button"
+              onPointerDown={(e) => e.stopPropagation()}
+              onClick={(e) => { e.stopPropagation(); onAddSibling(); }}
+              className="p-[2px] opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity"
+              aria-label="Add task in same project"
+            >
+              <Plus size={12} />
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Per-day caps shared by the week calendar and the focus page's mini-calendar strip:
 //   CAL_TASKS_PER_DAY (9)              — global cap on total slots (mandatory + queue)
 //   CAL_QUEUE_CAP_PER_LIST_PER_DAY (3) — per-list cap on queue auto-fill per day
@@ -4032,60 +4081,20 @@ function WeekCalendarMode({
       .sort((a, b) => (a.deadline! < b.deadline! ? -1 : a.deadline! > b.deadline! ? 1 : a.title.localeCompare(b.title)));
   }, [tasks, lastVisibleIso]);
 
-  const MilestoneCard = ({ task, showDate, categoryDimmed = false }: { task: Task; showDate: boolean; categoryDimmed?: boolean }) => {
-    const project = task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
-    const resolvedClientId = task.clientId ?? project?.clientId;
-    const client = resolvedClientId ? clients.find((c) => c.id === resolvedClientId) : undefined;
-    const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID || task.list === 'personal';
-    // Milestone calendar cards match regular calendar cards: square + no stroke.
-    // The card background is a faint-purple tint — a quieter twin of the regular task card's
-    // white tint. Title always on line 1; meta on line 2. Expired milestones (deadline before
-    // today) render in faint purple text — they linger on the calendar permanently as a record.
-    const isExpired = !!task.deadline && task.deadline < todayISO();
-    const milestonePurpleClass = isExpired ? 'text-[#4f4290]' : 'text-[#8465ff]';
-    // Category-dim wins over completed and milestone-purple alike — same #454545 used on
-    // CalendarCard so a cross-category drag mutes everything to a single tone.
-    const DIM = 'text-[#454545]';
-    const titleClass = categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : milestonePurpleClass;
-    // Card bg: tinted faint purple on every milestone — live, expired, and completed all keep
-    // the box so the slot reads visually consistent across columns. Faint text alone leaves
-    // the slot looking taller than its neighbours and creates perceived vertical drift.
-    // Inline style because Tailwind arbitrary opacity on hex colors wasn't reliably generating
-    // the CSS.
-    const cardBgStyle: React.CSSProperties = { backgroundColor: 'rgba(132, 101, 255, 0.10)' };
-    return (
-      <div onDoubleClick={(e) => { e.stopPropagation(); onEditTask(task); }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onQuickEditTask?.(task); }} style={cardBgStyle} className="relative mx-[6px] mb-[4px] group cursor-pointer h-[55px]">
-        <div className="px-[10px] py-[6px] flex flex-col justify-center gap-[2px] h-full">
-          <div className="flex flex-row items-center gap-[4px]">
-            <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleClass}`}>{task.title}</span>
-          </div>
-          {/* Line 2 always reserves height so milestones with no client / project / assignees
-              don't render shorter than their siblings. min-h-[15px] matches the 11.5px text line. */}
-          <div className="flex flex-row items-center gap-[6px] min-h-[15px]">
-            {/* Only render the client/project paragraph when there's actual non-empty text to show; otherwise
-                an empty <p> sits at the start of the row and gap-[6px] pushes the next item (e.g. the assignee
-                circle) 6px to the right, making it look indented. */}
-            {client?.short && project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${titleClass}`}>{client.short}<Arrowhead dim={task.completed || categoryDimmed} tone="milestone" faint={isExpired} />{project.name}</p>}
-            {client?.short && !project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${titleClass}`}>{client.short}</p>}
-            {!client?.short && project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${titleClass}`}>{project.name}</p>}
-            {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone="scheduled" hollow={isPersonal} dim={task.completed || categoryDimmed} faint={isExpired} />)}
-            {showDate && task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${titleClass}`}>{formatDeadline(task.deadline)}</p>}
-            {/* + button hugs the inline meta — same hover-reveal treatment as CalendarCard so the
-                user can spawn a sibling task in this milestone's project without opening the panel. */}
-            <button
-              type="button"
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={(e) => { e.stopPropagation(); onAddSiblingTask(task); }}
-              className="p-[2px] opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity"
-              aria-label="Add task in same project"
-            >
-              <Plus size={12} />
-            </button>
-          </div>
-        </div>
-      </div>
-    );
-  };
+  // Thin wrapper over the shared MilestoneCardView (extracted to module scope so the focus
+  // page's "Coming Up" renders the identical purple-tint two-line card). Call sites unchanged.
+  const MilestoneCard = ({ task, showDate, categoryDimmed = false }: { task: Task; showDate: boolean; categoryDimmed?: boolean }) => (
+    <MilestoneCardView
+      task={task}
+      projects={projects}
+      clients={clients}
+      showDate={showDate}
+      categoryDimmed={categoryDimmed}
+      onEdit={() => onEditTask(task)}
+      onQuickEdit={onQuickEditTask ? () => onQuickEditTask(task) : undefined}
+      onAddSibling={() => onAddSiblingTask(task)}
+    />
+  );
 
   const formatRange = () => {
     // Range covers the five DATE columns (the Next Week column sits beyond it).
@@ -6545,8 +6554,19 @@ export default function App() {
   // narrows to just that project.
   const [focusProjectId, setFocusProjectId] = useState<string | null>(null);
   const [focusClientId, setFocusClientId] = useState<string | null>(null);
-  // Focus-page live search query — filters the day columns + the Milestone / Goals column.
+  // Focus-page live search query — filters the day columns + the Milestones column.
   const [focusSearch, setFocusSearch] = useState('');
+  // Clicking a milestone (Milestones column or a "Coming Up" card) filters to its adjacent
+  // project (toggle, same as clicking the project row). No project → seed the live search
+  // with the milestone's name instead.
+  const milestoneClickTo = (t: Task) => {
+    if (t.projectId) {
+      setFocusClientId(null);
+      setFocusProjectId((cur) => (cur === t.projectId ? null : t.projectId!));
+    } else {
+      setFocusSearch(t.title);
+    }
+  };
   // Edge assign rails: which slide-out drawer is open. Both sides now show the SAME
   // unified tray (Assign To people on top, Assign Project below). 'left' | 'right' just
   // records which edge pulled it out. Opened by hovering/clicking the thin edge bars or by
@@ -8547,7 +8567,7 @@ export default function App() {
   // the band's iso to suppress exactly those. Chips for OTHER days still render, which is
   // how an overdue task inside Today keeps its red late date. Dashboard-milestones callsite
   // passes nothing and keeps all dates.
-  const renderReadonlyBucket = (list: Task[], omitDeadlineIso?: string, titleOnly?: boolean) => (
+  const renderReadonlyBucket = (list: Task[], omitDeadlineIso?: string, titleOnly?: boolean, onRowClick?: (t: Task) => void) => (
     <>
       {list.map((task) => {
         const project = task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
@@ -8559,7 +8579,7 @@ export default function App() {
         const titleColor = isScheduled ? 'text-[#8465ff]' : task.completed ? 'text-[#474747]' : isNext ? 'text-[#a8a8a8]' : 'text-white';
         const metaColor = task.completed ? 'text-[#474747]' : isScheduled ? 'text-[#8465ff]' : 'text-[#656464]';
         return (
-          <div key={`dash-${task.id}`} onDoubleClick={() => openEdit(task)} onContextMenu={(e) => { e.preventDefault(); openQuick(task); }} className="h-[37px] box-border flex flex-row gap-2 items-center px-[31px] w-full group hover:bg-white/[0.03]">
+          <div key={`dash-${task.id}`} onClick={onRowClick ? () => onRowClick(task) : undefined} onDoubleClick={() => openEdit(task)} onContextMenu={(e) => { e.preventDefault(); openQuick(task); }} className={`h-[37px] box-border flex flex-row gap-2 items-center px-[31px] w-full group hover:bg-white/[0.03] ${onRowClick ? 'cursor-pointer' : ''}`}>
             {!isScheduled && <TaskCheckbox completed={task.completed} started={task.started} onToggle={() => toggleTask(task.id)} />}
             <div className="flex flex-row items-center gap-[4px]">
               {/* Use the shared taskOrderSlots so dashboard milestones honor the user's chosen
@@ -9442,7 +9462,7 @@ export default function App() {
                         </button>
                       </div>
                       <CustomScroll>
-                        {renderReadonlyBucket(milestones, undefined, true)}
+                        {renderReadonlyBucket(milestones, undefined, true, milestoneClickTo)}
                       </CustomScroll>
                     </div>
                   );
@@ -9591,7 +9611,21 @@ export default function App() {
                             <div className="h-[20px] px-[16px] flex items-center mb-[6px]">
                               <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap text-[#5e5e5e]">Coming Up</p>
                             </div>
-                            {renderReadonlyBucket(comingUpMilestones, undefined, true)}
+                            {/* Same purple-tint two-line card the calendar's Coming Up uses.
+                                Click → filter to its project (or name-search when projectless). */}
+                            {comingUpMilestones.map((t) => (
+                              <MilestoneCardView
+                                key={t.id}
+                                task={t}
+                                projects={projects}
+                                clients={clients}
+                                showDate
+                                onEdit={() => openEdit(t)}
+                                onQuickEdit={() => openQuick(t)}
+                                onAddSibling={() => addSiblingTask(t)}
+                                onClick={() => milestoneClickTo(t)}
+                              />
+                            ))}
                           </div>
                         )}
                         {dayBands(col.isos, col.key, col.section)}
