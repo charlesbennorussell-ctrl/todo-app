@@ -3687,9 +3687,12 @@ const scrollBandToTop = (e: React.MouseEvent) => {
 // assignees, date on line 2). Extracted from WeekCalendarMode's local MilestoneCard so the
 // focus page's "Coming Up" section renders the IDENTICAL format. `onClick` (focus page) filters
 // to the milestone's project — or seeds the live search with its title when it has no project.
-function MilestoneCardView({ task, projects, clients, showDate, categoryDimmed = false, onEdit, onQuickEdit, onAddSibling, onClick }: {
+function MilestoneCardView({ task, projects, clients, showDate, categoryDimmed = false, onEdit, onQuickEdit, onAddSibling, onClick, active = false }: {
   task: Task; projects: Project[]; clients: Client[]; showDate: boolean; categoryDimmed?: boolean;
   onEdit: () => void; onQuickEdit?: () => void; onAddSibling?: () => void; onClick?: () => void;
+  // Active milestone filter — white title + × at the end of line 1 (same visual the
+  // client/project filter rows use). Click anywhere on the card toggles it back off.
+  active?: boolean;
 }) {
   const project = task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
   const resolvedClientId = task.clientId ?? project?.clientId;
@@ -3699,7 +3702,7 @@ function MilestoneCardView({ task, projects, clients, showDate, categoryDimmed =
   const isExpired = !!task.deadline && task.deadline < todayISO();
   const milestonePurpleClass = isExpired ? 'text-[#4f4290]' : 'text-[#8465ff]';
   const DIM = 'text-[#454545]';
-  const titleClass = categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : milestonePurpleClass;
+  const titleClass = active ? 'text-white' : categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : milestonePurpleClass;
   // Inline style because Tailwind arbitrary opacity on hex colors wasn't reliably generating the CSS.
   const cardBgStyle: React.CSSProperties = { backgroundColor: 'rgba(132, 101, 255, 0.10)' };
   return (
@@ -3707,6 +3710,7 @@ function MilestoneCardView({ task, projects, clients, showDate, categoryDimmed =
       <div className="px-[10px] py-[6px] flex flex-col justify-center gap-[2px] h-full">
         <div className="flex flex-row items-center gap-[4px]">
           <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleClass}`}>{task.title}</span>
+          {active && <X size={13} className="ml-auto shrink-0 text-[#a8a8a8]" />}
         </div>
         {/* Line 2 always reserves height so meta-less milestones don't render shorter. */}
         <div className="flex flex-row items-center gap-[6px] min-h-[15px]">
@@ -6559,16 +6563,21 @@ export default function App() {
   const [focusClientId, setFocusClientId] = useState<string | null>(null);
   // Focus-page live search query — filters the day columns + the Milestones column.
   const [focusSearch, setFocusSearch] = useState('');
-  // Clicking a milestone (Milestones column or a "Coming Up" card) filters to its adjacent
-  // project (toggle, same as clicking the project row). No project → seed the live search
-  // with the milestone's name instead.
+  // Milestone filter — clicking a milestone (Milestones column or a "Coming Up" card) makes
+  // IT the active filter: the milestone row highlights with an × (same visual language as the
+  // client/project filter) and the day columns narrow to its project — or, when it has no
+  // project, to tasks matching its name via an INVISIBLE query (the search bar stays empty).
+  const [focusMilestoneId, setFocusMilestoneId] = useState<string | null>(null);
   const milestoneClickTo = (t: Task) => {
-    if (t.projectId) {
-      setFocusClientId(null);
-      setFocusProjectId((cur) => (cur === t.projectId ? null : t.projectId!));
-    } else {
-      setFocusSearch(t.title);
-    }
+    setFocusClientId(null);
+    setFocusProjectId(null);
+    setFocusMilestoneId((cur) => (cur === t.id ? null : t.id));
+  };
+  const focusMilestone = focusMilestoneId ? tasks.find((t) => t.id === focusMilestoneId) ?? null : null;
+  const passesMilestoneFilter = (t: Task) => {
+    if (!focusMilestone) return true;
+    if (focusMilestone.projectId) return t.projectId === focusMilestone.projectId;
+    return taskMatchesQuery(t, focusMilestone.title, projects, clients);
   };
   // Edge assign rails: which slide-out drawer is open. Both sides now show the SAME
   // unified tray (Assign To people on top, Assign Project below). 'left' | 'right' just
@@ -8570,7 +8579,7 @@ export default function App() {
   // the band's iso to suppress exactly those. Chips for OTHER days still render, which is
   // how an overdue task inside Today keeps its red late date. Dashboard-milestones callsite
   // passes nothing and keeps all dates.
-  const renderReadonlyBucket = (list: Task[], omitDeadlineIso?: string, titleOnly?: boolean, onRowClick?: (t: Task) => void) => (
+  const renderReadonlyBucket = (list: Task[], omitDeadlineIso?: string, titleOnly?: boolean, onRowClick?: (t: Task) => void, activeRowId?: string | null) => (
     <>
       {list.map((task) => {
         const project = task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
@@ -8579,7 +8588,10 @@ export default function App() {
         const isScheduled = task.type === 'scheduled';
         const isNext = task.section === 'next' || task.section === 'tomorrow';
         const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID || task.list === 'personal';
-        const titleColor = isScheduled ? 'text-[#8465ff]' : task.completed ? 'text-[#474747]' : isNext ? 'text-[#a8a8a8]' : 'text-white';
+        // Active filter row (milestone filter): white title + × at the row end — the same
+        // visual the client/project filter rows use.
+        const isActiveRow = activeRowId === task.id;
+        const titleColor = isActiveRow ? 'text-white' : isScheduled ? 'text-[#8465ff]' : task.completed ? 'text-[#474747]' : isNext ? 'text-[#a8a8a8]' : 'text-white';
         const metaColor = task.completed ? 'text-[#474747]' : isScheduled ? 'text-[#8465ff]' : 'text-[#656464]';
         return (
           <div key={`dash-${task.id}`} onClick={onRowClick ? () => onRowClick(task) : undefined} onDoubleClick={() => openEdit(task)} onContextMenu={(e) => { e.preventDefault(); openQuick(task); }} className={`h-[37px] box-border flex flex-row gap-2 items-center px-[31px] w-full group hover:bg-white/[0.03] ${onRowClick ? 'cursor-pointer' : ''}`}>
@@ -8609,10 +8621,11 @@ export default function App() {
                 <p className={`font-['NB_International:Regular',sans-serif] text-[14.333px] whitespace-nowrap ${task.completed ? 'text-[#474747]' : isScheduled ? 'text-[#8465ff]' : isLateDeadline(task.deadline) ? 'text-[#FF7171]' : isNext ? 'text-[#a8a8a8]' : 'text-white'}`}>{formatDeadline(task.deadline)}</p>
               </>
             )}
+            {isActiveRow && <X size={13} className="ml-auto text-[#a8a8a8] shrink-0" />}
             <button
               type="button"
               onClick={() => deleteTask(task.id)}
-              className="ml-auto -mr-[22px] p-1 opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity"
+              className={`${isActiveRow ? '' : 'ml-auto'} -mr-[22px] p-1 opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity`}
               aria-label="Delete task"
             >
               <Trash2 size={14} />
@@ -9373,7 +9386,7 @@ export default function App() {
                           active={focusProjectId === p.id}
                           expandable={kids.length > 0}
                           expanded={expanded}
-                          onClick={() => { setFocusClientId(null); setFocusProjectId(focusProjectId === p.id ? null : p.id); }}
+                          onClick={() => { setFocusClientId(null); setFocusMilestoneId(null); setFocusProjectId(focusProjectId === p.id ? null : p.id); }}
                           onToggleExpand={() => setFocusExpandedProjects((prev) => { const n = new Set(prev); n.has(p.id) ? n.delete(p.id) : n.add(p.id); return n; })}
                         />
                         {expanded && kids.map((k) => renderNode(k, undefined, depth + 1))}
@@ -9384,7 +9397,7 @@ export default function App() {
                     <div className="flex-1 min-w-0 flex flex-col min-h-0 overflow-hidden">
                       {/* Header doubles as the un-nest drop zone AND a click-to-clear-filter
                           target (clicking above the lists clears the active filter). */}
-                      <ProjectsHeaderDropZone onClearFilter={(focusClientId || focusProjectId) ? () => { setFocusClientId(null); setFocusProjectId(null); } : undefined} />
+                      <ProjectsHeaderDropZone onClearFilter={(focusClientId || focusProjectId || focusMilestoneId) ? () => { setFocusClientId(null); setFocusProjectId(null); setFocusMilestoneId(null); } : undefined} />
                       {/* Search — the FIRST content row (aligned with the first milestone and the
                           day columns' Work band). A yellow magnifier + a chrome-less input that
                           live-filters the day columns and the Milestone / Goals column as you type.
@@ -9415,7 +9428,7 @@ export default function App() {
                             <button
                               key={c.id}
                               type="button"
-                              onClick={() => { setFocusProjectId(null); setFocusClientId(focusClientId === c.id ? null : c.id); }}
+                              onClick={() => { setFocusProjectId(null); setFocusMilestoneId(null); setFocusClientId(focusClientId === c.id ? null : c.id); }}
                               className={`group h-[37px] w-full text-left box-border flex flex-row gap-2 items-center px-[31px] transition-colors ${clientActive ? '' : 'hover:bg-white/[0.03]'}`}
                             >
                               <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis ${clientActive ? 'text-white' : 'text-[#656464]'}`}>
@@ -9436,7 +9449,7 @@ export default function App() {
                   const clientOfMs = (t: Task) => t.clientId ?? (t.projectId ? projects.find((p) => p.id === t.projectId)?.clientId : undefined);
                   const msRank = (t: Task) => { const idx = listSequence.indexOf(effectiveListFor(t)); return idx < 0 ? 99 : idx; };
                   const milestones = visibleTasks
-                    .filter((t) => t.type === 'scheduled' && taskMatchesQuery(t, focusSearch, projects, clients) && (focusProjectId ? t.projectId === focusProjectId : focusClientId ? clientOfMs(t) === focusClientId : true))
+                    .filter((t) => t.type === 'scheduled' && taskMatchesQuery(t, focusSearch, projects, clients) && passesMilestoneFilter(t) && (focusProjectId ? t.projectId === focusProjectId : focusClientId ? clientOfMs(t) === focusClientId : true))
                     .sort((a, b) => {
                       if (msRank(a) !== msRank(b)) return msRank(a) - msRank(b);
                       const ad = a.deadline || '￿'; const bd = b.deadline || '￿';
@@ -9465,7 +9478,7 @@ export default function App() {
                         </button>
                       </div>
                       <CustomScroll>
-                        {renderReadonlyBucket(milestones, undefined, true, milestoneClickTo)}
+                        {renderReadonlyBucket(milestones, undefined, true, milestoneClickTo, focusMilestoneId)}
                       </CustomScroll>
                     </div>
                   );
@@ -9483,7 +9496,7 @@ export default function App() {
                     const isoSet = new Set(isos);
                     // Filter helper — project narrows to one, else client narrows to all its tasks.
                     const clientOfT = (t: Task) => t.clientId ?? (t.projectId ? projects.find((p) => p.id === t.projectId)?.clientId : undefined);
-                    const passesFilter = (t: Task) => taskMatchesQuery(t, focusSearch, projects, clients) && (focusProjectId ? t.projectId === focusProjectId : focusClientId ? clientOfT(t) === focusClientId : true);
+                    const passesFilter = (t: Task) => taskMatchesQuery(t, focusSearch, projects, clients) && passesMilestoneFilter(t) && (focusProjectId ? t.projectId === focusProjectId : focusClientId ? clientOfT(t) === focusClientId : true);
                     const bucketAll = isos.flatMap((iso) => focusStripCells[`${iso}:${listId}`] || []);
                     const bucket = bucketAll.filter(passesFilter);
                     // Milestones dated inside this column's window, band-matched by
@@ -9600,7 +9613,7 @@ export default function App() {
                   // still gets featured on the focus page. Respects the active filter + search.
                   const focusLastVisibleIso = nextIsos[nextIsos.length - 1];
                   const cuClientOf = (t: Task) => t.clientId ?? (t.projectId ? projects.find((p) => p.id === t.projectId)?.clientId : undefined);
-                  const cuPasses = (t: Task) => focusProjectId ? t.projectId === focusProjectId : focusClientId ? cuClientOf(t) === focusClientId : true;
+                  const cuPasses = (t: Task) => passesMilestoneFilter(t) && (focusProjectId ? t.projectId === focusProjectId : focusClientId ? cuClientOf(t) === focusClientId : true);
                   const comingUpMilestones = calendarTasks
                     .filter((t) => t.type === 'scheduled' && !!t.deadline && t.deadline > focusLastVisibleIso && cuPasses(t) && taskMatchesQuery(t, focusSearch, projects, clients))
                     .sort((a, b) => (a.deadline! < b.deadline! ? -1 : a.deadline! > b.deadline! ? 1 : a.title.localeCompare(b.title)));
@@ -9627,6 +9640,7 @@ export default function App() {
                                 onQuickEdit={() => openQuick(t)}
                                 onAddSibling={() => addSiblingTask(t)}
                                 onClick={() => milestoneClickTo(t)}
+                                active={focusMilestoneId === t.id}
                               />
                             ))}
                           </div>
