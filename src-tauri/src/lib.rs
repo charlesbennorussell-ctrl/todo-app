@@ -193,12 +193,19 @@ pub fn run() {
                 if let Some(main) = app.get_webview_window("main") {
                     let m2 = main.clone();
                     std::thread::spawn(move || {
-                        std::thread::sleep(std::time::Duration::from_millis(800));
-                        if let Ok(hwnd) = m2.hwnd() {
-                            use windows_sys::Win32::Foundation::RECT;
-                            use windows_sys::Win32::UI::WindowsAndMessaging::{
-                                SetWindowPos, SystemParametersInfoW, SPI_GETWORKAREA, SWP_NOZORDER,
-                            };
+                        // Re-assert loop, not a one-shot: the webview's late DPI initialization
+                        // re-mangles the window AFTER an early SetWindowPos (measured: config
+                        // height x1.5^2, width at scale 1.0 — different axes, different scales).
+                        // For the first ~10s, read the TRUE rect (GetWindowRect — raw, unlying)
+                        // every 700ms and re-apply the target whenever it drifts. Last word wins.
+                        use windows_sys::Win32::Foundation::RECT;
+                        use windows_sys::Win32::UI::WindowsAndMessaging::{
+                            GetWindowRect, SetWindowPos, SystemParametersInfoW, SPI_GETWORKAREA,
+                            SWP_NOZORDER,
+                        };
+                        std::thread::sleep(std::time::Duration::from_millis(700));
+                        let Ok(hwnd) = m2.hwnd() else { return };
+                        for _ in 0..15 {
                             unsafe {
                                 let mut wa = RECT { left: 0, top: 0, right: 1920, bottom: 1040 };
                                 SystemParametersInfoW(SPI_GETWORKAREA, 0, &mut wa as *mut RECT as *mut _, 0);
@@ -208,8 +215,15 @@ pub fn run() {
                                 let h: i32 = wa_h;
                                 let x = wa.left + (wa_w - w) / 2;
                                 let y = wa.top;
-                                SetWindowPos(hwnd.0 as _, std::ptr::null_mut(), x, y, w, h, SWP_NOZORDER);
+                                let mut cur = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+                                GetWindowRect(hwnd.0 as _, &mut cur);
+                                let cw = cur.right - cur.left;
+                                let ch = cur.bottom - cur.top;
+                                if (cw - w).abs() > 4 || (ch - h).abs() > 4 || (cur.left - x).abs() > 8 || (cur.top - y).abs() > 8 {
+                                    SetWindowPos(hwnd.0 as _, std::ptr::null_mut(), x, y, w, h, SWP_NOZORDER);
+                                }
                             }
+                            std::thread::sleep(std::time::Duration::from_millis(700));
                         }
                     });
                 }
