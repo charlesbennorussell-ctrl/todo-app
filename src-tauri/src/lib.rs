@@ -183,12 +183,24 @@ pub fn run() {
                     let _ = app.autolaunch().enable();
                 }
                 // Enforce the default size AFTER creation: Windows' per-monitor-DPI window
-                // creation mangles the config width (height honored, width shrunk ~20%), so
-                // set_size + center here where the scale factor is already known. 1069x906
-                // logical = the user's measured working size (near-full height at 150% on
-                // their 1440p display, five focus columns wide).
+                // creation mangles config sizing, and this early the window's own
+                // scale_factor still reports 1.0 — a LogicalSize here lands as PHYSICAL
+                // pixels (observed: 1069x906 physical instead of logical). So compute
+                // physical explicitly from the monitor's scale. 1069x906 logical = the
+                // user's measured working size (near-full height at 150% on their 1440p
+                // display, five focus columns wide).
                 if let Some(main) = app.get_webview_window("main") {
-                    let _ = main.set_size(tauri::LogicalSize::new(1069.0, 906.0));
+                    let scale = main
+                        .current_monitor()
+                        .ok()
+                        .flatten()
+                        .or_else(|| app.primary_monitor().ok().flatten())
+                        .map(|m| m.scale_factor())
+                        .unwrap_or(1.0);
+                    let _ = main.set_size(tauri::PhysicalSize::new(
+                        (1069.0 * scale).round() as u32,
+                        (906.0 * scale).round() as u32,
+                    ));
                     let _ = main.center();
                 }
                 if std::env::args().any(|a| a == "--hidden") {
