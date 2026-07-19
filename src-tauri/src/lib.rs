@@ -189,7 +189,61 @@ pub fn run() {
                 // sensors is blind. SetWindowPos is physical-in/physical-out (the process is
                 // per-monitor-DPI aware): width = the user's measured 1579px, height = the
                 // monitor work area ("almost top to bottom"), centered horizontally.
+                // FINAL sizing mechanism: spawn a hidden PowerShell helper that runs the
+                // EXACT probe sequence proven to work — an external DPI-aware process's
+                // GetWindowRect/SetWindowPos on this window sticks perfectly at true
+                // physical pixels, while every in-process attempt (Tauri APIs, raw Win32,
+                // even with SetThreadDpiAwarenessContext) gets coordinate-virtualized and
+                // its sensors read back virtualized values, so an in-process watchdog
+                // re-asserts its own mangled size forever. The helper: width 1579 (user's
+                // measured preference), full work-area height, centered, re-asserted for
+                // ~7s then exits.
                 #[cfg(windows)]
+                if let Some(main) = app.get_webview_window("main") {
+                    const SIZER_PS: &str = r#"
+Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+public class WSz {
+  [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr h, out RECT r);
+  [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr h, IntPtr a, int x, int y, int w, int h2, uint f);
+  public struct RECT { public int Left, Top, Right, Bottom; }
+}
+'@
+Add-Type -AssemblyName System.Windows.Forms
+$h = [IntPtr]HWND_VALUE
+$wa = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
+$w = [Math]::Min(1579, $wa.Width)
+$ht = $wa.Height
+$x = $wa.X + [int](($wa.Width - $w) / 2)
+$y = $wa.Y
+for ($i = 0; $i -lt 10; $i++) {
+  $r = New-Object WSz+RECT
+  [WSz]::GetWindowRect($h, [ref]$r) | Out-Null
+  $cw = $r.Right - $r.Left; $ch = $r.Bottom - $r.Top
+  if ([Math]::Abs($cw - $w) -gt 4 -or [Math]::Abs($ch - $ht) -gt 4 -or [Math]::Abs($r.Left - $x) -gt 8) {
+    [WSz]::SetWindowPos($h, [IntPtr]::Zero, $x, $y, $w, $ht, 0x0004) | Out-Null
+  }
+  Start-Sleep -Milliseconds 700
+}
+"#;
+                    let m2 = main.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(900));
+                        let Ok(hwnd) = m2.hwnd() else { return };
+                        let script = SIZER_PS.replace("HWND_VALUE", &(hwnd.0 as isize).to_string());
+                        let path = std::env::temp_dir().join("ctrl-project-size.ps1");
+                        if std::fs::write(&path, script).is_ok() {
+                            use std::os::windows::process::CommandExt;
+                            let _ = std::process::Command::new("powershell")
+                                .args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File"])
+                                .arg(&path)
+                                .creation_flags(0x0800_0000) // CREATE_NO_WINDOW — no console flash
+                                .spawn();
+                        }
+                    });
+                }
+                #[cfg(any())]
                 if let Some(main) = app.get_webview_window("main") {
                     let m2 = main.clone();
                     std::thread::spawn(move || {
