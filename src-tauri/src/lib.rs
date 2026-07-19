@@ -205,22 +205,33 @@ pub fn run() {
                         };
                         std::thread::sleep(std::time::Duration::from_millis(700));
                         let Ok(hwnd) = m2.hwnd() else { return };
+                        // ADAPTIVE width request: the DPI layer deterministically re-scales the
+                        // width we set (measured: request 1579 → true width 1579/1.5 = 1053,
+                        // stable across rounds; height passes through untouched). So correct
+                        // the REQUEST by the observed error ratio each round — GetWindowRect is
+                        // the truthful sensor — and the mangler itself lands us on target
+                        // (ask ~2368, get 1579). Converges in 2 rounds; also self-corrects on
+                        // machines with no mangle at all.
+                        let mut req_w: f64 = 1579.0;
                         for _ in 0..15 {
                             unsafe {
                                 let mut wa = RECT { left: 0, top: 0, right: 1920, bottom: 1040 };
                                 SystemParametersInfoW(SPI_GETWORKAREA, 0, &mut wa as *mut RECT as *mut _, 0);
                                 let wa_w = wa.right - wa.left;
                                 let wa_h = wa.bottom - wa.top;
-                                let w: i32 = if wa_w < 1579 { wa_w } else { 1579 };
+                                let target_w: i32 = if wa_w < 1579 { wa_w } else { 1579 };
                                 let h: i32 = wa_h;
-                                let x = wa.left + (wa_w - w) / 2;
+                                let x = wa.left + (wa_w - target_w) / 2;
                                 let y = wa.top;
                                 let mut cur = RECT { left: 0, top: 0, right: 0, bottom: 0 };
                                 GetWindowRect(hwnd.0 as _, &mut cur);
                                 let cw = cur.right - cur.left;
                                 let ch = cur.bottom - cur.top;
-                                if (cw - w).abs() > 4 || (ch - h).abs() > 4 || (cur.left - x).abs() > 8 || (cur.top - y).abs() > 8 {
-                                    SetWindowPos(hwnd.0 as _, std::ptr::null_mut(), x, y, w, h, SWP_NOZORDER);
+                                if (cw - target_w).abs() > 4 || (ch - h).abs() > 4 || (cur.left - x).abs() > 8 || (cur.top - y).abs() > 8 {
+                                    if cw > 0 && (cw - target_w).abs() > 4 {
+                                        req_w = (req_w * target_w as f64 / cw as f64).clamp(400.0, 4000.0);
+                                    }
+                                    SetWindowPos(hwnd.0 as _, std::ptr::null_mut(), x, y, req_w.round() as i32, h, SWP_NOZORDER);
                                 }
                             }
                             std::thread::sleep(std::time::Duration::from_millis(700));
