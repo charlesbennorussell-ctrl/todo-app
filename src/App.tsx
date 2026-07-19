@@ -3769,6 +3769,17 @@ const scrollBandToTop = (e: React.MouseEvent) => {
   requestAnimationFrame(step);
 };
 
+// Canvas-based text measurer for the focus page's content-sized columns. The app's global CSS
+// forces one typographic standard (14px 'Untitled Sans') on every element, so a single font
+// string measures every row accurately without touching the DOM.
+let __measureCtx: CanvasRenderingContext2D | null = null;
+const measureTextPx = (s: string): number => {
+  if (!__measureCtx && typeof document !== 'undefined') __measureCtx = document.createElement('canvas').getContext('2d');
+  if (!__measureCtx) return s.length * 8;
+  __measureCtx.font = "14px 'Untitled Sans', sans-serif";
+  return __measureCtx.measureText(s).width;
+};
+
 // Shared milestone card — the purple-tinted two-line card (title on line 1; client › project,
 // assignees, date on line 2). Extracted from WeekCalendarMode's local MilestoneCard so the
 // focus page's "Coming Up" section renders the IDENTICAL format. `onClick` (focus page) filters
@@ -9424,6 +9435,14 @@ export default function App() {
           const projectFolders = projectKey ? focusImageFolders[projectKey] || [] : [];
           const taskFolders = taskKey ? focusImageFolders[taskKey] || [] : [];
           const taskTitleForNotes = (selectedTask?.title || 'Task').trim() || 'Task';
+          // Content-sized side columns: each is exactly its longest entry + a 30px buffer
+          // (user spec), so nothing crams and the three day columns absorb the remainder.
+          // Measured from the UNFILTERED sets so widths stay stable while filtering.
+          // Milestone rows = title + gap(8) + arrow(18) + gap(8) + date; clients = name only.
+          const clientEntryWidths = proj2SortedClients.map((c) => measureTextPx(c.name || (c.id === PERSONAL_CLIENT_ID ? 'Personal' : c.short) || ''));
+          const col1W = Math.min(460, Math.max(170, Math.round(31 + Math.max(measureTextPx('Client / Projects') + 8, ...clientEntryWidths, 60) + 30)));
+          const msWidths = visibleTasks.filter((t) => t.type === 'scheduled').map((t) => measureTextPx(t.title) + (t.deadline ? 8 + 18 + 8 + measureTextPx(formatDeadline(t.deadline)) : 0));
+          const col2W = Math.min(460, Math.max(170, Math.round(31 + Math.max(measureTextPx('Milestones') + 22, ...msWidths, 60) + 30)));
           return (
             // Focus mode: fixed TopHeader, fixed column titles, each column body scrolls
             // independently. Same pattern as List / Project / Calendar.
@@ -9456,8 +9475,9 @@ export default function App() {
               {/* Filter + Milestones are fixed-narrow (same width, sized to fit their names + a
                   small buffer) instead of stretchy 1fr tracks; the three day columns split the
                   freed space, so the calendar gets wider. */}
-              {/* PIP: ONLY the three day columns — no filter panel, no Milestones column. */}
-              <div className={`grid ${PIP_MODE ? 'grid-cols-[1fr_1fr_1fr]' : 'grid-cols-[225px_225px_1fr_1fr_1fr]'} gap-0 flex-1 min-h-0 w-full overflow-x-auto`}>
+              {/* PIP: ONLY the three day columns — no filter panel, no Milestones column.
+                  Full mode: cols 1–2 are content-sized (longest entry + 30px), days split the rest. */}
+              <div className="grid gap-0 flex-1 min-h-0 w-full overflow-x-auto" style={{ gridTemplateColumns: PIP_MODE ? '1fr 1fr 1fr' : `${col1W}px ${col2W}px 1fr 1fr 1fr` }}>
                 {/* Column 1 — Projects panel: flat master list (milestones pinned on top);
                     clicking a project FILTERS the Dashboard stack + all three calendar
                     columns (focusProjectId). Active row shows an ×; click again to clear.
