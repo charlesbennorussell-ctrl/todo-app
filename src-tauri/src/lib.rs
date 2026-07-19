@@ -182,25 +182,12 @@ pub fn run() {
                     use tauri_plugin_autostart::ManagerExt;
                     let _ = app.autolaunch().enable();
                 }
-                // Enforce the default size AFTER the window is fully materialized. Sizing at
-                // setup time is unreliable on Windows: the window's DPI is still settling and
-                // both LogicalSize and PhysicalSize requests get mangled by a double scale
-                // conversion (measured: any request lands as 1069x906 PHYSICAL). 500ms later
-                // the window is shown, scale_factor() reports the real monitor scale, and
-                // set_size(PhysicalSize) applies exactly. 1069x906 logical = the user's
-                // measured working size (near-full height at 150% on their 1440p display).
-                if let Some(main) = app.get_webview_window("main") {
-                    let m2 = main.clone();
-                    std::thread::spawn(move || {
-                        std::thread::sleep(std::time::Duration::from_millis(500));
-                        let scale = m2.scale_factor().unwrap_or(1.0);
-                        let _ = m2.set_size(tauri::PhysicalSize::new(
-                            (1069.0 * scale).round() as u32,
-                            (906.0 * scale).round() as u32,
-                        ));
-                        let _ = m2.center();
-                    });
-                }
+                // Default window size is enforced from the WEB side on page load (see the
+                // sizing effect in App.tsx). Every Rust-side attempt — config sizing, setup
+                // set_size (logical AND physical), even a 500ms-deferred thread — got mangled
+                // by scale_factor() reporting 1.0, landing the window at 1069x906 PHYSICAL.
+                // The webview knows the true devicePixelRatio, and the JS setSize converts
+                // with the live scale in core, so that's where the sizing lives now.
                 if std::env::args().any(|a| a == "--hidden") {
                     if let Some(main) = app.get_webview_window("main") {
                         let _ = main.hide();

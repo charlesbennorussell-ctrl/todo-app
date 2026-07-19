@@ -5806,6 +5806,23 @@ export default function App() {
   // ghost is skipped), scrolls it directly, and stops the event there. dnd-kit tracks ancestor
   // scrolls mid-drag, so droppable hit-testing stays correct while the list moves. Outside a
   // drag it returns immediately and CustomScroll's buttery lerp keeps handling the wheel.
+  // Desktop default window size — applied from the WEB side because every Rust-side sizing
+  // path mis-scales on this machine (scale_factor() reads 1.0 during startup, landing the
+  // window at 1069x906 PHYSICAL). By page-load the webview knows the real DPI, and the JS
+  // setSize(LogicalSize) converts with the live scale in core. Main window only (not PIP),
+  // once per load; no-op in plain browsers.
+  useEffect(() => {
+    if (PIP_MODE) return;
+    const t = (window as unknown as { __TAURI__?: { window?: { getCurrentWindow?: () => { label?: string; setSize: (s: unknown) => Promise<void>; center: () => Promise<void> }; LogicalSize?: new (w: number, h: number) => unknown } } }).__TAURI__;
+    const gw = t?.window?.getCurrentWindow;
+    const LS = t?.window?.LogicalSize;
+    if (!gw || !LS) return;
+    try {
+      const w = gw();
+      if (w.label && w.label !== 'main') return;
+      w.setSize(new LS(1069, 906)).then(() => w.center()).catch(() => { /* capability absent in old builds */ });
+    } catch { /* not in Tauri */ }
+  }, []);
   const wheelDragRef = useRef(false);
   useEffect(() => { wheelDragRef.current = !!activeId; }, [activeId]);
   useEffect(() => {
@@ -8011,21 +8028,9 @@ export default function App() {
         //      section to 'today' / 'tomorrow' (explicit placement); future-day drops keep
         //      section='next' so the task stays in the auto-distributed queue.
         const isQueueTask = !srcTask.deadline && !isNextWeekDrop;
-        // If the user released the card OUTSIDE the source category band (Admin / Work /
-        // Projects) of the destination column, decide top vs bottom based on where they
-        // released relative to the source band. CAL_LISTS order is admin → work → projects;
-        // a smaller index means "above".
+        // Which band did the user actually release in? Only a drop within the task's OWN
+        // band gives positional control; anything else defaults to the top of its stack.
         const droppedListId = droppedCellId ? (droppedCellId.split(':')[2] as ListId) : null;
-        // Band above/below comparisons follow the universal section sequence.
-        const calIndex = (l: ListId | null) => (l ? listSequence.indexOf(l) : -1);
-        const droppedIdx = calIndex(droppedListId);
-        const sourceIdx = calIndex(targetList);
-        // 'above' if the user released in a band that sits ABOVE the source band in the
-        // CAL_LISTS stack; 'below' if below; null if same (use task position).
-        const offCategoryDirection: 'above' | 'below' | null =
-          droppedListId && droppedIdx >= 0 && sourceIdx >= 0 && droppedIdx !== sourceIdx
-            ? (droppedIdx < sourceIdx ? 'above' : 'below')
-            : null;
         setTasks((prev) => {
           // Remove source first so it can't be double-counted.
           const without = prev.filter((t) => t.id !== srcTask.id);
@@ -8036,30 +8041,24 @@ export default function App() {
             : { ...srcTask, list: targetList, section: targetSection, deadline: targetDate };
           // Build the destination bucket without the source.
           const toBucket = without.filter((t) => t.list === targetList && t.section === targetSection).sort((a, b) => a.order - b.order);
-          // Decide insert position:
-          //   - drop ON an existing card → before that card (displace)
-          //   - off-category ABOVE  → top (index 0)
-          //   - off-category BELOW  → bottom (append)
-          //   - Next Week band with no over-card → TOP (per request: dropping into Next
-          //     Week lands the card at the top of its category, then reorder by hand)
-          //   - else → append
-          let insertAt = toBucket.length;
-          // Deferring a task from today/tomorrow INTO Next → land it at the TOP of its category.
-          // You're kicking it a few days down the road, not filing it away — it should be the
-          // next thing to resurface, not buried at the bottom. (The distribution orders by
-          // task.order, so order 0 = first.)
+          // Insert position (per user spec): positional control ONLY when the card is
+          // released inside its OWN category band —
+          //   - own band, on a card          → before that card (displace)
+          //   - own band, empty space below  → end of the stack
+          //   - ANYWHERE else in the column  → TOP of its stack (index 0), never "somewhere
+          //     in the middle"
+          //   - deferring today/tomorrow → Next always lands at the top (resurface first)
+          let insertAt: number;
           const deferringToNext = targetSection === 'next' && srcTask.section !== 'next';
+          const droppedInOwnBand = droppedListId === targetList;
           if (deferringToNext) {
             insertAt = 0;
-          } else if (intendedOverTaskId) {
+          } else if (droppedInOwnBand && intendedOverTaskId) {
             const idx = toBucket.findIndex((t) => t.id === intendedOverTaskId);
-            if (idx >= 0) insertAt = idx;
-            else if (isNextWeekDrop) insertAt = 0;
-          } else if (offCategoryDirection === 'above') {
-            insertAt = 0;
-          } else if (offCategoryDirection === 'below') {
+            insertAt = idx >= 0 ? idx : 0;
+          } else if (droppedInOwnBand) {
             insertAt = toBucket.length;
-          } else if (isNextWeekDrop) {
+          } else {
             insertAt = 0;
           }
           const reorderedTo = [...toBucket.slice(0, insertAt), moved, ...toBucket.slice(insertAt)].map((t, i) => ({ ...t, order: i }));
