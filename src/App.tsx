@@ -1779,7 +1779,7 @@ function ProjectsHeaderDropZone({ onClearFilter }: { onClearFilter?: () => void 
       className={`shrink-0 group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] transition-colors ${onClearFilter ? 'cursor-pointer' : ''} ${isOver ? 'bg-[#8465ff]/20' : ''}`}
       style={{ marginBottom: SPACING.dcr }}
     >
-      <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">Client / Projects{isOver ? ' — drop to un-nest' : ''}</p>
+      <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white whitespace-nowrap">Clients + Projects{isOver ? ' — drop to un-nest' : ''}</p>
     </div>
   );
 }
@@ -9440,9 +9440,13 @@ export default function App() {
           // Measured from the UNFILTERED sets so widths stay stable while filtering.
           // Milestone rows = title + gap(8) + arrow(18) + gap(8) + date; clients = name only.
           const clientEntryWidths = proj2SortedClients.map((c) => measureTextPx(c.name || (c.id === PERSONAL_CLIENT_ID ? 'Personal' : c.short) || ''));
-          const col1W = Math.min(460, Math.max(170, Math.round(31 + Math.max(measureTextPx('Client / Projects') + 8, ...clientEntryWidths, 60) + 30)));
+          const col1W = Math.min(460, Math.max(170, Math.round(31 + Math.max(measureTextPx('Clients + Projects') + 8, ...clientEntryWidths, 60) + 30)));
           const msWidths = visibleTasks.filter((t) => t.type === 'scheduled').map((t) => measureTextPx(t.title) + (t.deadline ? 8 + 18 + 8 + measureTextPx(formatDeadline(t.deadline)) : 0));
           const col2W = Math.min(460, Math.max(170, Math.round(31 + Math.max(measureTextPx('Milestones') + 22, ...msWidths, 60) + 30)));
+          // SYMMETRIC side columns — asymmetry read as "off". Both take the wider of the two
+          // (in practice the longest milestone + its date), so one may carry a little extra
+          // white space but the pair stays visually balanced.
+          const sideW = Math.max(col1W, col2W);
           return (
             // Focus mode: fixed TopHeader, fixed column titles, each column body scrolls
             // independently. Same pattern as List / Project / Calendar.
@@ -9477,7 +9481,7 @@ export default function App() {
                   freed space, so the calendar gets wider. */}
               {/* PIP: ONLY the three day columns — no filter panel, no Milestones column.
                   Full mode: cols 1–2 are content-sized (longest entry + 30px), days split the rest. */}
-              <div className="grid gap-0 flex-1 min-h-0 w-full overflow-x-auto" style={{ gridTemplateColumns: PIP_MODE ? '1fr 1fr 1fr' : `${col1W}px ${col2W}px 1fr 1fr 1fr` }}>
+              <div className="grid gap-0 flex-1 min-h-0 w-full overflow-x-auto" style={{ gridTemplateColumns: PIP_MODE ? '1fr 1fr 1fr' : `${sideW}px ${sideW}px 1fr 1fr 1fr` }}>
                 {/* Column 1 — Projects panel: flat master list (milestones pinned on top);
                     clicking a project FILTERS the Dashboard stack + all three calendar
                     columns (focusProjectId). Active row shows an ×; click again to clear.
