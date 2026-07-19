@@ -203,6 +203,17 @@ pub fn run() {
                             GetWindowRect, SetWindowPos, SystemParametersInfoW, SPI_GETWORKAREA,
                             SWP_NOZORDER,
                         };
+                        // THE ROOT CAUSE, proven by probe: an external DPI-aware process's
+                        // SetWindowPos(1579) sticks perfectly, while this process's identical
+                        // call lands at 1053 — the OS virtualizes coordinates for non-DPI-aware
+                        // processes. Make THIS THREAD per-monitor-aware so every Win32 call
+                        // below (workarea, rect reads, sets) speaks raw physical pixels.
+                        unsafe {
+                            use windows_sys::Win32::UI::HiDpi::{
+                                SetThreadDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2,
+                            };
+                            SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+                        }
                         std::thread::sleep(std::time::Duration::from_millis(700));
                         let Ok(hwnd) = m2.hwnd() else { return };
                         // ADAPTIVE width request: the DPI layer deterministically re-scales the

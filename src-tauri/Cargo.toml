@@ -33,7 +33,7 @@ tauri-plugin-autostart = "2"
 # Raw Win32 for deterministic window sizing — every Tauri/tao sizing path mis-scales on
 # per-monitor-DPI Windows here; SetWindowPos speaks physical pixels with no bookkeeping.
 [target.'cfg(windows)'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_HiDpi"] }
 
 [features]
 # Enabled at packaging time; the dev build skips it.
