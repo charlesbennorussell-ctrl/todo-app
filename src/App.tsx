@@ -3023,6 +3023,33 @@ function FocusDamFolderDropTarget({ bucketKey, folderId, children }: { bucketKey
 // task onto either lands the task as a child of this project. Inline highlight on hover lets
 // the user see the drop target before releasing. The actual reparent happens in handleDragEnd
 // via the data.type === 'proj2Project' branch.
+// Drag handle on a Projects-view project header (the folder icon). Dragging the project into
+// ANOTHER category column re-pins it there — project.list + every task moves (the existing
+// type:'project' drop branch handles projList / project / clientHeader targets).
+function Proj2ProjectDragHandle({ project, listId }: { project: Project; listId: ListId }) {
+  const { attributes, listeners, setNodeRef } = useDraggable({
+    id: `proj2drag:${listId}:${project.id}`,
+    data: { type: 'project', project, listId },
+  });
+  return (
+    <span ref={setNodeRef} {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing -m-1 p-1 flex items-center shrink-0" title="Drag to another column to change category">
+      <Folder size={12} className="text-[#656464]" />
+    </span>
+  );
+}
+
+// Whole-column droppable for the Projects view — dropping a PROJECT anywhere in a column
+// (not on a specific row) recategorizes it to that column's list. Same data type the list
+// view's ProjectListColumn uses, so the existing drop branches (project + task) just work.
+function Proj2ColumnDroppable({ listId, children }: { listId: ListId; children: React.ReactNode }) {
+  const { setNodeRef } = useDroppable({ id: `projlist2:${listId}`, data: { type: 'projList', listId } });
+  return (
+    <div ref={setNodeRef} className="flex-1 min-w-[280px] flex flex-col min-h-0 overflow-hidden">
+      {children}
+    </div>
+  );
+}
+
 function Proj2ProjectDropZone({ projectId, listId, children }: { projectId: string; listId: ListId; children: React.ReactNode }) {
   const { setNodeRef, isOver } = useDroppable({
     id: `proj2-project:${listId}:${projectId}`,
@@ -9029,7 +9056,7 @@ export default function App() {
       })
       .filter((b) => b.projects.length > 0 || b.clientLevelTasks.length > 0);
     return (
-      <div key={listId} className="flex-1 min-w-[280px] flex flex-col min-h-0 overflow-hidden">
+      <Proj2ColumnDroppable key={listId} listId={listId}>
         {/* Column header with the cascading add menu (HeaderAddMenu). DOUBLE carriage-return
             below for a paragraph break before the first client / project block. shrink-0 so
             it stays pinned at the top of the column when the rest scrolls. */}
@@ -9088,7 +9115,9 @@ export default function App() {
                       onDiscardIfEmpty deletes the project if the user blurs without typing
                       anything (matches the fresh-task fade behavior). */}
                   <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]">
-                    <Folder size={12} className="text-[#656464]" />
+                    {/* Folder icon doubles as the drag handle — drag the project into another
+                        column to recategorize it (tasks follow). */}
+                    <Proj2ProjectDragHandle project={p} listId={listId} />
                     <EditableText
                       value={p.name}
                       onChange={(v) => renameProject(p.id, v)}
@@ -9117,7 +9146,7 @@ export default function App() {
           </div>
         ))}
         </CustomScroll>
-      </div>
+      </Proj2ColumnDroppable>
     );
   };
 
