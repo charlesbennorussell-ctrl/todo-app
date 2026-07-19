@@ -182,6 +182,15 @@ pub fn run() {
                     use tauri_plugin_autostart::ManagerExt;
                     let _ = app.autolaunch().enable();
                 }
+                // Enforce the default size AFTER creation: Windows' per-monitor-DPI window
+                // creation mangles the config width (height honored, width shrunk ~20%), so
+                // set_size + center here where the scale factor is already known. 1069x906
+                // logical = the user's measured working size (near-full height at 150% on
+                // their 1440p display, five focus columns wide).
+                if let Some(main) = app.get_webview_window("main") {
+                    let _ = main.set_size(tauri::LogicalSize::new(1069.0, 906.0));
+                    let _ = main.center();
+                }
                 if std::env::args().any(|a| a == "--hidden") {
                     if let Some(main) = app.get_webview_window("main") {
                         let _ = main.hide();

@@ -5785,6 +5785,38 @@ export default function App() {
     setEditAnchor(workCol ? { x: workCol.getBoundingClientRect().left, width: workCol.getBoundingClientRect().width } : null);
   }, [currentUserShort, setTasks]);
   const [activeId, setActiveId] = useState<string | null>(null);
+  // Mid-drag wheel scrolling. While a card is being dragged, the DragOverlay ghost rides under
+  // the cursor and swallows wheel events before they reach the tray / columns — exactly when
+  // scrolling matters most (holding a task over the tray to reach a project further down). A
+  // window-level CAPTURE listener runs before anything can eat the event: during a drag it
+  // finds the scrollable panel under the cursor (checking EVERY element at the point, so the
+  // ghost is skipped), scrolls it directly, and stops the event there. dnd-kit tracks ancestor
+  // scrolls mid-drag, so droppable hit-testing stays correct while the list moves. Outside a
+  // drag it returns immediately and CustomScroll's buttery lerp keeps handling the wheel.
+  const wheelDragRef = useRef(false);
+  useEffect(() => { wheelDragRef.current = !!activeId; }, [activeId]);
+  useEffect(() => {
+    const onWheel = (e: WheelEvent) => {
+      if (!wheelDragRef.current) return;
+      for (const raw of document.elementsFromPoint(e.clientX, e.clientY)) {
+        let n: HTMLElement | null = raw instanceof HTMLElement ? raw : null;
+        while (n) {
+          if (n.scrollHeight > n.clientHeight + 1) {
+            const oy = getComputedStyle(n).overflowY;
+            if (oy === 'auto' || oy === 'scroll') {
+              n.scrollTop += e.deltaY;
+              e.preventDefault();
+              e.stopPropagation();
+              return;
+            }
+          }
+          n = n.parentElement;
+        }
+      }
+    };
+    window.addEventListener('wheel', onWheel, { passive: false, capture: true });
+    return () => window.removeEventListener('wheel', onWheel, { capture: true });
+  }, []);
   // Underlying task id (without any sortable prefix). For per-list columns this matches activeId,
   // but for prefixed contexts (dashboard sub-lists) activeId is e.g. "dash:work:taskId" while
   // activeTaskId stays "taskId" so tasks.find(t.id === activeTaskId) resolves the real task.
