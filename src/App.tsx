@@ -4024,7 +4024,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
               <TaskCheckbox completed={task.completed} started={task.started} onToggle={onToggle} />
             </div>
           )}
-          <div className="flex flex-row items-center gap-[4px] min-w-0 flex-1">
+          <div className="flex flex-row items-center gap-[4px] min-w-0">
             {/* Title is ALWAYS an inline EditableText now — click to edit, drag-in-text to select
                 (EditableText swallows the pointer while editing so it doesn't start a card drag).
                 autoFocus only for a freshly created task. No onDiscardIfEmpty: the 3-min blank-sweep
@@ -4037,15 +4037,16 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
               className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleColor}`}
             />
           </div>
-          {/* + moved to the END of line 1 (it used to sit on the meta row where it read as
-              another meta chip and confused the layout). Hover-reveal, ml-auto hugs the right,
-              and the row's pr-5 keeps it clear of the absolute trash button. */}
+          {/* + hugs the END OF THE TITLE TEXT (not the card's right edge — parked out there
+              next to the trash it read as unrelated). Hover-reveal; the title wrapper is
+              content-sized (no flex-1) so the + sits right after the name, and the row's
+              pr-5 keeps everything clear of the absolute trash button. */}
           {onAddSibling && (
             <button
               type="button"
               onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => { e.stopPropagation(); onAddSibling(); }}
-              className="shrink-0 ml-auto p-[2px] opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity"
+              className="shrink-0 p-[2px] opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity"
               aria-label="Add task in same project"
             >
               <Plus size={12} />
