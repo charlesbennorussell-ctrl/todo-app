@@ -14,7 +14,7 @@ use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
 const PIP_URL: &str = "https://charlesbennorussell-ctrl.github.io/todo-app/?pip=1";
 const PIP_LABEL: &str = "pip";
-const PIP_WIDTH: f64 = 900.0;
+const PIP_WIDTH: f64 = 1080.0;
 // Fallback chain when no saved combo (or the saved one stops working). Note
 // Ctrl+Space / Ctrl+Win+Space are grabbed by the Windows IME — avoid them.
 const DEFAULT_COMBOS: [&str; 3] = ["ctrl+alt+f", "ctrl+alt+space", "ctrl+shift+space"];

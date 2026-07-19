@@ -554,7 +554,9 @@ function TopHeader({ viewName }: { viewName: string }) {
   h = h % 12 || 12;
   const time = `${h}:${String(m).padStart(2, '0')}${ampm}`;
   return (
-    <div className="px-[35px] h-[37px] flex items-center" style={{ marginBottom: SPACING.cr }}>
+    // PIP: the quick window's columns inset their text 16px, so the header matches (35px
+    // reads indented there — "nudge it over to the left").
+    <div className={`${PIP_MODE ? 'px-[16px]' : 'px-[35px]'} h-[37px] flex items-center`} style={{ marginBottom: SPACING.cr }}>
       <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">
         {viewName} — {day}, {month} {n}{ord} — {time}
       </p>
@@ -5820,7 +5822,7 @@ export default function App() {
     try {
       const w = gw();
       if (w.label && w.label !== 'main') return;
-      w.setSize(new LS(1069, 906)).then(() => w.center()).catch(() => { /* capability absent in old builds */ });
+      w.setSize(new LS(1053, 932)).then(() => w.center()).catch(() => { /* capability absent in old builds */ });
     } catch { /* not in Tauri */ }
   }, []);
   const wheelDragRef = useRef(false);
