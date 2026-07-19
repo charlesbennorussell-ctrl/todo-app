@@ -182,26 +182,24 @@ pub fn run() {
                     use tauri_plugin_autostart::ManagerExt;
                     let _ = app.autolaunch().enable();
                 }
-                // Enforce the default size AFTER creation: Windows' per-monitor-DPI window
-                // creation mangles config sizing, and this early the window's own
-                // scale_factor still reports 1.0 — a LogicalSize here lands as PHYSICAL
-                // pixels (observed: 1069x906 physical instead of logical). So compute
-                // physical explicitly from the monitor's scale. 1069x906 logical = the
-                // user's measured working size (near-full height at 150% on their 1440p
-                // display, five focus columns wide).
+                // Enforce the default size AFTER the window is fully materialized. Sizing at
+                // setup time is unreliable on Windows: the window's DPI is still settling and
+                // both LogicalSize and PhysicalSize requests get mangled by a double scale
+                // conversion (measured: any request lands as 1069x906 PHYSICAL). 500ms later
+                // the window is shown, scale_factor() reports the real monitor scale, and
+                // set_size(PhysicalSize) applies exactly. 1069x906 logical = the user's
+                // measured working size (near-full height at 150% on their 1440p display).
                 if let Some(main) = app.get_webview_window("main") {
-                    let scale = main
-                        .current_monitor()
-                        .ok()
-                        .flatten()
-                        .or_else(|| app.primary_monitor().ok().flatten())
-                        .map(|m| m.scale_factor())
-                        .unwrap_or(1.0);
-                    let _ = main.set_size(tauri::PhysicalSize::new(
-                        (1069.0 * scale).round() as u32,
-                        (906.0 * scale).round() as u32,
-                    ));
-                    let _ = main.center();
+                    let m2 = main.clone();
+                    std::thread::spawn(move || {
+                        std::thread::sleep(std::time::Duration::from_millis(500));
+                        let scale = m2.scale_factor().unwrap_or(1.0);
+                        let _ = m2.set_size(tauri::PhysicalSize::new(
+                            (1069.0 * scale).round() as u32,
+                            (906.0 * scale).round() as u32,
+                        ));
+                        let _ = m2.center();
+                    });
                 }
                 if std::env::args().any(|a| a == "--hidden") {
                     if let Some(main) = app.get_webview_window("main") {
