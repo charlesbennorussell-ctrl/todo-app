@@ -3973,6 +3973,9 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
             {client?.short && project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : 'text-[#656464]'}`}>{client.short}<Arrowhead dim={task.completed || categoryDimmed} />{project.name}</p>}
             {client?.short && !project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : metaColor}`}>{client.short}</p>}
             {!client?.short && project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : 'text-[#656464]'}`}>{project.name}</p>}
+            {/* Deadline arrow — the same glyph list view puts before dates (small variant for
+                the tighter card meta). Milestones skip it, matching list view's !isScheduled rule. */}
+            {task.deadline && !isScheduled && <DeadlineArrow small dim={task.completed || categoryDimmed} />}
             {task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : isLateDeadline(task.deadline) ? 'text-[#FF7171]' : 'text-[#656464]'}`}>{formatDeadline(task.deadline)}</p>}
             {/* Assignees AFTER the date — hidden at rest, fade in on card-hover (~200ms), and on
                 roll-off linger ~1s then fade out over 500ms (asymmetric group-hover transition). */}
