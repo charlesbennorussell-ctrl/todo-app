@@ -701,13 +701,14 @@ function Arrowhead({ dim = false, tone = 'default', faint = false }: { dim?: boo
   );
 }
 
-function DeadlineArrow({ dim = false, small = false }: { dim?: boolean; small?: boolean }) {
+function DeadlineArrow({ dim = false, small = false, color }: { dim?: boolean; small?: boolean; color?: string }) {
   // Custom inline SVG so we can shorten the LINE while keeping the arrowhead size and the
   // line's stroke thickness constant. `small` (responsive density 3+) cuts the line length
   // by ~50% (line goes from x=0..14 → x=7..14). Total wrapper width drops 18 → 11.
   // -mt-[2px] aligns the icon to the text's cap-to-baseline band, matching TaskCheckbox.
   // `dim` mirrors the muted palette used for completed tasks.
-  const fill = dim ? '#383838' : '#656464';
+  // `color` overrides the resting tone (milestone purple etc.); dim always wins.
+  const fill = dim ? '#383838' : (color || '#656464');
   const wrapW = small ? 11 : 18;
   // Coordinates inside a virtual 18×12 grid: arrowhead at right, line on its left.
   const lineStart = small ? 7 : 0;
@@ -1835,6 +1836,64 @@ function FocusProjectRow({
       {count > 0 && <span className="text-[#474747] text-[12px]">{count}</span>}
       {active && <X size={14} className="ml-auto text-[#a8a8a8]" />}
     </div>
+  );
+}
+
+// Settings row: customize the global PIP (quick window) shortcut. Records a key combo from a
+// real keypress, then asks the Tauri shell to re-register it live (persisted Rust-side in
+// app-config, so it survives restarts). In a plain browser it explains it's desktop-only.
+// Note: Fn cannot be captured — laptop firmware handles it below the OS, so no app can bind it.
+function PipShortcutSetting() {
+  const tauri = typeof window !== 'undefined'
+    ? (window as unknown as { __TAURI__?: { core?: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> } } }).__TAURI__
+    : undefined;
+  const [combo, setCombo] = useState<string>(() => { try { return localStorage.getItem('pip-shortcut-display') || 'Ctrl+Alt+F'; } catch { return 'Ctrl+Alt+F'; } });
+  const [recording, setRecording] = useState(false);
+  const [status, setStatus] = useState<string | null>(null);
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    if (!recording) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const k = e.key;
+    if (k === 'Control' || k === 'Alt' || k === 'Shift' || k === 'Meta') return; // modifiers alone don't finish a combo
+    const parts: string[] = [];
+    if (e.ctrlKey) parts.push('Ctrl');
+    if (e.altKey) parts.push('Alt');
+    if (e.shiftKey) parts.push('Shift');
+    if (e.metaKey) parts.push('Super');
+    if (parts.length === 0) { setStatus('Include a modifier (Ctrl / Alt / Shift / Win).'); return; }
+    parts.push(k === ' ' ? 'Space' : k.length === 1 ? k.toUpperCase() : k);
+    setCombo(parts.join('+'));
+    setRecording(false);
+    setStatus(null);
+  };
+  const apply = async () => {
+    if (!tauri?.core?.invoke) { setStatus('Global shortcuts only work in the desktop app — open Ctrl-Project (Tauri) and set it there.'); return; }
+    try {
+      const res = await tauri.core.invoke('set_pip_shortcut', { combo });
+      try { localStorage.setItem('pip-shortcut-display', combo); } catch { /* private mode */ }
+      setStatus(`Registered: ${String(res)}`);
+    } catch (err) {
+      setStatus(String(err));
+    }
+  };
+  return (
+    <>
+      <div className="flex flex-row items-center gap-3">
+        <button
+          type="button"
+          onClick={() => { setRecording(true); setStatus(null); }}
+          onKeyDown={onKeyDown}
+          onBlur={() => setRecording(false)}
+          className={`px-3 py-1 rounded-md text-[13px] transition-colors ${recording ? 'bg-[#7363FF] text-white' : 'bg-[#1f1f1f] text-[#ccc] hover:bg-[#333]'}`}
+        >
+          {recording ? 'Press keys…' : combo}
+        </button>
+        <button type="button" onClick={apply} className="text-[13px] text-[#656464] hover:text-white transition-colors">Apply</button>
+      </div>
+      {status && <p className="text-[12px] text-[#a8a8a8]">{status}</p>}
+      <p className="text-[12px] text-[#656464]">Toggles the floating quick window from anywhere. Fn can't be bound — it never reaches the OS.</p>
+    </>
   );
 }
 
@@ -3718,6 +3777,7 @@ function MilestoneCardView({ task, projects, clients, showDate, categoryDimmed =
           {client?.short && !project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${titleClass}`}>{client.short}</p>}
           {!client?.short && project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${titleClass}`}>{project.name}</p>}
           {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone="scheduled" hollow={isPersonal} dim={task.completed || categoryDimmed} faint={isExpired} />)}
+          {showDate && task.deadline && <DeadlineArrow small dim={task.completed || categoryDimmed} color={isExpired ? '#4f4290' : '#8465ff'} />}
           {showDate && task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${titleClass}`}>{formatDeadline(task.deadline)}</p>}
           {onAddSibling && (
             <button
@@ -3978,8 +4038,8 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
             {client?.short && !project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : metaColor}`}>{client.short}</p>}
             {!client?.short && project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : 'text-[#656464]'}`}>{project.name}</p>}
             {/* Deadline arrow — the same glyph list view puts before dates (small variant for
-                the tighter card meta). Milestones skip it, matching list view's !isScheduled rule. */}
-            {task.deadline && !isScheduled && <DeadlineArrow small dim={task.completed || categoryDimmed} />}
+                the tighter card meta). Milestones get it too, tinted milestone purple. */}
+            {task.deadline && <DeadlineArrow small dim={task.completed || categoryDimmed} color={isScheduled ? '#8465ff' : undefined} />}
             {task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : isLateDeadline(task.deadline) ? 'text-[#FF7171]' : 'text-[#656464]'}`}>{formatDeadline(task.deadline)}</p>}
             {/* Assignees AFTER the date — hidden at rest, fade in on card-hover (~200ms), and on
                 roll-off linger ~1s then fade out over 500ms (asymmetric group-hover transition). */}
@@ -4604,6 +4664,13 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
               <button type="button" disabled={i === listSequence.length - 1} onClick={() => { const n = [...listSequence]; [n[i + 1], n[i]] = [n[i], n[i + 1]]; onSetListSequence(n); }} className="text-[14px] leading-none text-[#656464] hover:text-white disabled:opacity-20 disabled:hover:text-[#656464] transition-colors" aria-label={`Move ${LIST_TITLES[l]} down`}>&darr;</button>
             </div>
           ))}
+        </div>
+        {/* Quick Window Shortcut — the global key combo that summons the floating focus PIP. */}
+        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-0">
+          <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Quick Window Shortcut</p>
+        </div>
+        <div className="px-[31px] mb-[37px] flex flex-col gap-2 items-start">
+          <PipShortcutSetting />
         </div>
         {/* Maintenance — clean up "ghost" projects (blank name, no tasks). Runs
             automatically 5s after load, but this triggers it on demand. */}
@@ -8617,7 +8684,7 @@ export default function App() {
             {!titleOnly && task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} />)}
             {task.deadline && task.deadline !== omitDeadlineIso && (
               <>
-                {!isScheduled && <DeadlineArrow dim={task.completed} />}
+                <DeadlineArrow dim={task.completed} color={isScheduled ? '#8465ff' : undefined} />
                 <p className={`font-['NB_International:Regular',sans-serif] text-[14.333px] whitespace-nowrap ${task.completed ? 'text-[#474747]' : isScheduled ? 'text-[#8465ff]' : isLateDeadline(task.deadline) ? 'text-[#FF7171]' : isNext ? 'text-[#a8a8a8]' : 'text-white'}`}>{formatDeadline(task.deadline)}</p>
               </>
             )}
@@ -9330,10 +9397,25 @@ export default function App() {
           return (
             // Focus mode: fixed TopHeader, fixed column titles, each column body scrolls
             // independently. Same pattern as List / Project / Calendar.
-            <div className="h-full flex flex-col" style={{ paddingTop: SPACING.topMargin, paddingBottom: 76 }}>
+            <div className="h-full flex flex-col" style={{ paddingTop: PIP_MODE ? 14 : SPACING.topMargin, paddingBottom: PIP_MODE ? 12 : 76 }}>
               <div className="shrink-0">
                 <TopHeader viewName="Focus" />
               </div>
+              {/* PIP close — × top-right hides the always-on-top quick window (the Tauri shell
+                  also hides it on blur, i.e. clicking anywhere outside). Browser fallback: no-op. */}
+              {PIP_MODE && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const w = (window as unknown as { __TAURI__?: { window?: { getCurrentWindow?: () => { hide: () => void } } } }).__TAURI__;
+                    if (w?.window?.getCurrentWindow) w.window.getCurrentWindow().hide();
+                  }}
+                  className="fixed top-2 right-2 z-50 p-2 text-[#656464] hover:text-white transition-colors"
+                  aria-label="Close quick window"
+                >
+                  <X size={16} />
+                </button>
+              )}
               {/* SIX-COLUMN GRID: col 1 = projects-as-filters, cols 2–3 = the Dashboard
                   stack at double width (the 2fr track — no col-span wrapper needed),
                   cols 4–6 = the calendar unpacked into Today / Tomorrow / Next columns.
@@ -9344,13 +9426,14 @@ export default function App() {
               {/* Filter + Milestones are fixed-narrow (same width, sized to fit their names + a
                   small buffer) instead of stretchy 1fr tracks; the three day columns split the
                   freed space, so the calendar gets wider. */}
-              <div className="grid grid-cols-[225px_225px_1fr_1fr_1fr] gap-0 flex-1 min-h-0 w-full overflow-x-auto">
+              {/* PIP: ONLY the three day columns — no filter panel, no Milestones column. */}
+              <div className={`grid ${PIP_MODE ? 'grid-cols-[1fr_1fr_1fr]' : 'grid-cols-[225px_225px_1fr_1fr_1fr]'} gap-0 flex-1 min-h-0 w-full overflow-x-auto`}>
                 {/* Column 1 — Projects panel: flat master list (milestones pinned on top);
                     clicking a project FILTERS the Dashboard stack + all three calendar
                     columns (focusProjectId). Active row shows an ×; click again to clear.
                     Information + References are parked behind FOCUS_SHOW_INFO /
                     FOCUS_SHOW_REFERENCES while ctrl-assets takes over reference handling. */}
-                {(() => {
+                {!PIP_MODE && (() => {
                   // Left panel: top-pinned milestones + a COLLAPSED project filter. Client
                   // headers collapse their projects so the user scans the big picture and
                   // expands on demand. Clicking a project FILTERS (not navigates) — the
@@ -9445,7 +9528,7 @@ export default function App() {
                 {/* Column 2 — MILESTONES, in their own narrow column (same 1fr width as the filter).
                     Grouped by effective list then deadline, like everything else. Rendered
                     title-only (no client / project meta) — just the milestone name + its date. */}
-                {(() => {
+                {!PIP_MODE && (() => {
                   const clientOfMs = (t: Task) => t.clientId ?? (t.projectId ? projects.find((p) => p.id === t.projectId)?.clientId : undefined);
                   const msRank = (t: Task) => { const idx = listSequence.indexOf(effectiveListFor(t)); return idx < 0 ? 99 : idx; };
                   const milestones = visibleTasks

@@ -1,10 +1,15 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Default capabilities for the main window",
-  "windows": ["main"],
+  "description": "Default capabilities for the main + pip windows (remote: the hosted app)",
+  "windows": ["main", "pip"],
+  "remote": {
+    "urls": ["https://charlesbennorussell-ctrl.github.io"]
+  },
   "permissions": [
     "core:default",
-    "global-shortcut:default"
+    "global-shortcut:default",
+    "core:window:allow-hide",
+    "core:window:allow-show"
   ]
 }

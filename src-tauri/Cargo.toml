@@ -1,6 +1,6 @@
 [package]
 name = "ctrl-project"
-version = "0.1.92"
+version = "0.2.0"
 description = "Ctrl-Project — todo + project planner"
 authors = ["benno"]
 edition = "2021"
@@ -27,6 +27,8 @@ serde = { version = "1", features = ["derive"] }
 # cfg-gated dependency table (mirrors the plugin's own install docs).
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
 tauri-plugin-global-shortcut = "2"
+# Launch hidden at login so the PIP shortcut works without opening the app.
+tauri-plugin-autostart = "2"
 
 [features]
 # Enabled at packaging time; the dev build skips it.
