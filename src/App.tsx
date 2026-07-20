@@ -4468,7 +4468,10 @@ function WeekCalendarMode({
                               onDelete={() => onDeleteTask(t.id)}
                               onEdit={() => onEditTask(t)}
                               onQuickEdit={onQuickEditTask ? () => onQuickEditTask(t) : undefined}
-                              onAddSibling={() => onAddSiblingTask(t, nwStartIso)}
+                              // NO pinned deadline in Next Week — dating the sibling hoisted it to
+                              // the top of the column; undated, it slots in right under its sibling
+                              // (addSiblingTask inserts at idx+1 in the section bucket).
+                              onAddSibling={() => onAddSiblingTask(t)}
                               isAnyDragging={isAnyDragging}
                               categoryDimmed={categoryDimmed}
                               projects={projects}
@@ -9739,7 +9742,7 @@ export default function App() {
                                 onDelete={() => deleteTask(t.id)}
                                 onEdit={() => openEdit(t)}
                                 onQuickEdit={() => openQuick(t)}
-                                onAddSibling={() => addSiblingTask(t, isos[0])}
+                                onAddSibling={() => addSiblingTask(t, section === 'next' ? undefined : isos[0])}
                                 isAnyDragging={!!activeTask}
                                 categoryDimmed={!!activeTask && activeTask.list !== listId}
                                 projects={projects}
