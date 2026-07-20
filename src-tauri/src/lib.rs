@@ -18,6 +18,12 @@ const PIP_WIDTH: f64 = 1080.0;
 // Fallback chain when no saved combo (or the saved one stops working). Note
 // Ctrl+Space / Ctrl+Win+Space are grabbed by the Windows IME — avoid them.
 const DEFAULT_COMBOS: [&str; 3] = ["ctrl+alt+f", "ctrl+alt+space", "ctrl+shift+space"];
+// The safety-net combo: ALWAYS registered in addition to any custom combo, so a dud
+// custom choice can never brick the quick window.
+const SAFETY_COMBO: &str = "ctrl+alt+f";
+// Combos Windows ACCEPTS registering but the IME/shell swallows before any app sees a
+// press — registration "succeeds" and then never fires. Reject these up front.
+const DOOMED_COMBOS: [&str; 4] = ["ctrl+space", "ctrl+super+space", "super+space", "ctrl+win+space"];
 
 fn shortcut_file(app: &AppHandle) -> Option<std::path::PathBuf> {
     app.path().app_config_dir().ok().map(|d| d.join("pip-shortcut.txt"))
@@ -108,6 +114,14 @@ fn set_pip_shortcut(app: AppHandle, combo: String) -> Result<String, String> {
     #[cfg(desktop)]
     {
         use tauri_plugin_global_shortcut::GlobalShortcutExt;
+        // Reject combos the OS swallows silently — registration would "succeed" and the
+        // quick window would just stop summoning (exactly what happened with Ctrl+Space).
+        let normalized = combo.to_lowercase().replace(' ', "");
+        if DOOMED_COMBOS.iter().any(|d| *d == normalized) {
+            return Err(format!(
+                "{combo} is intercepted by Windows (IME/shell) before any app can see it — pick a different combo. Ctrl+Alt+F always works as a backup."
+            ));
+        }
         let previous = saved_shortcut(&app);
         let _ = app.global_shortcut().unregister_all();
         match app.global_shortcut().register(combo.as_str()) {
@@ -118,6 +132,9 @@ fn set_pip_shortcut(app: AppHandle, combo: String) -> Result<String, String> {
                     }
                     let _ = fs::write(p, &combo);
                 }
+                // Safety net: keep Ctrl+Alt+F registered alongside the custom combo (ignore
+                // the error when the custom combo IS Ctrl+Alt+F — double-register fails).
+                let _ = app.global_shortcut().register(SAFETY_COMBO);
                 Ok(combo)
             }
             Err(e) => {
@@ -125,6 +142,7 @@ fn set_pip_shortcut(app: AppHandle, combo: String) -> Result<String, String> {
                     &app,
                     previous.as_deref().into_iter().chain(DEFAULT_COMBOS),
                 );
+                let _ = app.global_shortcut().register(SAFETY_COMBO);
                 Err(format!(
                     "could not register {combo}: {e} (kept: {})",
                     restored.unwrap_or_else(|| "none".into())
@@ -160,14 +178,26 @@ pub fn run() {
                         })
                         .build(),
                 )?;
-                // Saved combo first, then the fallback chain.
-                let saved = saved_shortcut(app.handle());
+                // Saved combo first, then the fallback chain — SKIPPING doomed combos a
+                // pre-hardening build may have persisted (Ctrl+Space registered "fine" and
+                // then never fired; that dead state survived reboots).
+                let saved = saved_shortcut(app.handle())
+                    .filter(|s| {
+                        let n = s.to_lowercase().replace(' ', "");
+                        !DOOMED_COMBOS.iter().any(|d| *d == n)
+                    });
                 match register_first_working(
                     app.handle(),
                     saved.as_deref().into_iter().chain(DEFAULT_COMBOS),
                 ) {
                     Some(c) => eprintln!("[pip] toggle shortcut registered: {c}"),
                     None => eprintln!("[pip] no toggle shortcut could be registered"),
+                }
+                // Safety net: Ctrl+Alt+F stays registered no matter what the custom combo
+                // is (double-register of the same combo errors harmlessly).
+                {
+                    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+                    let _ = app.global_shortcut().register(SAFETY_COMBO);
                 }
 
                 // Background persistence: launch hidden at login and keep
