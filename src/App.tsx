@@ -8548,8 +8548,10 @@ export default function App() {
         // keeps its middle tier everywhere; grace windows unchanged.
         // Within a tier (and within freshly-toggled tasks still in grace): deadline ascending,
         // undated tasks below dated, manual order as the final tiebreaker.
-        const completedOnTop = k.endsWith(':next');
-        const tierFor = (t: Task) => { const b = tier(t); return b === 2 && completedOnTop ? -1 : b; };
+        // NEXT bucket: "touched" tasks rise to the top — STARTED (half-finished, solid tick)
+        // above COMPLETED, both above untouched pending. Elsewhere the normal 3-tier order.
+        const nextBucket = k.endsWith(':next');
+        const tierFor = (t: Task) => { const b = tier(t); if (!nextBucket) return b; return b === 1 ? -2 : b === 2 ? -1 : 0; };
         m[k].sort((a, b) => {
           const at = tierFor(a);
           const bt = tierFor(b);
@@ -8591,8 +8593,9 @@ export default function App() {
         // Dashboard aggregates carry over per-list bucket order, with the same
         // section-aware completed placement as the per-list sort: sink in
         // today/tomorrow, TOP in next.
-        const aggCompletedOnTop = s === 'next';
-        const aggTier = (t: Task) => { const b = tier(t); return b === 2 && aggCompletedOnTop ? -1 : b; };
+        // today/tomorrow; in NEXT, touched tasks rise — started above completed above pending.
+        const aggNext = s === 'next';
+        const aggTier = (t: Task) => { const b = tier(t); if (!aggNext) return b; return b === 1 ? -2 : b === 2 ? -1 : 0; };
         agg.sort((a, b) => {
           const at = aggTier(a);
           const bt = aggTier(b);
