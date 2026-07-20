@@ -4805,8 +4805,8 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
     <div className="h-full flex flex-col" style={{ paddingTop: SPACING.topMargin, paddingBottom: 76 }}>
       <div className="shrink-0"><TopHeader viewName="Settings" /></div>
       <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
-        <div className="grid grid-cols-2 gap-x-6 pb-[106px]">
-          {/* LEFT COLUMN — everyday settings, version at the top. */}
+        <div className="grid grid-cols-4 gap-x-5 pb-[106px]">
+          {/* COLUMN 1 — config: version, ordering, shortcuts, case. */}
           <div className="min-w-0 flex flex-col gap-[34px] pt-[2px]">
             <div>
               {sectionTitle('About')}
@@ -4866,6 +4866,9 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
                 <button type="button" onClick={() => onSetCaseMode('title')} className={`text-[13px] transition-colors ${caseMode === 'title' ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>On</button>
               </div>
             </div>
+          </div>
+          {/* COLUMN 2 — people & clients. */}
+          <div className="min-w-0 flex flex-col gap-[34px] pt-[2px]">
             <div>
               {sectionTitle('People', <AddPlus onClick={onAddPerson} />)}
               <div className="pt-[4px]">
@@ -4882,26 +4885,26 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
             </div>
             <div>
               {sectionTitle('Clients', <AddPlus onClick={onAddClient} />)}
-              <div className="px-[31px] pt-[4px] flex flex-row items-center gap-2 text-[11px] uppercase tracking-wide text-[#5e5e5e]">
-                <span className="flex-1">Client</span>
-                <span className="w-[120px]">Nickname</span>
-                <span className="w-[18px]" />
+              <div className="pt-[4px]">
+                {clients.map((c) => (
+                  c.id === PERSONAL_CLIENT_ID ? (
+                    <SettingsRow key={c.id}><span className={`${bodyFont} text-[#656464]`}>Personal</span></SettingsRow>
+                  ) : (
+                    <SettingsRow key={c.id}>
+                      <span className="inline-flex items-baseline min-w-0">
+                        <EditableText value={c.name} onChange={(v) => onRenameClient(c.id, v)} className={`${bodyFont} text-white`} placeholder="New Client" />
+                        <span className="w-[6px]" />
+                        <ShortInBrackets value={c.short} onChange={(v) => onRenameClientShort(c.id, v)} />
+                      </span>
+                      <TrashBtn onClick={() => onDeleteClient(c.id)} />
+                    </SettingsRow>
+                  )
+                ))}
               </div>
-              {clients.map((c) => (
-                <div key={c.id} className="group h-[34px] w-full box-border flex flex-row items-center gap-2 px-[31px] hover:bg-white/[0.03]">
-                  <div className="flex-1 min-w-0 truncate">
-                    {c.id === PERSONAL_CLIENT_ID ? <span className={`${bodyFont} text-[#656464]`}>Personal</span> : <EditableText value={c.name} onChange={(v) => onRenameClient(c.id, v)} className={`${bodyFont} text-white`} placeholder="New Client" />}
-                  </div>
-                  <div className="w-[120px] min-w-0">
-                    {c.id === PERSONAL_CLIENT_ID ? <span className="text-[13px] text-[#5e5e5e]">&mdash;</span> : <EditableText value={c.short} onChange={(v) => onRenameClientShort(c.id, v)} className="text-[13px] text-[#a8a8a8]" placeholder="&mdash;" />}
-                  </div>
-                  <div className="w-[18px] flex justify-end">{c.id !== PERSONAL_CLIENT_ID && <TrashBtn onClick={() => onDeleteClient(c.id)} />}</div>
-                </div>
-              ))}
             </div>
           </div>
 
-          {/* RIGHT COLUMN — history + collapsible Debug. */}
+          {/* COLUMN 3 — Trash. */}
           <div className="min-w-0 flex flex-col gap-[34px] pt-[2px]">
             <div>
               {sectionTitle('Trash', <span className="text-[#666] text-[12px]">{trashedTasks.length}</span>)}
@@ -4926,6 +4929,9 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
                 ))}
               </div>
             </div>
+          </div>
+          {/* COLUMN 4 — Completed & collapsible Debug. */}
+          <div className="min-w-0 flex flex-col gap-[34px] pt-[2px]">
             <div>
               {sectionTitle('Completed', <span className="text-[#666] text-[12px]">{completedTasks.length}</span>)}
               <div className="pt-[4px]">
