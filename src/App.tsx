@@ -3028,18 +3028,28 @@ function FocusDamFolderDropTarget({ bucketKey, folderId, children }: { bucketKey
 // task onto either lands the task as a child of this project. Inline highlight on hover lets
 // the user see the drop target before releasing. The actual reparent happens in handleDragEnd
 // via the data.type === 'proj2Project' branch.
-// Drag handle on a Projects-view project header (the folder icon). Dragging the project into
-// ANOTHER category column re-pins it there — project.list + every task moves (the existing
-// type:'project' drop branch handles projList / project / clientHeader targets).
-function Proj2ProjectDragHandle({ project, listId }: { project: Project; listId: ListId }) {
+// Projects-view project header — the WHOLE row is the drag handle (the folder icon alone
+// was a 12px target nobody could hit). Drag the row into another category column to re-pin
+// the project there (project.list + every task moves). The 8px pointer-sensor activation
+// distance keeps clicks working: name click-to-rename, +, and trash all behave (same
+// coexistence pattern as SortableTaskItem rows).
+function Proj2DraggableProjectHeader({ project, listId, bodyFont, autoFocus, onRename, onDiscardIfEmpty, onAddTask, onTrash }: {
+  project: Project; listId: ListId; bodyFont: string; autoFocus: boolean;
+  onRename: (v: string) => void; onDiscardIfEmpty: () => void; onAddTask: () => void; onTrash: () => void;
+}) {
   const { attributes, listeners, setNodeRef } = useDraggable({
     id: `proj2drag:${listId}:${project.id}`,
     data: { type: 'project', project, listId },
   });
   return (
-    <span ref={setNodeRef} {...attributes} {...listeners} className="cursor-grab active:cursor-grabbing -m-1 p-1 flex items-center shrink-0" title="Drag to another column to change category">
-      <Folder size={12} className="text-[#656464]" />
-    </span>
+    <div ref={setNodeRef} {...attributes} {...listeners} className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] cursor-grab active:cursor-grabbing">
+      <Folder size={12} className="text-[#656464] shrink-0" />
+      <EditableText value={project.name} onChange={onRename} autoFocus={autoFocus} placeholder="New Project" onDiscardIfEmpty={onDiscardIfEmpty} className={`${bodyFont} text-[#656464]`} />
+      <AddPlus onClick={onAddTask} />
+      <div className="ml-auto">
+        <TrashBtn onClick={onTrash} />
+      </div>
+    </div>
   );
 }
 
@@ -7978,7 +7988,11 @@ export default function App() {
         clearOverlay(); return;
       }
       // Drop on an empty list column ? pin this project to that list.
-      if (overData?.type === 'projList') {
+      // proj2Project zones blanket EVERY project block in the projects view — without this
+      // branch, dropping a dragged folder anywhere except bare column space silently
+      // no-opped ("Financial just won't drag into Personal"). Recategorize the list, keep
+      // the client.
+      if (overData?.type === 'projList' || overData?.type === 'proj2Project') {
         const targetList = overData.listId as ListId;
         setProjects((prev) => prev.map((p) => (p.id === srcProject.id ? { ...p, list: targetList } : p)));
         setTasks((prev) => prev.map((t) => (t.projectId === srcProject.id ? { ...t, list: targetList } : t)));
@@ -9172,19 +9186,53 @@ export default function App() {
     // Build the client > projects hierarchy. A client appears in this column if any of its
     // projects has tasks here, OR it's pinned to this list, OR it has client-level tasks
     // (e.g. a milestone tied to the client without a concrete project).
+    const listFilter = (p: Project) => {
+      if (p.list) return p.list === listId;
+      // Unpinned project: show in 'projects' list as default home, plus anywhere it has tasks here
+      return listId === 'projects' || tasksByProject.has(p.id);
+    };
+    // The Personal system "client" is a grouping, not a real client — its projects (and any
+    // truly clientless ones) render FLAT with no client header. Renaming the shared Personal
+    // header in one column used to rename it across every column; now there's no header to
+    // touch, just folders.
     const clientBlocks = proj2SortedClients
+      .filter((c) => c.id !== PERSONAL_CLIENT_ID)
       .map((c) => {
-        const clientProjects = projects
-          .filter((p) => p.clientId === c.id)
-          .filter((p) => {
-            if (p.list) return p.list === listId;
-            // Unpinned project: show in 'projects' list as default home, plus anywhere it has tasks here
-            return listId === 'projects' || tasksByProject.has(p.id);
-          });
+        const clientProjects = projects.filter((p) => p.clientId === c.id).filter(listFilter);
         const clientLevelTasks = tasksByClient.get(c.id) || [];
         return { client: c, projects: clientProjects, clientLevelTasks };
       })
       .filter((b) => b.projects.length > 0 || b.clientLevelTasks.length > 0);
+    const freeProjects = projects
+      .filter((p) => !p.clientId || p.clientId === PERSONAL_CLIENT_ID || !clients.some((c) => c.id === p.clientId))
+      .filter(listFilter);
+    const personalLevelTasks = tasksByClient.get(PERSONAL_CLIENT_ID) || [];
+    // One project block — header (whole-row drag handle) + task bucket — shared by the
+    // client groups and the flat client-free group.
+    const renderProjectBlock = (p: Project) => {
+      const projTasks = tasksByProject.get(p.id) || [];
+      return (
+        <Proj2ProjectDropZone key={p.id} projectId={p.id} listId={listId}>
+          <Proj2DraggableProjectHeader
+            project={p}
+            listId={listId}
+            bodyFont={proj2BodyFont}
+            autoFocus={p.id === newId}
+            onRename={(v) => renameProject(p.id, v)}
+            onDiscardIfEmpty={() => deleteProject(p.id)}
+            onAddTask={() => addTaskToProject(p.id, listId)}
+            onTrash={() => setPendingTrash({ kind: 'project', id: p.id, name: p.name || 'Untitled' })}
+          />
+          {/* Empty-project drop slot — a 37px landing zone under the header so task drops
+              have something to aim at; the Proj2ProjectDropZone wraps both. */}
+          {projTasks.length === 0 ? (
+            <div className="h-[37px] w-full" aria-hidden />
+          ) : (
+            renderProjectBucket(projTasks, `proj2:${listId}:${p.id}:`, true)
+          )}
+        </Proj2ProjectDropZone>
+      );
+    };
     return (
       <Proj2ColumnDroppable key={listId} listId={listId}>
         {/* Column header with the cascading add menu (HeaderAddMenu). DOUBLE carriage-return
@@ -9209,6 +9257,14 @@ export default function App() {
             {renderProjectBucket(orphans, `proj2:${listId}:none:`, false)}
           </div>
         )}
+        {/* CLIENT-FREE folders first: personal + clientless projects, flat, no client header. */}
+        {(freeProjects.length > 0 || personalLevelTasks.length > 0) && (
+          <div>
+            {personalLevelTasks.length > 0 && renderProjectBucket(personalLevelTasks, `proj2:${listId}:client:${PERSONAL_CLIENT_ID}:`, true)}
+            {freeProjects.map(renderProjectBlock)}
+            {clientBlocks.length > 0 && <Spacer />}
+          </div>
+        )}
         {clientBlocks.map(({ client: c, projects: clientProjects, clientLevelTasks }, ci) => (
           <div key={c.id}>
             {ci > 0 && <Spacer />}
@@ -9225,54 +9281,15 @@ export default function App() {
                 className={`${proj2BodyFont} text-[#656464]`}
               />
               <AddPlus onClick={() => addBlankProject(c.id, listId)} />
-              {c.id !== PERSONAL_CLIENT_ID && (
-                <div className="ml-auto">
-                  <TrashBtn onClick={() => setPendingTrash({ kind: 'client', id: c.id, name: c.name || 'Untitled' })} />
-                </div>
-              )}
+              <div className="ml-auto">
+                <TrashBtn onClick={() => setPendingTrash({ kind: 'client', id: c.id, name: c.name || 'Untitled' })} />
+              </div>
             </div>
             {/* Client-level tasks (no project) sit directly under the client header — typically
                 milestones tied to a client without a specific project. Indented like project
                 tasks for visual continuity. */}
             {clientLevelTasks.length > 0 && renderProjectBucket(clientLevelTasks, `proj2:${listId}:client:${c.id}:`, true)}
-            {clientProjects.map((p) => {
-              const projTasks = tasksByProject.get(p.id) || [];
-              return (
-                <Proj2ProjectDropZone key={p.id} projectId={p.id} listId={listId}>
-                  {/* Project header — folder icon + EDITABLE project name + AddPlus to spawn
-                      a new task under this project. The name uses EditableText so the user can
-                      click-to-rename, with placeholder + autoFocus on freshly-created projects.
-                      onDiscardIfEmpty deletes the project if the user blurs without typing
-                      anything (matches the fresh-task fade behavior). */}
-                  <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]">
-                    {/* Folder icon doubles as the drag handle — drag the project into another
-                        column to recategorize it (tasks follow). */}
-                    <Proj2ProjectDragHandle project={p} listId={listId} />
-                    <EditableText
-                      value={p.name}
-                      onChange={(v) => renameProject(p.id, v)}
-                      autoFocus={p.id === newId}
-                      placeholder="New Project"
-                      onDiscardIfEmpty={() => deleteProject(p.id)}
-                      className={`${proj2BodyFont} text-[#656464]`}
-                    />
-                    <AddPlus onClick={() => addTaskToProject(p.id, listId)} />
-                    <div className="ml-auto">
-                      <TrashBtn onClick={() => setPendingTrash({ kind: 'project', id: p.id, name: p.name || 'Untitled' })} />
-                    </div>
-                  </div>
-                  {/* Empty-project drop slot. When a project has no tasks, the header alone
-                      can be a tiny target — the slot adds a 37px landing zone so users have
-                      something to aim at directly under the header. The Proj2ProjectDropZone
-                      wraps both, so dropping anywhere on this block reparents the dragged task. */}
-                  {projTasks.length === 0 ? (
-                    <div className="h-[37px] w-full" aria-hidden />
-                  ) : (
-                    renderProjectBucket(projTasks, `proj2:${listId}:${p.id}:`, true)
-                  )}
-                </Proj2ProjectDropZone>
-              );
-            })}
+            {clientProjects.map(renderProjectBlock)}
           </div>
         ))}
         </CustomScroll>
