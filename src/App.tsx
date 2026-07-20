@@ -3056,10 +3056,17 @@ function Proj2DraggableProjectHeader({ project, listId, bodyFont, autoFocus, onR
 // Whole-column droppable for the Projects view — dropping a PROJECT anywhere in a column
 // (not on a specific row) recategorizes it to that column's list. Same data type the list
 // view's ProjectListColumn uses, so the existing drop branches (project + task) just work.
+// While a project drag hovers, the ENTIRE column tints purple — the collision resolver
+// makes the column the one atomic target, so the highlight equals the truth.
 function Proj2ColumnDroppable({ listId, children }: { listId: ListId; children: React.ReactNode }) {
-  const { setNodeRef } = useDroppable({ id: `projlist2:${listId}`, data: { type: 'projList', listId } });
+  const { setNodeRef, isOver, active } = useDroppable({ id: `projlist2:${listId}`, data: { type: 'projList', listId } });
+  const projectHover = isOver && active?.data.current?.type === 'project';
   return (
-    <div ref={setNodeRef} className="flex-1 min-w-[280px] flex flex-col min-h-0 overflow-hidden">
+    <div
+      ref={setNodeRef}
+      className="flex-1 min-w-[280px] flex flex-col min-h-0 overflow-hidden transition-colors duration-150"
+      style={projectHover ? { backgroundColor: 'rgba(132, 101, 255, 0.07)' } : undefined}
+    >
       {children}
     </div>
   );
@@ -3855,7 +3862,9 @@ function MilestoneCardView({ task, projects, clients, showDate, categoryDimmed =
   const isExpired = !!task.deadline && task.deadline < todayISO();
   const milestonePurpleClass = isExpired ? 'text-[#4f4290]' : 'text-[#8465ff]';
   const DIM = 'text-[#454545]';
-  const titleClass = active ? 'text-white' : categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : milestonePurpleClass;
+  // Active (filter) milestone stays PURPLE — turning it white read as "selected/normal task".
+  // The × affordance still marks it as the active filter.
+  const titleClass = categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : milestonePurpleClass;
   // Inline style because Tailwind arbitrary opacity on hex colors wasn't reliably generating the CSS.
   const cardBgStyle: React.CSSProperties = { backgroundColor: 'rgba(132, 101, 255, 0.10)' };
   return (
@@ -3871,7 +3880,7 @@ function MilestoneCardView({ task, projects, clients, showDate, categoryDimmed =
           {client?.short && !project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${titleClass}`}>{client.short}</p>}
           {!client?.short && project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${titleClass}`}>{project.name}</p>}
           {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone="scheduled" hollow={isPersonal} dim={task.completed || categoryDimmed} faint={isExpired} />)}
-          {showDate && task.deadline && <DeadlineArrow small dim={task.completed || categoryDimmed} color={isExpired ? '#4f4290' : '#8465ff'} />}
+          {showDate && task.deadline && <DeadlineArrow dim={task.completed || categoryDimmed} color={isExpired ? '#4f4290' : '#8465ff'} />}
           {showDate && task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${titleClass}`}>{formatDeadline(task.deadline)}</p>}
           {onAddSibling && (
             <button
@@ -4156,7 +4165,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
             {!client?.short && project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : metaColor}`}>{project.name}</p>}
             {/* Deadline arrow — the same glyph list view puts before dates (small variant for
                 the tighter card meta). Milestones get it too, tinted milestone purple. */}
-            {task.deadline && <DeadlineArrow small dim={task.completed || categoryDimmed} color={(isScheduled || isTodayCard) ? '#8465ff' : undefined} />}
+            {task.deadline && <DeadlineArrow dim={task.completed || categoryDimmed} color={(isScheduled || isTodayCard) ? '#8465ff' : undefined} />}
             {/* Overdue dates render WHITE (red read as alarmist next to the purple wash).
                 The date chip is interactive: dblclick kicks it +1 day; right-click opens the
                 mini date menu. pointer-down stays local so pressing the date never starts a drag. */}
@@ -5993,10 +6002,16 @@ export default function App() {
     }
   }, [tasks, setTasks]);
 
-  // Migration: ensure the seeded Personal client exists for rooms created before it was added.
+  // Migration: ensure the seeded Personal client exists AND is normalized. The Personal
+  // client is a system grouping, never a real client — its short MUST stay empty so it can
+  // never render as a "PRSNL" chip on task cards (the ghost the user saw on Admin tasks;
+  // every meta site gates on `client?.short &&`, so an empty short suppresses it everywhere).
   useEffect(() => {
-    if (!clients.some((c) => c.id === PERSONAL_CLIENT_ID)) {
+    const existing = clients.find((c) => c.id === PERSONAL_CLIENT_ID);
+    if (!existing) {
       setClients((prev) => (prev.some((c) => c.id === PERSONAL_CLIENT_ID) ? prev : [{ id: PERSONAL_CLIENT_ID, name: 'Personal', short: '' }, ...prev]));
+    } else if (existing.short !== '' || existing.name !== 'Personal') {
+      setClients((prev) => prev.map((c) => (c.id === PERSONAL_CLIENT_ID ? { ...c, name: 'Personal', short: '' } : c)));
     }
   }, [clients, setClients]);
 
@@ -7383,13 +7398,15 @@ export default function App() {
     });
     setNewId(id);
   }, [currentUserShort]);
-  // Add a blank task as a sibling of an existing one: same list/section/project, inserted right after it.
-  // pinDeadline (calendar callsites): keeps the new task in the CELL it was spawned from.
-  // A sibling created from a calendar card inherits the source's deadline; if the source is
-  // an undated queue task shown on a future day, the cell's date is pinned instead — without
-  // it the blank sibling fell into the queue and "disappeared" from the cell the user was
-  // looking at.
-  const addSiblingTask = useCallback((sibling: Task, pinDeadline?: string) => {
+  // Add a blank task as a sibling of an existing one: same list/section/project/deadline,
+  // inserted RIGHT AFTER it. The sibling mirrors the parent's scheduling EXACTLY — inheriting
+  // the deadline (or staying undated when the parent is undated). Previously a `pinDeadline`
+  // arg forced the cell's date onto an undated parent's sibling; that promoted it into the
+  // calendar/focus "dated" block, which renders ABOVE the undated block, so the new task
+  // jumped to the top instead of sitting under its sibling (the reported regression). The
+  // sibling's order = parent's order + 1, so it lands directly beneath in the same block; the
+  // param is kept for callsite compatibility but intentionally ignored.
+  const addSiblingTask = useCallback((sibling: Task, _pinDeadline?: string) => {
     const id = `task-${Date.now()}`;
     // If the sibling is a milestone (type === 'scheduled'), spawn another milestone — not a
     // regular todo. The user clicked + on a milestone row, so they want to author another
@@ -7411,7 +7428,7 @@ export default function App() {
         // Carry the clientId too so a sibling milestone inherits the parent's client (regular
         // tasks normally derive client via project, but milestones often have only clientId).
         clientId: sibling.clientId,
-        deadline: sibling.deadline ?? pinDeadline,
+        deadline: sibling.deadline,
         // Stamp creation time — this site was MISSED when the blank-task sweep landed, so
         // fresh siblings (createdAt undefined) counted as "legacy expired" and were reaped
         // by the very next 30-second sweep. That was the "new task disappears" bug.
@@ -8829,7 +8846,9 @@ export default function App() {
         // Active filter row (milestone filter): white title + × at the row end — the same
         // visual the client/project filter rows use.
         const isActiveRow = activeRowId === task.id;
-        const titleColor = isActiveRow ? 'text-white' : isScheduled ? 'text-[#8465ff]' : task.completed ? 'text-[#474747]' : isNext ? 'text-[#a8a8a8]' : 'text-white';
+        // Milestones (isScheduled) keep their purple even when the active filter row — the ×
+        // marks the filter, not a color flip. Non-milestone active rows still go white.
+        const titleColor = isScheduled ? 'text-[#8465ff]' : isActiveRow ? 'text-white' : task.completed ? 'text-[#474747]' : isNext ? 'text-[#a8a8a8]' : 'text-white';
         const metaColor = task.completed ? 'text-[#474747]' : isScheduled ? 'text-[#8465ff]' : 'text-[#656464]';
         return (
           <div key={`dash-${task.id}`} onClick={onRowClick ? () => onRowClick(task) : undefined} onDoubleClick={() => openEdit(task)} onContextMenu={(e) => { e.preventDefault(); openQuick(task); }} className={`h-[37px] box-border flex flex-row gap-2 items-center px-[31px] w-full group hover:bg-white/[0.03] ${onRowClick ? 'cursor-pointer' : ''}`}>
@@ -9317,6 +9336,15 @@ export default function App() {
       }
     }
     const base = edgeHits.length ? collisions.filter((c) => !String(c.id).startsWith('edge:')) : collisions;
+    // PROJECT drags in the projects view resolve to the whole COLUMN — one atomic target,
+    // like dropping a task over a line. Task rows / headers under the pointer used to win
+    // the collision and swallow the drop into a no-op ("you have to fiddle to a very
+    // specific place"). Only projectView mounts projlist2: droppables, so list-view project
+    // reordering is untouched.
+    if (args.active.data.current?.type === 'project') {
+      const colHit = base.find((c) => String(c.id).startsWith('projlist2:'));
+      if (colHit) return [colHit];
+    }
     // The focus page's day columns use the SAME calendar engine as the Calendar view, so it needs
     // the same collision handling — most importantly the CATEGORY LOCK: a task-card collision is
     // redirected to a cell in the DRAGGED task's own list (activeList), so dropping a Projects
