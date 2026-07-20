@@ -2,6 +2,7 @@ import { Fragment, memo, useState, useCallback, useMemo, useRef, useEffect, useL
 import { flushSync } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { Plus, X, List, FolderTree, SlidersHorizontal as SettingsIcon, Folder, Trash2, Calendar as CalendarIcon, ChevronLeft, ChevronRight, ArrowUp, LayoutDashboard, Heart, FileText, Search, ExternalLink } from 'lucide-react';
+import { createPortal } from 'react-dom';
 import {
   DndContext,
   KeyboardSensor,
@@ -3706,6 +3707,40 @@ function dateToISO(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
+// Date-chip actions on calendar/focus cards — the "one little portion of the larger task
+// editor": double-click the date = kick it one day forward (list-view parity via
+// rescheduleTaskTo 'shiftForward'); right-click = this mini menu.
+type CardDateAction = 'today' | 'tomorrow' | 'nextWeek' | 'shiftForward' | 'remove';
+function CardDateMenu({ x, y, onPick, onClose }: { x: number; y: number; onPick: (k: CardDateAction) => void; onClose: () => void }) {
+  const items: { k: CardDateAction; label: string }[] = [
+    { k: 'today', label: 'Today' },
+    { k: 'tomorrow', label: 'Tomorrow' },
+    { k: 'nextWeek', label: 'Next Week' },
+    { k: 'remove', label: 'Remove Date' },
+  ];
+  // Portal to body — the card ancestors carry transforms (dnd), which would break
+  // position:fixed inside them. Clamp so the menu never overflows the viewport.
+  const mx = Math.min(x, window.innerWidth - 150);
+  const my = Math.min(y, window.innerHeight - 170);
+  return createPortal(
+    <div className="fixed inset-0 z-[200]" onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose(); }} onPointerDown={(e) => e.stopPropagation()}>
+      <div className="absolute bg-[#1f1f1f] border border-[#333333] rounded-md py-1 shadow-2xl min-w-[130px]" style={{ left: mx, top: my }} onClick={(e) => e.stopPropagation()}>
+        {items.map((it) => (
+          <button
+            key={it.k}
+            type="button"
+            onClick={() => { onPick(it.k); onClose(); }}
+            className={`block w-full text-left px-4 py-1.5 text-[13px] transition-colors hover:bg-white/[0.06] ${it.k === 'remove' ? 'text-[#a8a8a8]' : 'text-white'}`}
+          >
+            {it.label}
+          </button>
+        ))}
+      </div>
+    </div>,
+    document.body
+  );
+}
+
 function CalendarDayDroppable({ id, children, isEmpty, className = '' }: { id: string; children: React.ReactNode; isEmpty: boolean; className?: string }) {
   const { setNodeRef } = useDroppable({ id });
   // No tint, no hint line ï¿½ displaced cards under the cursor show where the drop will land.
@@ -3977,17 +4012,20 @@ function CalendarCardBody({ task, projects, clients, taskOrder = 'ptc' }: { task
         {client && !project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${metaColor}`}>{client.short}</p>}
         {!client && project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap text-[#656464]`}>{project.name}</p>}
         {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} />)}
-        {task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${isScheduled ? 'text-[#8465ff]' : isLateDeadline(task.deadline) ? 'text-[#FF7171]' : 'text-[#656464]'}`}>{formatDeadline(task.deadline)}</p>}
+        {task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${isScheduled ? 'text-[#8465ff]' : isLateDeadline(task.deadline) ? 'text-white' : 'text-[#656464]'}`}>{formatDeadline(task.deadline)}</p>}
       </div>
     </div>
   );
 }
 
-function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onDelete, onEdit, onQuickEdit, onAddSibling, isAnyDragging, dimmed, categoryDimmed, displacementOffset = 0, insertionGap = 0, taskOrder = 'ptc', autoFocusEdit = false, stacked = false }: {
+function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onDelete, onEdit, onQuickEdit, onAddSibling, onRescheduleDate, isAnyDragging, dimmed, categoryDimmed, displacementOffset = 0, insertionGap = 0, taskOrder = 'ptc', autoFocusEdit = false, stacked = false }: {
   task: Task; cellId: string; projects: Project[]; clients: Client[];
   onToggle: () => void; onRename: (title: string) => void; onDelete: () => void; onEdit: () => void;
   onQuickEdit?: () => void;
   onAddSibling?: () => void;
+  // Date-chip actions: dblclick the date → shiftForward (+1 day); right-click → mini menu
+  // (Today / Tomorrow / Next Week / Remove Date).
+  onRescheduleDate?: (kind: CardDateAction) => void;
   // Freshly created task (newId): the title renders as an autofocused EditableText so the
   // user can start typing immediately — list-view parity. Blurring while still empty
   // discards the task via onDelete.
@@ -4007,6 +4045,8 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
   const project = task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
   const resolvedClientId = task.clientId ?? project?.clientId;
   const client = resolvedClientId ? clients.find((c) => c.id === resolvedClientId) : undefined;
+  // Right-click-on-date mini menu anchor (viewport coords; rendered via portal).
+  const [dateMenu, setDateMenu] = useState<{ x: number; y: number } | null>(null);
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: task.id,
     data: { type: 'task', task, calendarCellId: cellId },
@@ -4107,7 +4147,20 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
             {/* Deadline arrow — the same glyph list view puts before dates (small variant for
                 the tighter card meta). Milestones get it too, tinted milestone purple. */}
             {task.deadline && <DeadlineArrow small dim={task.completed || categoryDimmed} color={(isScheduled || isTodayCard) ? '#8465ff' : undefined} />}
-            {task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : isLateDeadline(task.deadline) ? 'text-[#FF7171]' : isTodayCard ? 'text-[#8465ff]' : 'text-[#656464]'}`}>{formatDeadline(task.deadline)}</p>}
+            {/* Overdue dates render WHITE (red read as alarmist next to the purple wash).
+                The date chip is interactive: dblclick kicks it +1 day; right-click opens the
+                mini date menu. pointer-down stays local so pressing the date never starts a drag. */}
+            {task.deadline && (
+              <p
+                onPointerDown={(e) => e.stopPropagation()}
+                onDoubleClick={onRescheduleDate ? (e) => { e.stopPropagation(); onRescheduleDate('shiftForward'); } : undefined}
+                onContextMenu={onRescheduleDate ? (e) => { e.preventDefault(); e.stopPropagation(); setDateMenu({ x: e.clientX, y: e.clientY }); } : undefined}
+                className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${onRescheduleDate ? 'cursor-pointer' : ''} ${categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : isLateDeadline(task.deadline) ? 'text-white' : isTodayCard ? 'text-[#8465ff]' : 'text-[#656464]'}`}
+              >
+                {formatDeadline(task.deadline)}
+              </p>
+            )}
+            {dateMenu && onRescheduleDate && <CardDateMenu x={dateMenu.x} y={dateMenu.y} onPick={onRescheduleDate} onClose={() => setDateMenu(null)} />}
             {/* Assignees AFTER the date — hidden at rest, fade in on card-hover (~200ms), and on
                 roll-off linger ~1s then fade out over 500ms (asymmetric group-hover transition). */}
             {task.assignees.length > 0 && (
@@ -4133,7 +4186,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
 
 function WeekCalendarMode({
   tasks, projects, clients, onToggleTask, onRenameTask, onDeleteTask, onEditTask, onQuickEditTask, onAddSiblingTask, onAddTaskOnDay, onSyncSections, isAnyDragging,
-  activeTask, overTask, activeCellId, activeSlotHeight, taskOrder = 'ptc', listSequence, newTaskId = null,
+  activeTask, overTask, activeCellId, activeSlotHeight, taskOrder = 'ptc', listSequence, newTaskId = null, onRescheduleTask,
 }: {
   tasks: Task[]; projects: Project[]; clients: Client[];
   onToggleTask: (id: string) => void;
@@ -4143,6 +4196,8 @@ function WeekCalendarMode({
   onQuickEditTask?: (t: Task) => void;
   // pinDeadline keeps the spawned sibling in the cell it came from — see addSiblingTask.
   onAddSiblingTask: (t: Task, pinDeadline?: string) => void;
+  // Date-chip actions on cards (dblclick bump / right-click mini menu) — see CardDateAction.
+  onRescheduleTask: (id: string, kind: CardDateAction) => void;
   // Quick-add for a day cell's band label (+ on hover) — creates a blank task in that list
   // dated to that day. Autofocuses inline via newTaskId.
   onAddTaskOnDay: (listId: ListId, iso: string) => void;
@@ -4362,6 +4417,7 @@ function WeekCalendarMode({
                               onEdit={() => onEditTask(t)}
                               onQuickEdit={onQuickEditTask ? () => onQuickEditTask(t) : undefined}
                               onAddSibling={() => onAddSiblingTask(t, iso)}
+                              onRescheduleDate={(k) => onRescheduleTask(t.id, k)}
                               isAnyDragging={isAnyDragging}
                               dimmed={isPast}
                               categoryDimmed={categoryDimmed}
@@ -4485,6 +4541,7 @@ function WeekCalendarMode({
                               // the top of the column; undated, it slots in right under its sibling
                               // (addSiblingTask inserts at idx+1 in the section bucket).
                               onAddSibling={() => onAddSiblingTask(t)}
+                              onRescheduleDate={(k) => onRescheduleTask(t.id, k)}
                               isAnyDragging={isAnyDragging}
                               categoryDimmed={categoryDimmed}
                               projects={projects}
@@ -6296,6 +6353,12 @@ export default function App() {
       return { ...t, deadline: iso, section };
     }));
   }, []);
+  // Card date-chip dispatcher: 'remove' clears the deadline; everything else reuses the
+  // list view's rescheduleTaskTo semantics (section follows the new date).
+  const rescheduleOrClearDate = useCallback((id: string, kind: CardDateAction) => {
+    if (kind === 'remove') updateTask(id, { deadline: undefined });
+    else rescheduleTaskTo(id, kind);
+  }, [updateTask, rescheduleTaskTo]);
 
   const addProject = useCallback((p: Omit<Project, 'id'>) => setProjects((prev) => [...prev, { ...p, id: `p-${Date.now()}` }]), []);
   const addTaskToProject = useCallback((projectId: string, listId: ListId = 'projects') => {
@@ -9421,6 +9484,7 @@ export default function App() {
             onEditTask={openEdit}
             onQuickEditTask={openQuick}
             onAddSiblingTask={addSiblingTask}
+            onRescheduleTask={rescheduleOrClearDate}
             onAddTaskOnDay={addTaskOnDay}
             onSyncSections={syncCalendarSections}
             isAnyDragging={!!activeId}
@@ -9706,7 +9770,13 @@ export default function App() {
                     // Filter helper — project narrows to one, else client narrows to all its tasks.
                     const clientOfT = (t: Task) => t.clientId ?? (t.projectId ? projects.find((p) => p.id === t.projectId)?.clientId : undefined);
                     const passesFilter = (t: Task) => taskMatchesQuery(t, focusSearch, projects, clients) && passesMilestoneFilter(t) && (focusProjectId ? t.projectId === focusProjectId : focusClientId ? clientOfT(t) === focusClientId : true);
-                    const bucketAll = isos.flatMap((iso) => focusStripCells[`${iso}:${listId}`] || []);
+                    const bucketAllRaw = isos.flatMap((iso) => focusStripCells[`${iso}:${listId}`] || []);
+                    // NEXT column: anything with a deadline piles at the TOP of its band
+                    // (day-cell flattening already yields them deadline-ascending), undated
+                    // queue tasks below — matching list view's dated-above-undated rule.
+                    const bucketAll = section === 'next'
+                      ? [...bucketAllRaw.filter((t) => t.deadline), ...bucketAllRaw.filter((t) => !t.deadline)]
+                      : bucketAllRaw;
                     const bucket = bucketAll.filter(passesFilter);
                     // Milestones dated inside this column's window, band-matched by
                     // effective list (project's pinned list wins over the task's own) —
@@ -9773,6 +9843,7 @@ export default function App() {
                                 onEdit={() => openEdit(t)}
                                 onQuickEdit={() => openQuick(t)}
                                 onAddSibling={() => addSiblingTask(t, section === 'next' ? undefined : isos[0])}
+                                onRescheduleDate={(k) => rescheduleOrClearDate(t.id, k)}
                                 isAnyDragging={!!activeTask}
                                 categoryDimmed={!!activeTask && activeTask.list !== listId}
                                 projects={projects}
