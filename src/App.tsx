@@ -1,7 +1,7 @@
 import { Fragment, memo, useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect } from 'react';
 import { flushSync } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
-import { Plus, X, List, FolderTree, SlidersHorizontal as SettingsIcon, Folder, Trash2, Calendar as CalendarIcon, ChevronLeft, ChevronRight, ArrowUp, LayoutDashboard, Heart, FileText, Search } from 'lucide-react';
+import { Plus, X, List, FolderTree, SlidersHorizontal as SettingsIcon, Folder, Trash2, Calendar as CalendarIcon, ChevronLeft, ChevronRight, ArrowUp, LayoutDashboard, Heart, FileText, Search, ExternalLink } from 'lucide-react';
 import {
   DndContext,
   KeyboardSensor,
@@ -3735,6 +3735,13 @@ const CAL_LISTS: { id: ListId; label: string }[] = [
 // legacy Personal CLIENT — either way it's scoped to its assignees, so only the owner sees it.
 const isPrivateTask = (t: Task) => t.list === 'personal' || t.clientId === PERSONAL_CLIENT_ID;
 
+// PIP → full app: ask the Tauri shell to show + focus the main window and hide the quick
+// window (the show_main_window command). No-op in plain browsers.
+const openRealAppFromPip = () => {
+  const t = (window as unknown as { __TAURI__?: { core?: { invoke: (c: string) => Promise<unknown> } } }).__TAURI__;
+  t?.core?.invoke('show_main_window').catch(() => { /* old build without the command */ });
+};
+
 // Focus-page live search — does a task match the query? Checks its title + its project name +
 // its client's name/short (case-insensitive). An empty query matches everything.
 const taskMatchesQuery = (t: Task, query: string, projects: Project[], clients: Client[]): boolean => {
@@ -3889,9 +3896,15 @@ function computeCalendarDistribution(tasks: Task[], todayAnchor: Date, horizonDa
       // used to pile up on today via their stale section:'today' (30-40 old
       // completions crowding the current day). Instead they appear once as a
       // faded RESIDUE row pinned to their completion date (see below).
+      // Dated tasks for this day. TODAY additionally absorbs every OVERDUE open task
+      // (deadline before today) — universal pile-up matching list view's due-or-overdue
+      // promotion. Oldest deadline sorts first so the longest-overdue sits on top; their
+      // dates render late-red via isLateDeadline on the card.
+      const datedHere = (t: Task) =>
+        t.deadline === iso || (iso === todayIso && !!t.deadline && t.deadline < todayIso);
       m.push(...tasks.filter((t) =>
-        t.list === listId && t.deadline === iso && t.type !== 'scheduled' && !t.completed
-      ).sort((a, b) => a.order - b.order));
+        t.list === listId && datedHere(t) && t.type !== 'scheduled' && !t.completed
+      ).sort((a, b) => (a.deadline !== b.deadline ? (a.deadline! < b.deadline! ? -1 : 1) : a.order - b.order)));
       if (iso === todayIso) {
         m.push(...tasks.filter((t) =>
           t.list === listId && t.section === 'today' && !t.deadline && t.type !== 'scheduled' && !t.completed
@@ -9492,24 +9505,41 @@ export default function App() {
           return (
             // Focus mode: fixed TopHeader, fixed column titles, each column body scrolls
             // independently. Same pattern as List / Project / Calendar.
-            <div className="h-full flex flex-col" style={{ paddingTop: PIP_MODE ? 14 : SPACING.topMargin, paddingBottom: PIP_MODE ? 12 : 76 }}>
+            <div
+              className="h-full flex flex-col"
+              style={{ paddingTop: PIP_MODE ? 14 : SPACING.topMargin, paddingBottom: PIP_MODE ? 12 : 76 }}
+              // PIP: right-click anywhere on the BACKGROUND opens the full app (cards keep
+              // their own right-click quick-edit via stopPropagation).
+              onContextMenu={PIP_MODE ? (e) => { e.preventDefault(); openRealAppFromPip(); } : undefined}
+            >
               <div className="shrink-0">
                 <TopHeader viewName="Focus" />
               </div>
-              {/* PIP close — × top-right hides the always-on-top quick window (the Tauri shell
-                  also hides it on blur, i.e. clicking anywhere outside). Browser fallback: no-op. */}
+              {/* PIP top-right cluster on the header line: open-the-real-app (square with the
+                  arrow out) and × close. The shell also hides the PIP on blur. */}
               {PIP_MODE && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    const w = (window as unknown as { __TAURI__?: { window?: { getCurrentWindow?: () => { hide: () => void } } } }).__TAURI__;
-                    if (w?.window?.getCurrentWindow) w.window.getCurrentWindow().hide();
-                  }}
-                  className="fixed top-2 right-2 z-50 p-2 text-[#656464] hover:text-white transition-colors"
-                  aria-label="Close quick window"
-                >
-                  <X size={16} />
-                </button>
+                <>
+                  <button
+                    type="button"
+                    onClick={openRealAppFromPip}
+                    className="fixed top-2 right-10 z-50 p-2 text-[#656464] hover:text-white transition-colors"
+                    aria-label="Open the full app"
+                    title="Open the full app"
+                  >
+                    <ExternalLink size={16} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const w = (window as unknown as { __TAURI__?: { window?: { getCurrentWindow?: () => { hide: () => void } } } }).__TAURI__;
+                      if (w?.window?.getCurrentWindow) w.window.getCurrentWindow().hide();
+                    }}
+                    className="fixed top-2 right-2 z-50 p-2 text-[#656464] hover:text-white transition-colors"
+                    aria-label="Close quick window"
+                  >
+                    <X size={16} />
+                  </button>
+                </>
               )}
               {/* SIX-COLUMN GRID: col 1 = projects-as-filters, cols 2–3 = the Dashboard
                   stack at double width (the 2fr track — no col-span wrapper needed),
