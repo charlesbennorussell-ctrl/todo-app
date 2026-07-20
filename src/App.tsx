@@ -1851,7 +1851,7 @@ function PipShortcutSetting() {
   const tauri = typeof window !== 'undefined'
     ? (window as unknown as { __TAURI__?: { core?: { invoke: (cmd: string, args?: Record<string, unknown>) => Promise<unknown> } } }).__TAURI__
     : undefined;
-  const [combo, setCombo] = useState<string>(() => { try { return localStorage.getItem('pip-shortcut-display') || 'Ctrl+Alt+F'; } catch { return 'Ctrl+Alt+F'; } });
+  const [combo, setCombo] = useState<string>(() => { try { return localStorage.getItem('pip-shortcut-display') || 'Ctrl+Space'; } catch { return 'Ctrl+Space'; } });
   const [recording, setRecording] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const onKeyDown = (e: React.KeyboardEvent) => {
