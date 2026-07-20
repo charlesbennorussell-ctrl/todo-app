@@ -1903,11 +1903,21 @@ function PipShortcutSetting() {
 }
 
 function SectionDroppable({ id, children }: { id: string; children: React.ReactNode }) {
-  const { setNodeRef } = useDroppable({ id });
+  const { setNodeRef, isOver, active } = useDroppable({ id });
   // pb-[37px] gives the section a 37px slop zone below its last card so dropping in the visual
   // margin between sections still resolves here. Without this, drops in the gap between Today
   // and Next (or below the last card in a column) fell through to no droppable at all.
-  return <div ref={setNodeRef} className="min-h-[37px] w-full pb-[37px]">{children}</div>;
+  // Task-drag feedback: faint purple wash (ease fade) when a task hovers the section.
+  const taskOver = isOver && (active?.data.current?.type === 'task' || active?.data.current?.type === 'projTask');
+  return (
+    <div
+      ref={setNodeRef}
+      className="min-h-[37px] w-full pb-[37px] rounded-[3px] transition-colors duration-200 ease-in-out"
+      style={taskOver ? { backgroundColor: 'rgba(132, 101, 255, 0.07)' } : undefined}
+    >
+      {children}
+    </div>
+  );
 }
 
 function BottomBar({ mode, onSetMode, onAdd }: { mode: AppMode; onSetMode: (m: AppMode) => void; onAdd: () => void }) {
@@ -3759,9 +3769,21 @@ function CardDateMenu({ x, y, onPick, onClose }: { x: number; y: number; onPick:
 }
 
 function CalendarDayDroppable({ id, children, isEmpty, className = '' }: { id: string; children: React.ReactNode; isEmpty: boolean; className?: string }) {
-  const { setNodeRef } = useDroppable({ id });
-  // No tint, no hint line ï¿½ displaced cards under the cursor show where the drop will land.
-  return <div ref={setNodeRef} className={`${isEmpty ? 'min-h-[37px]' : ''} ${className}`}>{children}</div>;
+  const { setNodeRef, isOver, active } = useDroppable({ id });
+  // Drag feedback: while a TASK hovers this band cell, tint it faint purple with an ease
+  // fade in/out — the category-lock collision redirects `over` to the dragged task's own
+  // band, so the tinted cell is exactly where a drop lands. transition-colors carries the
+  // fade both directions (isOver → transparent).
+  const taskOver = isOver && (active?.data.current?.type === 'task' || active?.data.current?.type === 'projTask');
+  return (
+    <div
+      ref={setNodeRef}
+      className={`${isEmpty ? 'min-h-[37px]' : ''} ${className} rounded-[3px] transition-colors duration-200 ease-in-out`}
+      style={taskOver ? { backgroundColor: 'rgba(132, 101, 255, 0.09)' } : undefined}
+    >
+      {children}
+    </div>
+  );
 }
 
 function CalendarColumnDroppable({ date, children }: { date: string; children: React.ReactNode }) {
@@ -4700,7 +4722,7 @@ function BackupSection({
   );
 }
 
-function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePersonShort, onDeletePerson, currentUserShort, onSetCurrentUser, taskOrder, onSetTaskOrder, listSequence, onSetListSequence, tomorrowEnabled, onSetTomorrowEnabled, caseMode, onSetCaseMode, trashedTasks, completedTasks, projects, clients, onUntrashTask, onPurgeTask, onToggleTask, onPurgeEmptyProjects, onListClosedOutProjects, onRemoveProjectsByIds, onListStragglerProjects, onDeleteStragglerProject, liveBackupAt, dailyBackupAt, onDownloadBackup, onRestoreFromFile, onRestoreFromSlot }: {
+function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePersonShort, onDeletePerson, currentUserShort, onSetCurrentUser, taskOrder, onSetTaskOrder, listSequence, onSetListSequence, caseMode, onSetCaseMode, trashedTasks, completedTasks, projects, clients, onUntrashTask, onPurgeTask, onToggleTask, onPurgeEmptyProjects, onListClosedOutProjects, onRemoveProjectsByIds, onListStragglerProjects, onDeleteStragglerProject, liveBackupAt, dailyBackupAt, onDownloadBackup, onRestoreFromFile, onRestoreFromSlot, onAddClient, onRenameClient, onRenameClientShort, onDeleteClient }: {
   people: Person[]; newId: string | null;
   onAddPerson: () => void;
   onRenamePerson: (id: string, name: string) => void;
@@ -4717,8 +4739,6 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
   onRemoveProjectsByIds: (ids: string[]) => number;
   onListStragglerProjects: () => { id: string; name: string; taskCount: number }[];
   onDeleteStragglerProject: (id: string) => void;
-  tomorrowEnabled: boolean;
-  onSetTomorrowEnabled: (v: boolean) => void;
   caseMode: 'off' | 'title';
   onSetCaseMode: (v: 'off' | 'title') => void;
   trashedTasks: Task[];
@@ -4733,336 +4753,234 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
   onDownloadBackup: () => void | Promise<void>;
   onRestoreFromFile: (file: File) => Promise<string>;
   onRestoreFromSlot: (slot: 'live' | 'daily') => Promise<string>;
+  onAddClient: () => void;
+  onRenameClient: (id: string, name: string) => void;
+  onRenameClientShort: (id: string, short: string) => void;
+  onDeleteClient: (id: string) => void;
 }) {
   const bodyFont = "font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap";
   const [purgeMsg, setPurgeMsg] = useState('');
-  // Two-click confirm for "Remove closed-out projects": holds the ids surfaced on the first
-  // click until the second click removes them (or another action clears it).
   const [closedOutIds, setClosedOutIds] = useState<string[] | null>(null);
-  // Straggler-project manager: null = collapsed; array = the client-less projects to show with
-  // per-row delete. Kept in local state so deleting one drops it from the list immediately
-  // (the App-side refs update a tick later).
   const [stragglers, setStragglers] = useState<{ id: string; name: string; taskCount: number }[] | null>(null);
+  // Debug section collapsed by default — the intense/backup/temporary tooling lives here.
+  const [showDebug, setShowDebug] = useState(false);
+
+  const sectionTitle = (title: string, add?: React.ReactNode) => (
+    <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]">
+      <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">{title}</p>
+      {add}
+    </div>
+  );
+  // Per-day grouping for Trash / Completed (Today / Yesterday / weekday-date headers).
+  const dayLabel = (ts?: number): string => {
+    if (!ts) return 'Older';
+    const d = new Date(ts); d.setHours(0, 0, 0, 0);
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const diff = Math.round((today.getTime() - d.getTime()) / 86400000);
+    if (diff <= 0) return 'Today';
+    if (diff === 1) return 'Yesterday';
+    return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+  };
+  const groupByDay = (list: Task[], tsOf: (t: Task) => number | undefined) => {
+    const order: string[] = [];
+    const map = new Map<string, Task[]>();
+    for (const t of list) {
+      const k = dayLabel(tsOf(t));
+      if (!map.has(k)) { map.set(k, []); order.push(k); }
+      map.get(k)!.push(t);
+    }
+    return order.map((k) => ({ key: k, items: map.get(k)! }));
+  };
+  const metaOf = (t: Task) => {
+    const proj = t.projectId ? projects.find((p) => p.id === t.projectId) : undefined;
+    const cid = t.clientId ?? proj?.clientId;
+    const cli = cid && cid !== PERSONAL_CLIENT_ID ? clients.find((c) => c.id === cid) : undefined;
+    return [cli?.short, proj?.name].filter(Boolean).join(' › ');
+  };
+  const dayHeader = (label: string) => (
+    <div className="px-[31px] pt-[10px] pb-[3px] text-[11px] uppercase tracking-wide text-[#5e5e5e]">{label}</div>
+  );
+
   return (
-    // Fixed header + SCROLLING body. Previously the whole page was one non-scrolling block, so
-    // on a viewport shorter than the settings content (~1300px) the lower sections — Local
-    // Backup, People, Clients — were clipped below the fold with no way to reach them.
     <div className="h-full flex flex-col" style={{ paddingTop: SPACING.topMargin, paddingBottom: 76 }}>
       <div className="shrink-0"><TopHeader viewName="Settings" /></div>
-      <div className="flex-1 min-h-0 overflow-y-auto">
-      <div className="flex gap-0 pb-[106px]">
-      <div className="flex-1 min-w-[280px]">
-        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-0">
-          <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">I am</p>
-        </div>
-        <div className="px-[31px] mb-[37px] flex flex-wrap gap-2">
-          {people.map((p) => {
-            const active = p.short === currentUserShort;
-            return (
-              <button key={p.id} type="button" onClick={() => onSetCurrentUser(p.short)} className={`px-3 py-1 rounded-full text-[13px] transition-colors ${active ? 'bg-[#7363FF] text-white' : 'bg-[#1f1f1f] text-[#ccc] hover:bg-[#333]'}`}>
-                {p.name || '(unnamed)'} <span className="opacity-70">({p.short || '?'})</span>
-              </button>
-            );
-          })}
-          {people.length === 0 && <span className="text-[#666] text-[12px]">Add a person below first.</span>}
-        </div>
-        {/* Task display order — three options. Persisted per-browser via localStorage. */}
-        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-0">
-          <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Task Order</p>
-        </div>
-        <div className="px-[31px] mb-[37px] flex flex-col gap-2">
-          {([
-            { id: 'cpt' as TaskOrder, parts: ['Client - Project', 'Task'] as const },
-            { id: 'ptc' as TaskOrder, parts: ['Project', 'Task', 'Client'] as const },
-            { id: 'tcp' as TaskOrder, parts: ['Task', 'Client - Project'] as const },
-          ]).map((opt) => {
-            const active = taskOrder === opt.id;
-            return (
-              <button key={opt.id} type="button" onClick={() => onSetTaskOrder(opt.id)} className={`text-left text-[13px] transition-colors ${active ? 'text-[#8465ff] font-bold' : 'hover:text-white'}`}>
-                {opt.parts.map((part, i) => (
-                  <Fragment key={i}>
-                    {i > 0 && <span>{'\u00A0\u00A0\u00A0'}</span>}
-                    {/* When inactive, the "Task" word stays white; the other parts (project/client
-                        labels) read as gray. When active, the active button color (purple) wins. */}
-                    <span className={active ? '' : (part === 'Task' ? 'text-white' : 'text-[#656464]')}>
-                      {part}
-                    </span>
-                  </Fragment>
-                ))}
-              </button>
-            );
-          })}
-        </div>
-        {/* Section sequence — the UNIVERSAL Work / Projects / Admin / Personal order. One
-            setting drives every surface: list-view columns, dashboard-stack blocks, project-view
-            columns, calendar bands (and their queue-fill priority), and the focus page's
-            day columns. */}
-        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-0">
-          <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Section Sequence</p>
-        </div>
-        <div className="px-[31px] mb-[37px] flex flex-col gap-2">
-          {/* Per-category up/down reorder — scales to any number of categories (now four,
-              including Personal). This order drives every surface. */}
-          {listSequence.map((l, i) => (
-            <div key={l} className="flex flex-row items-center gap-3 h-[26px]">
-              <span className="text-[13px] text-white w-[90px]">{LIST_TITLES[l]}</span>
-              <button type="button" disabled={i === 0} onClick={() => { const n = [...listSequence]; [n[i - 1], n[i]] = [n[i], n[i - 1]]; onSetListSequence(n); }} className="text-[14px] leading-none text-[#656464] hover:text-white disabled:opacity-20 disabled:hover:text-[#656464] transition-colors" aria-label={`Move ${LIST_TITLES[l]} up`}>&uarr;</button>
-              <button type="button" disabled={i === listSequence.length - 1} onClick={() => { const n = [...listSequence]; [n[i + 1], n[i]] = [n[i], n[i + 1]]; onSetListSequence(n); }} className="text-[14px] leading-none text-[#656464] hover:text-white disabled:opacity-20 disabled:hover:text-[#656464] transition-colors" aria-label={`Move ${LIST_TITLES[l]} down`}>&darr;</button>
+      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
+        <div className="grid grid-cols-2 gap-x-6 pb-[106px]">
+          {/* LEFT COLUMN — everyday settings, version at the top. */}
+          <div className="min-w-0 flex flex-col gap-[34px] pt-[2px]">
+            <div>
+              {sectionTitle('About')}
+              <div className="px-[35px] pt-[4px] flex flex-col gap-2 text-[13px]">
+                {(() => {
+                  const buildDate = new Date(__BUILD_TIME__);
+                  const ageMs = Date.now() - buildDate.getTime();
+                  const ageDays = ageMs / 86400000;
+                  const dotColor = ageDays < 1 ? '#7ED957' : ageDays < 7 ? '#E0C200' : '#FF7171';
+                  const ageLabel = ageMs < 60000 ? 'just now' : ageMs < 3600000 ? Math.round(ageMs / 60000) + 'm ago' : ageMs < 86400000 ? Math.round(ageMs / 3600000) + 'h ago' : Math.round(ageDays) + 'd ago';
+                  return (
+                    <>
+                      <div className="flex flex-row items-center gap-3">
+                        <span className="inline-block w-[8px] h-[8px] rounded-full" style={{ backgroundColor: dotColor }} />
+                        <span className="text-white">Ctrl-Project v{__APP_VERSION__}</span>
+                        <span className="text-[#656464]">built {ageLabel}</span>
+                      </div>
+                      <button type="button" onClick={() => window.location.reload()} className="self-start px-3 py-1 rounded-md bg-[#1f1f1f] hover:bg-[#262626] text-white transition-colors">Reload to latest</button>
+                    </>
+                  );
+                })()}
+              </div>
             </div>
-          ))}
-        </div>
-        {/* Quick Window Shortcut — the global key combo that summons the floating focus PIP. */}
-        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-0">
-          <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Quick Window Shortcut</p>
-        </div>
-        <div className="px-[31px] mb-[37px] flex flex-col gap-2 items-start">
-          <PipShortcutSetting />
-        </div>
-        {/* Maintenance — clean up "ghost" projects (blank name, no tasks). Runs
-            automatically 5s after load, but this triggers it on demand. */}
-        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-0">
-          <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Maintenance</p>
-        </div>
-        <div className="px-[31px] mb-[37px] flex flex-col gap-2 items-start">
-          <button
-            type="button"
-            onClick={() => { const n = onPurgeEmptyProjects(); setPurgeMsg(n > 0 ? `Removed ${n} empty project${n === 1 ? '' : 's'}.` : 'No empty projects found.'); }}
-            className="text-[13px] text-[#656464] hover:text-white transition-colors"
-          >
-            Clean up empty projects
-          </button>
-          {/* Remove NAMED but task-less projects — the "closed-out ghosts" (Mindmap, Dome-0,
-              etc.) the auto-purge leaves alone. Two-click: first lists exactly which projects
-              have zero tasks; second removes them. Anything with tasks, or that has
-              sub-projects, is never listed, so this can't delete live work. */}
-          <button
-            type="button"
-            onClick={() => {
-              if (closedOutIds) { const n = onRemoveProjectsByIds(closedOutIds); setPurgeMsg(`Removed ${n} closed-out project${n === 1 ? '' : 's'}.`); setClosedOutIds(null); return; }
-              const list = onListClosedOutProjects();
-              if (!list.length) { setPurgeMsg('No closed-out projects — every named project has tasks.'); return; }
-              setClosedOutIds(list.map((p) => p.id));
-              setPurgeMsg(`${list.length} project${list.length === 1 ? '' : 's'} with no tasks: ${list.map((p) => p.name).join(', ')}. Click again to remove.`);
-            }}
-            className={`text-[13px] transition-colors ${closedOutIds ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}
-          >
-            {closedOutIds ? `Confirm — remove ${closedOutIds.length} closed-out project${closedOutIds.length === 1 ? '' : 's'}` : 'Remove closed-out projects'}
-          </button>
-          {purgeMsg && <p className="text-[#8465ff] text-[12px]">{purgeMsg}</p>}
-          {/* Straggler manager — the client-less projects piling up at the bottom of the lists
-              (Mindmap, Dome-0, Project Dash, Moving…). Shows each with its live task count so
-              you know what it is, and a Delete that removes the project + tucks any tasks into
-              the recoverable Trash. Works whether or not the project still has tasks. */}
-          <button
-            type="button"
-            onClick={() => setStragglers((cur) => (cur ? null : onListStragglerProjects()))}
-            className="text-[13px] text-[#656464] hover:text-white transition-colors mt-1"
-          >
-            {stragglers ? 'Hide straggler projects' : 'Manage straggler projects (no client)'}
-          </button>
-          {stragglers && stragglers.length === 0 && (
-            <p className="text-[#656464] text-[12px]">No straggler projects — every project has a client.</p>
-          )}
-          {stragglers && stragglers.length > 0 && (
-            <div className="flex flex-col gap-1 w-full max-w-[420px]">
-              {stragglers.map((s) => (
-                <div key={s.id} className="flex flex-row items-center justify-between gap-3 py-[3px] border-b border-white/[0.06]">
-                  <span className="text-[13px] text-white truncate">{s.name} <span className="text-[#656464]">· {s.taskCount} task{s.taskCount === 1 ? '' : 's'}</span></span>
-                  <button
-                    type="button"
-                    onClick={() => { onDeleteStragglerProject(s.id); setStragglers((prev) => (prev ? prev.filter((x) => x.id !== s.id) : prev)); setPurgeMsg(`Removed "${s.name}"${s.taskCount > 0 ? ` — ${s.taskCount} task${s.taskCount === 1 ? '' : 's'} moved to Trash` : ''}.`); }}
-                    className="shrink-0 text-[12px] text-[#656464] hover:text-[#ff6b6b] transition-colors"
-                  >
-                    Delete
-                  </button>
+            <div>
+              {sectionTitle('Task Order')}
+              <div className="px-[31px] pt-[4px] flex flex-col gap-2">
+                {([{ id: 'cpt' as TaskOrder, parts: ['Client - Project', 'Task'] as const }, { id: 'ptc' as TaskOrder, parts: ['Project', 'Task', 'Client'] as const }, { id: 'tcp' as TaskOrder, parts: ['Task', 'Client - Project'] as const }]).map((opt) => {
+                  const active = taskOrder === opt.id;
+                  return (
+                    <button key={opt.id} type="button" onClick={() => onSetTaskOrder(opt.id)} className={`text-left text-[13px] transition-colors ${active ? 'text-[#8465ff] font-bold' : 'hover:text-white'}`}>
+                      {opt.parts.map((part, i) => (<Fragment key={i}>{i > 0 && <span>{'   '}</span>}<span className={active ? '' : (part === 'Task' ? 'text-white' : 'text-[#656464]')}>{part}</span></Fragment>))}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <div>
+              {sectionTitle('Section Sequence')}
+              <div className="px-[31px] pt-[4px] flex flex-col gap-2">
+                {listSequence.map((l, i) => (
+                  <div key={l} className="flex flex-row items-center gap-3 h-[26px]">
+                    <span className="text-[13px] text-white w-[90px]">{LIST_TITLES[l]}</span>
+                    <button type="button" disabled={i === 0} onClick={() => { const n = [...listSequence]; [n[i - 1], n[i]] = [n[i], n[i - 1]]; onSetListSequence(n); }} className="text-[14px] leading-none text-[#656464] hover:text-white disabled:opacity-20 disabled:hover:text-[#656464] transition-colors" aria-label={`Move ${LIST_TITLES[l]} up`}>&uarr;</button>
+                    <button type="button" disabled={i === listSequence.length - 1} onClick={() => { const n = [...listSequence]; [n[i + 1], n[i]] = [n[i], n[i + 1]]; onSetListSequence(n); }} className="text-[14px] leading-none text-[#656464] hover:text-white disabled:opacity-20 disabled:hover:text-[#656464] transition-colors" aria-label={`Move ${LIST_TITLES[l]} down`}>&darr;</button>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div>
+              {sectionTitle('Quick Window Shortcut')}
+              <div className="px-[31px] pt-[4px] flex flex-col gap-2 items-start"><PipShortcutSetting /></div>
+            </div>
+            <div>
+              {sectionTitle('Title Case Auto-Correct')}
+              <div className="px-[31px] pt-[4px] flex flex-row gap-4">
+                <button type="button" onClick={() => onSetCaseMode('off')} className={`text-[13px] transition-colors ${caseMode === 'off' ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>Off</button>
+                <button type="button" onClick={() => onSetCaseMode('title')} className={`text-[13px] transition-colors ${caseMode === 'title' ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>On</button>
+              </div>
+            </div>
+            <div>
+              {sectionTitle('People', <AddPlus onClick={onAddPerson} />)}
+              <div className="pt-[4px]">
+                {people.map((p) => (
+                  <SettingsRow key={p.id}>
+                    <span className="inline-flex items-baseline min-w-0">
+                      <EditableText value={p.name} onChange={(v) => onRenamePerson(p.id, v)} className={`${bodyFont} text-white`} autoFocus={p.id === newId} placeholder="New Person" />
+                      {p.short && (<><span className="w-[6px]" /><ShortInBrackets value={p.short} onChange={(v) => onRenamePersonShort(p.id, v)} /></>)}
+                    </span>
+                    <TrashBtn onClick={() => onDeletePerson(p.id)} />
+                  </SettingsRow>
+                ))}
+              </div>
+            </div>
+            <div>
+              {sectionTitle('Clients', <AddPlus onClick={onAddClient} />)}
+              <div className="px-[31px] pt-[4px] flex flex-row items-center gap-2 text-[11px] uppercase tracking-wide text-[#5e5e5e]">
+                <span className="flex-1">Client</span>
+                <span className="w-[120px]">Nickname</span>
+                <span className="w-[18px]" />
+              </div>
+              {clients.map((c) => (
+                <div key={c.id} className="group h-[34px] w-full box-border flex flex-row items-center gap-2 px-[31px] hover:bg-white/[0.03]">
+                  <div className="flex-1 min-w-0 truncate">
+                    {c.id === PERSONAL_CLIENT_ID ? <span className={`${bodyFont} text-[#656464]`}>Personal</span> : <EditableText value={c.name} onChange={(v) => onRenameClient(c.id, v)} className={`${bodyFont} text-white`} placeholder="New Client" />}
+                  </div>
+                  <div className="w-[120px] min-w-0">
+                    {c.id === PERSONAL_CLIENT_ID ? <span className="text-[13px] text-[#5e5e5e]">&mdash;</span> : <EditableText value={c.short} onChange={(v) => onRenameClientShort(c.id, v)} className="text-[13px] text-[#a8a8a8]" placeholder="&mdash;" />}
+                  </div>
+                  <div className="w-[18px] flex justify-end">{c.id !== PERSONAL_CLIENT_ID && <TrashBtn onClick={() => onDeleteClient(c.id)} />}</div>
                 </div>
               ))}
             </div>
-          )}
-        </div>
-        {/* Tomorrow section toggle. Off → tomorrow tasks visually fall back into Next (data
-            preserved). The midnight refill keeps Tomorrow at 5 tasks even while hidden — flip
-            back on and you see the buffer ready to go. */}
-        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-0">
-          <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Tomorrow Section</p>
-        </div>
-        <div className="px-[31px] mb-[37px] flex flex-row gap-4">
-          <button type="button" onClick={() => onSetTomorrowEnabled(true)} className={`text-[13px] transition-colors ${tomorrowEnabled ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>On</button>
-          <button type="button" onClick={() => onSetTomorrowEnabled(false)} className={`text-[13px] transition-colors ${!tomorrowEnabled ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>Off</button>
-        </div>
-        {/* Title-case auto-correct. 2 seconds after the user blurs a title, rewrite to title
-            case. Brand-name vocabulary + ALL-CAPS acronyms are preserved; small words ("and",
-            "the", "of"…) stay lowercase. Off → leave titles exactly as typed. */}
-        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-0">
-          <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Title Case Auto-Correct</p>
-        </div>
-        <div className="px-[31px] mb-[37px] flex flex-row gap-4">
-          <button type="button" onClick={() => onSetCaseMode('off')} className={`text-[13px] transition-colors ${caseMode === 'off' ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>Off</button>
-          <button type="button" onClick={() => onSetCaseMode('title')} className={`text-[13px] transition-colors ${caseMode === 'title' ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>On</button>
-        </div>
-        {/* --- About / Version --------------------------------------------
-            Shows which JS bundle is currently running (the in-memory webview
-            doesn't auto-poll for new deploys). The Reload button does a
-            window.location.reload() so the user can pull a fresh build
-            from GitHub Pages without quitting the app. The dot color hints
-            at how recent the build is — green (<1d), yellow (<7d), red
-            (older). Build time is the moment Vite produced the bundle. */}
-        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-0">
-          <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">About</p>
-        </div>
-        <div className="px-[31px] mb-[37px] flex flex-col gap-2 text-[13px]">
-          {(() => {
-            const buildDate = new Date(__BUILD_TIME__);
-            const ageMs = Date.now() - buildDate.getTime();
-            const ageDays = ageMs / (24 * 60 * 60 * 1000);
-            const dotColor = ageDays < 1 ? '#7ED957' : ageDays < 7 ? '#E0C200' : '#FF7171';
-            const ageLabel =
-              ageMs < 60_000 ? 'just now'
-              : ageMs < 60 * 60_000 ? `${Math.round(ageMs / 60_000)}m ago`
-              : ageMs < 24 * 60 * 60_000 ? `${Math.round(ageMs / (60 * 60_000))}h ago`
-              : `${Math.round(ageDays)}d ago`;
-            return (
-              <>
-                <div className="flex flex-row items-center gap-3">
-                  <span className="inline-block w-[8px] h-[8px] rounded-full" style={{ backgroundColor: dotColor }} />
-                  <span className="text-white">Ctrl-Project v{__APP_VERSION__}</span>
-                  <span className="text-[#656464]">built {ageLabel} ({buildDate.toLocaleString()})</span>
+          </div>
+
+          {/* RIGHT COLUMN — history + collapsible Debug. */}
+          <div className="min-w-0 flex flex-col gap-[34px] pt-[2px]">
+            <div>
+              {sectionTitle('Trash', <span className="text-[#666] text-[12px]">{trashedTasks.length}</span>)}
+              <div className="pt-[4px]">
+                {trashedTasks.length === 0 && <p className="px-[35px] text-[#666] text-[13px]">Empty.</p>}
+                {groupByDay(trashedTasks, (t) => t.trashedAt).map((g) => (
+                  <Fragment key={g.key}>
+                    {dayHeader(g.key)}
+                    {g.items.map((t) => {
+                      const ctx = metaOf(t);
+                      return (
+                        <div key={t.id} className="group h-[34px] w-full box-border flex flex-row gap-2 items-center px-[31px] hover:bg-white/[0.03] overflow-hidden">
+                          {ctx && <p className={`${bodyFont} text-[#656464] shrink-0`}>{ctx}</p>}
+                          {ctx && <Arrowhead />}
+                          <span className={`${bodyFont} text-[#656464] truncate`}>{t.title || '(untitled)'}</span>
+                          <button type="button" onClick={() => onUntrashTask(t.id)} className="ml-auto shrink-0 p-1 opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity" aria-label="Revive task" title="Revive (un-trash)"><ArrowUp size={14} /></button>
+                          <button type="button" onClick={() => onPurgeTask(t.id)} className="-mr-[10px] shrink-0 p-1 opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-[#FF7171] transition-opacity" aria-label="Permanently delete" title="Permanently delete"><X size={14} /></button>
+                        </div>
+                      );
+                    })}
+                  </Fragment>
+                ))}
+              </div>
+            </div>
+            <div>
+              {sectionTitle('Completed', <span className="text-[#666] text-[12px]">{completedTasks.length}</span>)}
+              <div className="pt-[4px]">
+                {completedTasks.length === 0 && <p className="px-[35px] text-[#666] text-[13px]">Nothing checked off yet.</p>}
+                {groupByDay(completedTasks, (t) => t.completedAt).map((g) => (
+                  <Fragment key={g.key}>
+                    {dayHeader(g.key)}
+                    {g.items.map((t) => {
+                      const ctx = metaOf(t);
+                      return (
+                        <div key={t.id} className="group h-[34px] w-full box-border flex flex-row gap-2 items-center px-[31px] hover:bg-white/[0.03] overflow-hidden">
+                          <TaskCheckbox completed={t.completed} started={t.started} onToggle={() => onToggleTask(t.id)} />
+                          {ctx && <p className={`${bodyFont} text-[#656464] shrink-0`}>{ctx}</p>}
+                          {ctx && <Arrowhead />}
+                          <span className={`${bodyFont} text-[#656464] truncate`}>{t.title || '(untitled)'}</span>
+                        </div>
+                      );
+                    })}
+                  </Fragment>
+                ))}
+              </div>
+            </div>
+            <div>
+              <button type="button" onClick={() => setShowDebug((s) => !s)} className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] text-left">
+                <p className="font-['NB_International:Regular',sans-serif] text-[#a8a8a8] group-hover:text-white transition-colors text-[14.333px]">{showDebug ? '▾' : '▸'} Debug</p>
+              </button>
+              {showDebug && (
+                <div className="flex flex-col gap-[34px] pt-[4px]">
+                  <div>
+                    {sectionTitle('I am (temporary — becomes login)')}
+                    <div className="px-[31px] pt-[4px] flex flex-wrap gap-2">
+                      {people.map((p) => { const active = p.short === currentUserShort; return (<button key={p.id} type="button" onClick={() => onSetCurrentUser(p.short)} className={`px-3 py-1 rounded-full text-[13px] transition-colors ${active ? 'bg-[#7363FF] text-white' : 'bg-[#1f1f1f] text-[#ccc] hover:bg-[#333]'}`}>{p.name || '(unnamed)'} <span className="opacity-70">({p.short || '?'})</span></button>); })}
+                      {people.length === 0 && <span className="text-[#666] text-[12px]">Add a person first.</span>}
+                    </div>
+                  </div>
+                  <div>
+                    {sectionTitle('Maintenance')}
+                    <div className="px-[31px] pt-[4px] flex flex-col gap-2 items-start">
+                      <button type="button" onClick={() => { const n = onPurgeEmptyProjects(); setPurgeMsg(n > 0 ? `Removed ${n} empty project${n === 1 ? '' : 's'}.` : 'No empty projects found.'); }} className="text-[13px] text-[#656464] hover:text-white transition-colors">Clean up empty projects</button>
+                      <button type="button" onClick={() => { if (closedOutIds) { const n = onRemoveProjectsByIds(closedOutIds); setPurgeMsg(`Removed ${n} closed-out project${n === 1 ? '' : 's'}.`); setClosedOutIds(null); return; } const list = onListClosedOutProjects(); if (!list.length) { setPurgeMsg('No closed-out projects.'); return; } setClosedOutIds(list.map((p) => p.id)); setPurgeMsg(`${list.length} with no tasks: ${list.map((p) => p.name).join(', ')}. Click again to remove.`); }} className={`text-[13px] transition-colors ${closedOutIds ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>{closedOutIds ? `Confirm — remove ${closedOutIds.length}` : 'Remove closed-out projects'}</button>
+                      <button type="button" onClick={() => setStragglers((cur) => (cur ? null : onListStragglerProjects()))} className="text-[13px] text-[#656464] hover:text-white transition-colors">{stragglers ? 'Hide straggler projects' : 'Manage straggler projects (no client)'}</button>
+                      {stragglers && stragglers.length === 0 && <p className="text-[#656464] text-[12px]">No straggler projects.</p>}
+                      {stragglers && stragglers.length > 0 && (<div className="flex flex-col gap-1 w-full max-w-[420px]">{stragglers.map((s) => (<div key={s.id} className="flex flex-row items-center justify-between gap-3 py-[3px] border-b border-white/[0.06]"><span className="text-[13px] text-white truncate">{s.name} <span className="text-[#656464]">· {s.taskCount} task{s.taskCount === 1 ? '' : 's'}</span></span><button type="button" onClick={() => { onDeleteStragglerProject(s.id); setStragglers((prev) => (prev ? prev.filter((x) => x.id !== s.id) : prev)); setPurgeMsg(`Removed "${s.name}".`); }} className="shrink-0 text-[12px] text-[#656464] hover:text-[#ff6b6b] transition-colors">Delete</button></div>))}</div>)}
+                      {purgeMsg && <p className="text-[#8465ff] text-[12px]">{purgeMsg}</p>}
+                    </div>
+                  </div>
+                  <div>
+                    {sectionTitle('Local Backup')}
+                    <div className="px-[31px] pt-[4px] flex flex-col gap-2"><BackupSection liveBackupAt={liveBackupAt} dailyBackupAt={dailyBackupAt} onDownload={onDownloadBackup} onRestoreFromFile={onRestoreFromFile} onRestoreFromSlot={onRestoreFromSlot} /></div>
+                  </div>
                 </div>
-                <div className="flex flex-row items-center gap-3">
-                  <button
-                    type="button"
-                    onClick={() => window.location.reload()}
-                    className="px-3 py-1 rounded-md bg-[#1f1f1f] hover:bg-[#262626] text-white transition-colors"
-                  >
-                    Reload to latest
-                  </button>
-                  <span className="text-[#656464] text-[12px]">
-                    Pulls a fresh build from the server. Use this if you've left the app open during a deploy.
-                  </span>
-                </div>
-              </>
-            );
-          })()}
-        </div>
-        {/* --- Local Backup --------------------------------------------------
-            Auto-snapshot every 5 min into IndexedDB (rolling 20). The download
-            button writes the current state to disk as JSON; restore reads a
-            JSON file (or picks one of the IDB-stored snapshots) and overwrites
-            the room with it. Supabase image blobs are NOT in the JSON — only
-            their URLs — so a full disaster recovery means: keep this JSON +
-            don't wipe the Supabase bucket. */}
-        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-0">
-          <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Local Backup</p>
-        </div>
-        <div className="px-[31px] mb-[37px] flex flex-col gap-2">
-          <BackupSection
-            liveBackupAt={liveBackupAt}
-            dailyBackupAt={dailyBackupAt}
-            onDownload={onDownloadBackup}
-            onRestoreFromFile={onRestoreFromFile}
-            onRestoreFromSlot={onRestoreFromSlot}
-          />
-        </div>
-        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[37px]">
-          <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">People</p>
-          <AddPlus onClick={onAddPerson} />
-        </div>
-        {people.map((p) => (
-          <SettingsRow key={p.id}>
-            <span className="inline-flex items-baseline">
-              <EditableText value={p.name} onChange={(v) => onRenamePerson(p.id, v)} className={`${bodyFont} text-white`} autoFocus={p.id === newId} placeholder="New Person" />
-              {p.short && (
-                <>
-                  <span className="w-[6px]" />
-                  <ShortInBrackets value={p.short} onChange={(v) => onRenamePersonShort(p.id, v)} />
-                </>
               )}
-            </span>
-            <TrashBtn onClick={() => onDeletePerson(p.id)} />
-          </SettingsRow>
-        ))}
-      </div>
-      {/* Spacer column to keep the existing People column at left and push Trash/Completed right. */}
-      <div className="flex-1 min-w-[280px]" />
-      {/* TRASH column — every soft-deleted task lives here until the user revives it (up arrow)
-          or purges it (X). Newest-first by trashedAt. */}
-      <div className="flex-1 min-w-[280px]">
-        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[37px]">
-          <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Trash</p>
-          <p className="text-[#666] text-[12px] ml-2">{trashedTasks.length}</p>
+            </div>
+          </div>
         </div>
-        {/* Internal scroll cap so a long trash history doesn't stretch the Settings page
-            into a forever-scroll. max-h is calc'd off the viewport so it grows with the
-            window. Native scrollbar (settings doesn't use the CustomScroll thumb to keep
-            this lightweight). */}
-        <div className="overflow-y-auto" style={{ maxHeight: 'calc(100vh - 260px)' }}>
-          {trashedTasks.length === 0 && (
-            <p className="px-[35px] text-[#666] text-[13px]">Empty.</p>
-          )}
-          {trashedTasks.map((t) => {
-            const proj = t.projectId ? projects.find((p) => p.id === t.projectId) : undefined;
-            const cli = (t.clientId ?? proj?.clientId) ? clients.find((c) => c.id === (t.clientId ?? proj?.clientId)) : undefined;
-            const ctx = [cli?.short, proj?.name].filter(Boolean).join(' › ');
-            return (
-              <div key={t.id} className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px] hover:bg-white/[0.03]">
-                {ctx && <p className={`${bodyFont} text-[#656464]`}>{ctx}</p>}
-                {ctx && <Arrowhead />}
-                <span className={`${bodyFont} text-white`}>{t.title || '(untitled)'}</span>
-                <button
-                  type="button"
-                  onClick={() => onUntrashTask(t.id)}
-                  className="ml-auto p-1 opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity"
-                  aria-label="Revive task"
-                  title="Revive (un-trash)"
-                >
-                  <ArrowUp size={14} />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => onPurgeTask(t.id)}
-                  className="-mr-[10px] p-1 opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-[#FF7171] transition-opacity"
-                  aria-label="Permanently delete"
-                  title="Permanently delete"
-                >
-                  <X size={14} />
-                </button>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-      {/* COMPLETED column — tasks that have been ticked off and are now hidden from the main
-          views (4 AM cleared completions live here permanently; same-day completions appear too).
-          Clicking the checkbox un-completes the task — the row stays visible for 10 minutes via
-          the revivedAt grace window so a misclick can be undone. */}
-      <div className="flex-1 min-w-[280px]">
-        <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] mb-[37px]">
-          <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Completed</p>
-          <p className="text-[#666] text-[12px] ml-2">{completedTasks.length}</p>
-        </div>
-        {/* Same scroll cap as Trash — long completion history doesn't blow out
-            the Settings page height. */}
-        <div className="overflow-y-auto" style={{ maxHeight: 'calc(100vh - 260px)' }}>
-          {completedTasks.length === 0 && (
-            <p className="px-[35px] text-[#666] text-[13px]">Nothing checked off yet.</p>
-          )}
-          {completedTasks.map((t) => {
-            const proj = t.projectId ? projects.find((p) => p.id === t.projectId) : undefined;
-            const cli = (t.clientId ?? proj?.clientId) ? clients.find((c) => c.id === (t.clientId ?? proj?.clientId)) : undefined;
-            const ctx = [cli?.short, proj?.name].filter(Boolean).join(' › ');
-            return (
-              <div key={t.id} className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px] hover:bg-white/[0.03]">
-                <TaskCheckbox completed={t.completed} started={t.started} onToggle={() => onToggleTask(t.id)} />
-                {ctx && <p className={`${bodyFont} text-[#656464]`}>{ctx}</p>}
-                {ctx && <Arrowhead />}
-                <span className={`${bodyFont} ${t.completed ? 'text-[#656464] line-through' : 'text-white'}`}>{t.title || '(untitled)'}</span>
-                {t.completedDay && <p className="ml-auto text-[#666] text-[12px]">{t.completedDay}</p>}
-              </div>
-            );
-          })}
-        </div>
-      </div>
-      </div>
       </div>
     </div>
   );
@@ -5788,16 +5706,10 @@ export default function App() {
   // Settings, which is the wrong "don't surprise them" — surprising them with a missing
   // section beats surprising them with an unexpected one. Users who explicitly turned it
   // off retain that preference (we only default-on when the key is unset).
-  const [tomorrowEnabled, setTomorrowEnabledState] = useState<boolean>(() => {
-    if (typeof window === 'undefined') return true;
-    const v = window.localStorage.getItem('todo-app-tomorrow-enabled');
-    if (v === null) return true;
-    return v === '1';
-  });
-  const setTomorrowEnabled = useCallback((v: boolean) => {
-    setTomorrowEnabledState(v);
-    try { window.localStorage.setItem('todo-app-tomorrow-enabled', v ? '1' : '0'); } catch {}
-  }, []);
+  // Tomorrow section is PERMANENTLY ON now — the on/off toggle was removed (there's no
+  // scenario where the user wants it off). Constant + no-op setter for callsite compat.
+  const [tomorrowEnabled] = useState<boolean>(true);
+  const setTomorrowEnabled = useCallback((_v: boolean) => {}, []);
   // Title-case auto-conversion mode. 2s after blur on a title, the text is rewritten in the
   // chosen mode:
   //   'off'   — no conversion
@@ -10873,14 +10785,16 @@ export default function App() {
             onRemoveProjectsByIds={removeProjectsByIds}
             onListStragglerProjects={listStragglerProjects}
             onDeleteStragglerProject={deleteStragglerProject}
-            tomorrowEnabled={tomorrowEnabled}
-            onSetTomorrowEnabled={setTomorrowEnabled}
             caseMode={caseMode}
             onSetCaseMode={setCaseMode}
             trashedTasks={trashedTasks}
             completedTasks={completedTasksForSettings}
             projects={projects}
             clients={clients}
+            onAddClient={addBlankClient}
+            onRenameClient={renameClient}
+            onRenameClientShort={renameClientShort}
+            onDeleteClient={(id) => { const c = clients.find((x) => x.id === id); setPendingTrash({ kind: 'client', id, name: c?.name || 'Untitled' }); }}
             onUntrashTask={untrashTask}
             onPurgeTask={purgeTask}
             onToggleTask={toggleTask}
