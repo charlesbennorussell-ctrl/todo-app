@@ -151,10 +151,24 @@ fn set_pip_shortcut(app: AppHandle, combo: String) -> Result<String, String> {
     }
 }
 
+// PIP → full app: show + focus the main window, tuck the quick window away. Invoked by
+// the PIP page's ExternalLink button and its background right-click.
+#[tauri::command]
+fn show_main_window(app: AppHandle) {
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.show();
+        let _ = main.unminimize();
+        let _ = main.set_focus();
+    }
+    if let Some(pip) = app.get_webview_window(PIP_LABEL) {
+        let _ = pip.hide();
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![set_pip_shortcut])
+        .invoke_handler(tauri::generate_handler![set_pip_shortcut, show_main_window])
         .setup(|app| {
             #[cfg(desktop)]
             {
