@@ -4009,7 +4009,9 @@ function computeCalendarDistribution(tasks: Task[], todayAnchor: Date, horizonDa
     let dayBudget = Math.max(0, CAL_TASKS_PER_DAY - totalMandatory);
     for (const listId of listOrder) {
       const m = mandatoryByList[listId];
-      const skipQueueForWeekend = listId !== 'projects' && (d.getDay() === 0 || d.getDay() === 6);
+      // Personal joins Projects as a weekend-active list: it keeps auto-filling up to 3/day on
+      // Sat/Sun so personal tasks flow across the whole week. Work/Admin still rest on weekends.
+      const skipQueueForWeekend = listId !== 'projects' && listId !== 'personal' && (d.getDay() === 0 || d.getDay() === 6);
       const listFillerCap = Math.max(0, CAL_QUEUE_CAP_PER_LIST_PER_DAY - m.length);
       let slotsLeft = Math.min(dayBudget, listFillerCap);
       if (skipQueueForWeekend) slotsLeft = 0;
@@ -4040,8 +4042,12 @@ function CalendarCardBody({ task, projects, clients, taskOrder = 'ptc' }: { task
   const client = resolvedClientId ? clients.find((c) => c.id === resolvedClientId) : undefined;
   const isScheduled = task.type === 'scheduled';
   const isNext = task.section === 'next' || task.section === 'tomorrow';
+  // A card dated beyond today is a FUTURE item — it reads muted (gray), never the loud white
+  // reserved for today. This keeps a task that moved its deadline out (e.g. "today" → next week)
+  // from staying white just because its section is still 'today'.
+  const isFuture = !!task.deadline && task.deadline > todayISO();
   const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID || task.list === 'personal';
-  const titleColor = task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : isNext ? 'text-[#a8a8a8]' : 'text-white';
+  const titleColor = task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : (isNext || isFuture) ? 'text-[#a8a8a8]' : 'text-white';
   const metaColor = isScheduled ? 'text-[#8465ff]' : 'text-[#656464]';
   // Whether the client lives ON the first row (combined with project per the slot helper) —
   // applies to 'cpt' and 'tcp' modes where client + project sit adjacent. In 'ptc' the client
@@ -4113,7 +4119,6 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
     ...(cellId.startsWith(`cal:${todayISO()}:`) ? { backgroundColor: 'rgba(132, 101, 255, 0.10)' } : {}),
   };
   const isScheduled = task.type === 'scheduled';
-  const isNext = task.section === 'next' || task.section === 'tomorrow';
   const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID || task.list === 'personal';
   // TODAY cards go full milestone-purple (faint purple wash, purple checkbox/meta/badges,
   // WHITE title) — "what today is" reads at a glance. Keyed to the CELL the card renders in,
@@ -4124,7 +4129,10 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
   // cards drop to this single muted gray regardless of whether they're scheduled, completed,
   // next, or normal.
   const DIM = 'text-[#454545]';
-  const titleColor = categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : isTodayCard ? 'text-white' : isNext ? 'text-[#a8a8a8]' : 'text-white';
+  // Today's column reads loud (white); every other column is a future/other day and reads
+  // muted (gray) — a card whose deadline moved out of today no longer renders white just
+  // because its section is still 'today'. Scheduled/completed/category-dim still win above.
+  const titleColor = categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : isTodayCard ? 'text-white' : 'text-[#a8a8a8]';
   const metaColor = categoryDimmed ? DIM : (isScheduled || isTodayCard) ? 'text-[#8465ff]' : 'text-[#656464]';
   // Source-collapse: outer wrapper uses max-height (CSS can't transition from auto, but it CAN
   // transition from a fixed max-height to 0) + marginBottom so the column reflows when this card
@@ -4411,7 +4419,7 @@ function WeekCalendarMode({
                   }
                   return t.list === listId;
                 });
-                if (isWeekend && listId !== 'projects' && bucket.length === 0 && dayMilestones.length === 0 && !isAnyDragging) return null;
+                if (isWeekend && listId !== 'projects' && listId !== 'personal' && bucket.length === 0 && dayMilestones.length === 0 && !isAnyDragging) return null;
                 // Displacement math (mirrors getAnimationProps in list view):
                 //  - If active and over are BOTH in this bucket: cards strictly between them slide by ï¿½slotH.
                 //  - If active is in a DIFFERENT bucket and over is in this bucket: the over-index card gets
