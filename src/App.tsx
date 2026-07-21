@@ -1913,7 +1913,7 @@ function SectionDroppable({ id, children }: { id: string; children: React.ReactN
     <div
       ref={setNodeRef}
       className="min-h-[37px] w-full pb-[37px] rounded-[3px] transition-colors duration-200 ease-in-out"
-      style={taskOver ? { backgroundColor: 'rgba(132, 101, 255, 0.07)' } : undefined}
+      style={taskOver ? { backgroundColor: 'rgba(255, 255, 255, 0.07)' } : undefined}
     >
       {children}
     </div>
@@ -3075,7 +3075,7 @@ function Proj2ColumnDroppable({ listId, children }: { listId: ListId; children: 
     <div
       ref={setNodeRef}
       className="flex-1 min-w-[280px] flex flex-col min-h-0 overflow-hidden transition-colors duration-150"
-      style={projectHover ? { backgroundColor: 'rgba(132, 101, 255, 0.07)' } : undefined}
+      style={projectHover ? { backgroundColor: 'rgba(255, 255, 255, 0.07)' } : undefined}
     >
       {children}
     </div>
@@ -3768,9 +3768,9 @@ function CardDateMenu({ x, y, onPick, onClose }: { x: number; y: number; onPick:
   );
 }
 
-function CalendarDayDroppable({ id, children, isEmpty, className = '' }: { id: string; children: React.ReactNode; isEmpty: boolean; className?: string }) {
+function CalendarDayDroppable({ id, children, isEmpty, className = '', slotHeight = 54 }: { id: string; children: React.ReactNode; isEmpty: boolean; className?: string; slotHeight?: number }) {
   const { setNodeRef, isOver, active } = useDroppable({ id });
-  // Drag feedback: while a TASK hovers this band cell, tint it faint purple with an ease
+  // Drag feedback: while a TASK hovers this band cell, tint it faint gray with an ease
   // fade in/out — the category-lock collision redirects `over` to the dragged task's own
   // band, so the tinted cell is exactly where a drop lands. transition-colors carries the
   // fade both directions (isOver → transparent).
@@ -3779,9 +3779,20 @@ function CalendarDayDroppable({ id, children, isEmpty, className = '' }: { id: s
     <div
       ref={setNodeRef}
       className={`${isEmpty ? 'min-h-[37px]' : ''} ${className} rounded-[3px] transition-colors duration-200 ease-in-out`}
-      style={taskOver ? { backgroundColor: 'rgba(132, 101, 255, 0.09)' } : undefined}
+      style={taskOver ? { backgroundColor: 'rgba(255, 255, 255, 0.07)' } : undefined}
     >
       {children}
+      {/* Empty band: when a same-category drag hovers here (category-lock has already routed
+          the drop to this band), grow a full card-height slot so the target isn't a cramped
+          37px sliver — it opens the real space the card will occupy and pushes the next
+          category down. Height eases in/out so the displacement is smooth. */}
+      {isEmpty && (
+        <div
+          className="overflow-hidden transition-[height] duration-200 ease-in-out"
+          style={{ height: taskOver ? slotHeight : 0 }}
+          aria-hidden
+        />
+      )}
     </div>
   );
 }
@@ -4414,7 +4425,7 @@ function WeekCalendarMode({
                 // so the source category and matching drop targets stay visually loud.
                 const categoryDimmed = !!activeTask && activeTask.list !== listId;
                 return (
-                  <CalendarDayDroppable key={listId} id={`cal:${iso}:${listId}`} isEmpty={bucket.length === 0 && dayMilestones.length === 0} className="pb-[37px] last:pb-0">
+                  <CalendarDayDroppable key={listId} id={`cal:${iso}:${listId}`} isEmpty={bucket.length === 0 && dayMilestones.length === 0} slotHeight={activeSlotHeight} className="pb-[37px] last:pb-0">
                     <div className="group/band h-[20px] px-[16px] pb-[6px] flex items-center gap-2 sticky top-0 z-10 bg-[#282828]">
                       <p onClick={scrollBandToTop} className={`${bodyFont} text-[#5e5e5e] cursor-pointer`}>{label}</p>
                       <button
@@ -4545,7 +4556,7 @@ function WeekCalendarMode({
                   const categoryDimmed = !!activeTask && activeTask.list !== listId;
                   const cellId = `cal:${nwToken}:${listId}`;
                   return (
-                    <CalendarDayDroppable key={listId} id={cellId} isEmpty={bucket.length === 0 && bandMilestones.length === 0} className="pb-[37px] last:pb-0">
+                    <CalendarDayDroppable key={listId} id={cellId} isEmpty={bucket.length === 0 && bandMilestones.length === 0} slotHeight={activeSlotHeight} className="pb-[37px] last:pb-0">
                       <div className="group/band h-[20px] px-[16px] pb-[6px] flex items-center gap-2 sticky top-0 z-10 bg-[#282828]">
                         <p onClick={scrollBandToTop} className={`${bodyFont} text-[#5e5e5e] cursor-pointer`}>{label}</p>
                         <button
