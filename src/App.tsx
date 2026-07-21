@@ -4113,17 +4113,22 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
   // Today wash — same faint purple as the milestone card (inline: Tailwind arbitrary hex
   // alpha was unreliable here). Kept during category-dim so the "this is today" location
   // cue stays put while the text mutes.
+  // "Today" for the calendar wash is the REAL calendar day — it must match how the day columns
+  // are anchored (new Date() @ midnight). NOT todayISO(), which carries a 4 AM day-boundary
+  // offset for task/deadline logic: between midnight and 4 AM that returns YESTERDAY, so the
+  // wash would hunt for a column that isn't rendered and the Today column would lose its purple.
+  const todayCellIso = dateToISO(new Date());
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition: isAnyDragging ? `transform ${MOTION.base}ms ${MOTION.easeOut}` : 'none',
-    ...(cellId.startsWith(`cal:${todayISO()}:`) ? { backgroundColor: 'rgba(132, 101, 255, 0.10)' } : {}),
+    ...(cellId.startsWith(`cal:${todayCellIso}:`) ? { backgroundColor: 'rgba(132, 101, 255, 0.10)' } : {}),
   };
   const isScheduled = task.type === 'scheduled';
   const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID || task.list === 'personal';
   // TODAY cards go full milestone-purple (faint purple wash, purple checkbox/meta/badges,
   // WHITE title) — "what today is" reads at a glance. Keyed to the CELL the card renders in,
   // so dragging a card off today reverts it to the normal palette automatically.
-  const isTodayCard = cellId.startsWith(`cal:${todayISO()}:`);
+  const isTodayCard = cellId.startsWith(`cal:${todayCellIso}:`);
   // Category-dim color: 5% brighter than the completed-task #383838 (rgb 56 → 69 = #454545).
   // Wins over every other state — when the user is dragging across categories, ALL non-source
   // cards drop to this single muted gray regardless of whether they're scheduled, completed,
@@ -4286,7 +4291,20 @@ function WeekCalendarMode({
   const bodyFont = "font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap";
   const todayIso = dateToISO(new Date());
 
-  const todayAnchor = useMemo(() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; }, []);
+  // todayAnchor MUST track the real date. A plain useMemo([]) went stale when the app stayed
+  // open across midnight (the desktop shell loads the hosted URL and never reloads): the columns
+  // stayed anchored to yesterday while the purple "today" wash follows the live clock (todayISO),
+  // so the column LABELLED Today lost its wash. Re-anchor on a 60s tick and on focus / tab-
+  // visibility (covers wake-from-sleep), only replacing the Date object when the day actually rolls.
+  const [todayAnchor, setTodayAnchor] = useState(() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; });
+  useEffect(() => {
+    const sync = () => { const d = new Date(); d.setHours(0, 0, 0, 0); setTodayAnchor((prev) => (prev.getTime() === d.getTime() ? prev : d)); };
+    const onVis = () => { if (!document.hidden) sync(); };
+    const id = window.setInterval(sync, 60000);
+    window.addEventListener('focus', sync);
+    document.addEventListener('visibilitychange', onVis);
+    return () => { window.clearInterval(id); window.removeEventListener('focus', sync); document.removeEventListener('visibilitychange', onVis); };
+  }, []);
   const dayOffsetFromToday = (d: Date) => Math.round((d.getTime() - todayAnchor.getTime()) / 86400000);
   const isWeekendDate = (x: Date) => x.getDay() === 0 || x.getDay() === 6;
 
@@ -8822,7 +8840,7 @@ export default function App() {
             <button
               type="button"
               onClick={() => deleteTask(task.id)}
-              className={`${isActiveRow ? '' : 'ml-auto'} -mr-[22px] p-1 opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity`}
+              className={`${isActiveRow ? '' : 'ml-auto'} shrink-0 p-1 opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity`}
               aria-label="Delete task"
             >
               <Trash2 size={14} />
@@ -9546,7 +9564,9 @@ export default function App() {
           const clientEntryWidths = proj2SortedClients.map((c) => measureTextPx(c.name || (c.id === PERSONAL_CLIENT_ID ? 'Personal' : c.short) || ''));
           const col1W = Math.min(460, Math.max(170, Math.round(31 + Math.max(measureTextPx('Clients + Projects') + 8, ...clientEntryWidths, 60) + 30)));
           const msWidths = visibleTasks.filter((t) => t.type === 'scheduled').map((t) => measureTextPx(t.title) + (t.deadline ? 8 + 18 + 8 + measureTextPx(formatDeadline(t.deadline)) : 0));
-          const col2W = Math.min(460, Math.max(170, Math.round(31 + Math.max(measureTextPx('Milestones') + 22, ...msWidths, 60) + 30)));
+          // +60 (not +30) right buffer: the hover-reveal trash icon (ml-auto, ~22px) needs to sit
+  // fully inside the panel with clear space, not crammed against the next column's edge.
+  const col2W = Math.min(490, Math.max(170, Math.round(31 + Math.max(measureTextPx('Milestones') + 22, ...msWidths, 60) + 60)));
           // SYMMETRIC side columns — asymmetry read as "off". Both take the wider of the two
           // (in practice the longest milestone + its date), so one may carry a little extra
           // white space but the pair stays visually balanced.
@@ -9580,8 +9600,19 @@ export default function App() {
                   <button
                     type="button"
                     onClick={() => {
-                      const w = (window as unknown as { __TAURI__?: { window?: { getCurrentWindow?: () => { hide: () => void } } } }).__TAURI__;
-                      if (w?.window?.getCurrentWindow) w.window.getCurrentWindow().hide();
+                      // Robust hide across Tauri v2 global shapes: the window API lives under
+                      // .window on some builds and .webviewWindow on others; fall back to a Rust
+                      // hide_pip command (proven core.invoke channel) if neither global is present.
+                      const t = (window as unknown as {
+                        __TAURI__?: {
+                          window?: { getCurrentWindow?: () => { hide?: () => void } };
+                          webviewWindow?: { getCurrentWebviewWindow?: () => { hide?: () => void } };
+                          core?: { invoke?: (cmd: string) => Promise<unknown> };
+                        };
+                      }).__TAURI__;
+                      const cur = t?.window?.getCurrentWindow?.() ?? t?.webviewWindow?.getCurrentWebviewWindow?.();
+                      if (cur?.hide) { cur.hide(); return; }
+                      t?.core?.invoke?.('hide_pip')?.catch(() => { /* command absent in this build */ });
                     }}
                     className="fixed top-2 right-2 z-50 p-2 text-[#656464] hover:text-white transition-colors"
                     aria-label="Close quick window"

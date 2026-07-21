@@ -165,10 +165,19 @@ fn show_main_window(app: AppHandle) {
     }
 }
 
+// Reliable PIP close for the web ×: the global-Tauri window API isn't exposed the same way
+// on every build, so the webview calls this over the proven core.invoke channel as a fallback.
+#[tauri::command]
+fn hide_pip(app: AppHandle) {
+    if let Some(pip) = app.get_webview_window(PIP_LABEL) {
+        let _ = pip.hide();
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![set_pip_shortcut, show_main_window])
+        .invoke_handler(tauri::generate_handler![set_pip_shortcut, show_main_window, hide_pip])
         .setup(|app| {
             #[cfg(desktop)]
             {
