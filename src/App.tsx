@@ -9582,12 +9582,16 @@ export default function App() {
           const focusMilestones = visibleTasks
             .filter((t) => t.type === 'scheduled' && taskMatchesQuery(t, focusSearch, projects, clients) && passesMilestoneFilter(t) && (focusProjectId ? t.projectId === focusProjectId : focusClientId ? clientOfMs(t) === focusClientId : true))
             .sort((a, b) => { if (msRank(a) !== msRank(b)) return msRank(a) - msRank(b); const ad = a.deadline || '￿'; const bd = b.deadline || '￿'; if (ad !== bd) return ad < bd ? -1 : 1; return a.title.localeCompare(b.title); });
-          // Stack the side column into ONE flow only while it FITS the available height; the
-          // moment it would overflow — a shorter window OR more milestones/clients — snap to the
-          // two-column split (each side scrolls on its own). Fixed rows: Milestones header (37) +
-          // Search (37) + Clients header (37) + four 74px master gaps = 407; plus every 37px list
-          // row. (winH - 180 ≈ the grid height below the header/nav chrome.)
-          const estStackH = 407 + 37 * (focusMilestones.length + proj2SortedClients.length);
+          // 62px = the milestone→search gap that lands Search exactly on the Work band's line.
+          // (The day column's date→Work spacer is 74px, but Search sits in a 37px row whose text
+          // centres 12px lower than Work's 20px band label, so the gap is pulled in 12px.) The
+          // SAME 62px is then used between EVERY section, so the whole column shares one rhythm.
+          const stackGap = 62;
+          // Stack the side column into ONE flow only while it FITS the available height; the moment
+          // it would overflow — shorter window OR more milestones/clients — snap to the two-column
+          // split. Fixed rows: Milestones + Search + Clients headers (3×37) + four stackGap gaps;
+          // plus every 37px list row. (winH - 180 ≈ the grid height below the header/nav chrome.)
+          const estStackH = 111 + 4 * stackGap + 37 * (focusMilestones.length + proj2SortedClients.length);
           const stackSide = !PIP_MODE && estStackH <= (winH - 180);
           // Shared side pieces — the stacked flow and the split columns compose from the same nodes.
           const focusClearFilter = (focusClientId || focusProjectId || focusMilestoneId) ? () => { setFocusClientId(null); setFocusProjectId(null); setFocusMilestoneId(null); } : undefined;
@@ -9697,13 +9701,13 @@ export default function App() {
                 {!PIP_MODE && stackSide && (
                   <div className="min-w-0 min-h-0 overflow-y-auto flex flex-col">
                     {focusMilestonesHeader}
-                    <div className="shrink-0" style={{ height: SPACING.dcr }} aria-hidden />
+                    <div className="shrink-0" style={{ height: stackGap }} aria-hidden />
                     {focusSearchRow}
-                    <div className="shrink-0" style={{ height: SPACING.dcr }} aria-hidden />
+                    <div className="shrink-0" style={{ height: stackGap }} aria-hidden />
                     {renderReadonlyBucket(focusMilestones, undefined, true, milestoneClickTo, focusMilestoneId)}
-                    <div className="shrink-0" style={{ height: SPACING.dcr }} aria-hidden />
+                    <div className="shrink-0" style={{ height: stackGap }} aria-hidden />
                     {focusClientsHeader}
-                    <div className="shrink-0" style={{ height: SPACING.dcr }} aria-hidden />
+                    <div className="shrink-0" style={{ height: stackGap }} aria-hidden />
                     {focusClientsList}
                   </div>
                 )}
