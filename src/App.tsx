@@ -5733,8 +5733,12 @@ export default function App() {
   // The + and trash buttons, the date, the arrow, and the title are ALWAYS visible.
   // Spacing/margins never compress.
   const [columnPx, setColumnPx] = useState<number>(typeof window === 'undefined' ? 440 : window.innerWidth / 4);
+  // winH drives the focus page's height-responsive side layout: a tall window stacks Milestones
+  // ABOVE the client list in one narrow column (the day columns absorb the freed width); squish
+  // it shorter than the breakpoint and Milestones pops out into its own second column.
+  const [winH, setWinH] = useState<number>(typeof window === 'undefined' ? 900 : window.innerHeight);
   useEffect(() => {
-    const update = () => setColumnPx(window.innerWidth / 4);
+    const update = () => { setColumnPx(window.innerWidth / 4); setWinH(window.innerHeight); };
     update();
     window.addEventListener('resize', update);
     return () => window.removeEventListener('resize', update);
@@ -9571,6 +9575,10 @@ export default function App() {
           // (in practice the longest milestone + its date), so one may carry a little extra
           // white space but the pair stays visually balanced.
           const sideW = Math.max(col1W, col2W);
+          // Tall enough → stack Milestones above the client list in ONE side column (day columns
+          // get the freed width). Squished → split back into two side columns (Milestones in col 2).
+          // 760 is a starting breakpoint; tune to taste. Never stacks in PIP (no side columns there).
+          const stackSide = !PIP_MODE && winH >= 760;
           return (
             // Focus mode: fixed TopHeader, fixed column titles, each column body scrolls
             // independently. Same pattern as List / Project / Calendar.
@@ -9633,13 +9641,19 @@ export default function App() {
                   freed space, so the calendar gets wider. */}
               {/* PIP: ONLY the three day columns — no filter panel, no Milestones column.
                   Full mode: cols 1–2 are content-sized (longest entry + 30px), days split the rest. */}
-              <div className="grid gap-0 flex-1 min-h-0 w-full overflow-x-auto" style={{ gridTemplateColumns: PIP_MODE ? '1fr 1fr 1fr' : `${sideW}px ${sideW}px 1fr 1fr 1fr` }}>
+              <div className="grid gap-0 flex-1 min-h-0 w-full overflow-x-auto" style={{ gridTemplateColumns: PIP_MODE ? '1fr 1fr 1fr' : stackSide ? `${sideW}px 1fr 1fr 1fr` : `${sideW * 2}px 1fr 1fr 1fr` }}>
                 {/* Column 1 — Projects panel: flat master list (milestones pinned on top);
                     clicking a project FILTERS the Dashboard stack + all three calendar
                     columns (focusProjectId). Active row shows an ×; click again to clear.
                     Information + References are parked behind FOCUS_SHOW_INFO /
                     FOCUS_SHOW_REFERENCES while ctrl-assets takes over reference handling. */}
-                {!PIP_MODE && (() => {
+                {/* SIDE AREA — one grid column. Tall: flex-col stacking Milestones (order-1)
+                    over the client list (order-2). Squished: an inner 2-col grid, client list
+                    then Milestones, exactly as before. */}
+                {!PIP_MODE && (
+                  <div className={stackSide ? 'min-w-0 min-h-0 overflow-hidden flex flex-col' : 'min-w-0 min-h-0 overflow-hidden grid gap-0'} style={stackSide ? undefined : { gridTemplateColumns: `${sideW}px ${sideW}px` }}>
+                    <div className={stackSide ? 'order-2 flex-1 min-w-0 min-h-0 overflow-hidden flex flex-col' : 'min-w-0 min-h-0 overflow-hidden flex flex-col'}>
+                {(() => {
                   // Left panel: top-pinned milestones + a COLLAPSED project filter. Client
                   // headers collapse their projects so the user scans the big picture and
                   // expands on demand. Clicking a project FILTERS (not navigates) — the
@@ -9731,10 +9745,12 @@ export default function App() {
                     </div>
                   );
                 })()}
+                    </div>
+                    <div className={stackSide ? 'order-1 flex-1 min-w-0 min-h-0 overflow-hidden flex flex-col' : 'min-w-0 min-h-0 overflow-hidden flex flex-col'}>
                 {/* Column 2 — MILESTONES, in their own narrow column (same 1fr width as the filter).
                     Grouped by effective list then deadline, like everything else. Rendered
                     title-only (no client / project meta) — just the milestone name + its date. */}
-                {!PIP_MODE && (() => {
+                {(() => {
                   const clientOfMs = (t: Task) => t.clientId ?? (t.projectId ? projects.find((p) => p.id === t.projectId)?.clientId : undefined);
                   const msRank = (t: Task) => { const idx = listSequence.indexOf(effectiveListFor(t)); return idx < 0 ? 99 : idx; };
                   const milestones = visibleTasks
@@ -9772,6 +9788,9 @@ export default function App() {
                     </div>
                   );
                 })()}
+                    </div>
+                  </div>
+                )}
                 {/* Columns 3–5 — the calendar as THREE wide (2fr) side-by-side day columns:
                     Today, Tomorrow, and Next. Same engine as the calendar view (focusStripCells ←
                     computeCalendarDistribution), same band structure (Work / Admin / Projects),
