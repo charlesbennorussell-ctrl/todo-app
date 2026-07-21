@@ -9575,10 +9575,52 @@ export default function App() {
           // (in practice the longest milestone + its date), so one may carry a little extra
           // white space but the pair stays visually balanced.
           const sideW = Math.max(col1W, col2W);
-          // Tall enough → stack Milestones above the client list in ONE side column (day columns
-          // get the freed width). Squished → split back into two side columns (Milestones in col 2).
-          // 760 is a starting breakpoint; tune to taste. Never stacks in PIP (no side columns there).
-          const stackSide = !PIP_MODE && winH >= 760;
+          // Milestones matching the active filter/search — shared by the stacked flow AND the split
+          // Milestones column so both render identically.
+          const msRank = (t: Task) => { const idx = listSequence.indexOf(effectiveListFor(t)); return idx < 0 ? 99 : idx; };
+          const clientOfMs = (t: Task) => t.clientId ?? (t.projectId ? projects.find((p) => p.id === t.projectId)?.clientId : undefined);
+          const focusMilestones = visibleTasks
+            .filter((t) => t.type === 'scheduled' && taskMatchesQuery(t, focusSearch, projects, clients) && passesMilestoneFilter(t) && (focusProjectId ? t.projectId === focusProjectId : focusClientId ? clientOfMs(t) === focusClientId : true))
+            .sort((a, b) => { if (msRank(a) !== msRank(b)) return msRank(a) - msRank(b); const ad = a.deadline || '￿'; const bd = b.deadline || '￿'; if (ad !== bd) return ad < bd ? -1 : 1; return a.title.localeCompare(b.title); });
+          // Stack the side column into ONE flow (Search → Milestones → Clients, fixed 37px gaps)
+          // only while the whole thing FITS the available height. The moment it would overflow —
+          // a shorter window OR more milestones/clients — snap to the two-column split (each side
+          // scrolls on its own). Rows are 37px: Search + 2 gaps + 2 section headers = 5 fixed rows,
+          // plus every list row. (winH - 180 ≈ the grid's height below the header/nav chrome.)
+          const estStackH = 37 * (5 + focusMilestones.length + proj2SortedClients.length) + 12;
+          const stackSide = !PIP_MODE && estStackH <= (winH - 180);
+          // Shared side pieces — the stacked flow and the split columns compose from the same nodes.
+          const focusClearFilter = (focusClientId || focusProjectId || focusMilestoneId) ? () => { setFocusClientId(null); setFocusProjectId(null); setFocusMilestoneId(null); } : undefined;
+          const focusSearchRow = (
+            <div className="shrink-0 h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px]">
+              <Search size={12} className="shrink-0 text-[#656464]" />
+              <input value={focusSearch} onChange={(e) => setFocusSearch(e.target.value)} placeholder="Search" className="focus-search-input flex-1 min-w-0 bg-transparent border-0 outline-none text-white text-[14px]" />
+              {focusSearch && (<button type="button" onClick={() => setFocusSearch('')} className="shrink-0 text-[#a8a8a8] hover:text-white transition-colors" aria-label="Clear search"><X size={13} /></button>)}
+            </div>
+          );
+          const focusMilestonesHeader = (
+            <div className="group shrink-0 h-[37px] flex items-center gap-2 px-[31px]">
+              <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">Milestones</p>
+              <button type="button" onClick={() => { const id = `task-${Date.now()}`; const ms: Task = { id, title: '', type: 'scheduled', assignees: currentUserShort ? [currentUserShort] : [], completed: false, list: 'work', section: 'today', deadline: todayISO(), order: 0, createdAt: Date.now(), ...(focusProjectId ? { projectId: focusProjectId } : focusClientId ? { clientId: focusClientId } : {}) }; setTasks((prev) => [...prev, ms]); setNewId(id); openEdit(ms); }} className="opacity-0 group-hover:opacity-100 text-[#656464] hover:text-white transition-opacity" aria-label="Add milestone"><Plus size={14} /></button>
+            </div>
+          );
+          // Plain 37px "Clients + Projects" label for the stacked flow — the real
+          // ProjectsHeaderDropZone carries a 74px margin meant for the split column, which would
+          // blow a double gap here. Clicking it still clears the active filter.
+          const focusClientsHeader = (
+            <div onClick={focusClearFilter} className={`shrink-0 h-[37px] flex items-center gap-2 px-[31px] ${focusClearFilter ? 'cursor-pointer' : ''}`}>
+              <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">Clients + Projects</p>
+            </div>
+          );
+          const focusClientsList = proj2SortedClients.map((c) => {
+            const clientActive = focusClientId === c.id && !focusProjectId;
+            return (
+              <button key={c.id} type="button" onClick={() => { setFocusProjectId(null); setFocusMilestoneId(null); setFocusClientId(focusClientId === c.id ? null : c.id); }} className={`group h-[37px] w-full text-left box-border flex flex-row gap-2 items-center px-[31px] transition-colors ${clientActive ? '' : 'hover:bg-white/[0.03]'}`}>
+                <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis ${clientActive ? 'text-white' : 'text-[#656464]'}`}>{c.name || (c.id === PERSONAL_CLIENT_ID ? 'Personal' : c.short)}</span>
+                {clientActive && <X size={14} className="ml-auto text-[#a8a8a8]" />}
+              </button>
+            );
+          });
           return (
             // Focus mode: fixed TopHeader, fixed column titles, each column body scrolls
             // independently. Same pattern as List / Project / Calendar.
@@ -9647,12 +9689,25 @@ export default function App() {
                     columns (focusProjectId). Active row shows an ×; click again to clear.
                     Information + References are parked behind FOCUS_SHOW_INFO /
                     FOCUS_SHOW_REFERENCES while ctrl-assets takes over reference handling. */}
-                {/* SIDE AREA — one grid column. Tall: flex-col stacking Milestones (order-1)
-                    over the client list (order-2). Squished: an inner 2-col grid, client list
-                    then Milestones, exactly as before. */}
-                {!PIP_MODE && (
-                  <div className={stackSide ? 'min-w-0 min-h-0 overflow-hidden flex flex-col' : 'min-w-0 min-h-0 overflow-hidden grid gap-0'} style={stackSide ? undefined : { gridTemplateColumns: `${sideW}px ${sideW}px` }}>
-                    <div className={stackSide ? 'order-2 flex-1 min-w-0 min-h-0 overflow-hidden flex flex-col' : 'min-w-0 min-h-0 overflow-hidden flex flex-col'}>
+                {/* STACKED side column (content fits): one continuous flow — Search → hard gap →
+                    Milestones → hard gap → Clients. Every gap a fixed 37px carriage return (never
+                    flex), so the rhythm is identical wherever you cross a section boundary. */}
+                {!PIP_MODE && stackSide && (
+                  <div className="min-w-0 min-h-0 overflow-y-auto flex flex-col">
+                    {focusSearchRow}
+                    <div className="shrink-0 h-[37px]" aria-hidden />
+                    {focusMilestonesHeader}
+                    {renderReadonlyBucket(focusMilestones, undefined, true, milestoneClickTo, focusMilestoneId)}
+                    <div className="shrink-0 h-[37px]" aria-hidden />
+                    {focusClientsHeader}
+                    {focusClientsList}
+                  </div>
+                )}
+                {/* SPLIT side columns (content would overflow): the previous two-column layout —
+                    client list, then Milestones — each scrolling independently. */}
+                {!PIP_MODE && !stackSide && (
+                  <div className="min-w-0 min-h-0 overflow-hidden grid gap-0" style={{ gridTemplateColumns: `${sideW}px ${sideW}px` }}>
+                    <div className="min-w-0 min-h-0 overflow-hidden flex flex-col">
                 {(() => {
                   // Left panel: top-pinned milestones + a COLLAPSED project filter. Client
                   // headers collapse their projects so the user scans the big picture and
@@ -9746,7 +9801,7 @@ export default function App() {
                   );
                 })()}
                     </div>
-                    <div className={stackSide ? 'order-1 flex-1 min-w-0 min-h-0 overflow-hidden flex flex-col' : 'min-w-0 min-h-0 overflow-hidden flex flex-col'}>
+                    <div className="min-w-0 min-h-0 overflow-hidden flex flex-col">
                 {/* Column 2 — MILESTONES, in their own narrow column (same 1fr width as the filter).
                     Grouped by effective list then deadline, like everything else. Rendered
                     title-only (no client / project meta) — just the milestone name + its date. */}
