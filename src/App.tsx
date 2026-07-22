@@ -561,10 +561,17 @@ function TopHeader({ viewName }: { viewName: string }) {
   return (
     // PIP: the quick window's columns inset their text 16px, so the header matches (35px
     // reads indented there — "nudge it over to the left").
-    <div className={`${PIP_MODE ? 'px-[16px]' : 'px-[35px]'} h-[37px] flex items-center`} style={{ marginBottom: SPACING.cr }}>
+    <div className={`relative ${PIP_MODE ? 'px-[16px]' : 'px-[35px]'} h-[37px] flex items-center`} style={{ marginBottom: SPACING.cr }}>
       <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">
         {viewName} — {day}, {month} {n}{ord} — {time}
       </p>
+      {/* Ctrl-Project wordmark + keycap logo, centered in the top bar across every view. */}
+      {!PIP_MODE && (
+        <div className="absolute left-1/2 -translate-x-1/2 flex items-center gap-[7px] pointer-events-none select-none">
+          <span className="inline-flex items-center justify-center w-[19px] h-[19px] rounded-[5px] bg-[#7363FF] text-[#151412] text-[13px] font-bold leading-none">⌃</span>
+          <span className="font-['NB_International:Regular',sans-serif] text-white text-[13px]">Ctrl-Project</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -1877,7 +1884,7 @@ function PipShortcutSetting() {
     setStatus(null);
   };
   const apply = async () => {
-    if (!tauri?.core?.invoke) { setStatus('Global shortcuts only work in the desktop app — open Ctrl Focus (Tauri) and set it there.'); return; }
+    if (!tauri?.core?.invoke) { setStatus('Global shortcuts only work in the desktop app — open Ctrl-Project (Tauri) and set it there.'); return; }
     try {
       const res = await tauri.core.invoke('set_pip_shortcut', { combo });
       try { localStorage.setItem('pip-shortcut-display', combo); } catch { /* private mode */ }
@@ -1949,8 +1956,12 @@ function BottomBar({ mode, onSetMode, onAdd }: { mode: AppMode; onSetMode: (m: A
           <Plus size={16} color="#151412" strokeWidth={2.5} />
         </motion.button>
       </div>
-      {/* Settings — pinned to the bottom of the rail. */}
-      <button title="Settings" aria-label="Settings" onClick={() => onSetMode('settings')} className={`${iconClass(mode === 'settings')} mt-auto`}><SettingsIcon size={22} /></button>
+      {/* Bottom cluster: the user avatar sits just above Settings, both pinned to the bottom. */}
+      <div className="mt-auto flex flex-col items-center gap-[22px]">
+        {/* Account chip — the user's initial inside a stroked ring, like most apps' avatar. */}
+        <div className="size-[30px] rounded-full border border-[#4a4a4a] flex items-center justify-center text-[#a8a8a8] text-[12px] font-medium select-none" aria-label="Account">B</div>
+        <button title="Settings" aria-label="Settings" onClick={() => onSetMode('settings')} className={iconClass(mode === 'settings')}><SettingsIcon size={22} /></button>
+      </div>
     </div>
   );
 }
@@ -4174,7 +4185,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
       animate={{ opacity: isDragging ? 0 : 1 }}
       transition={{ opacity: { duration: 0.12, ease: 'easeOut' } }}
     >
-      <div onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} onContextMenu={(e) => { if (onQuickEdit) { e.preventDefault(); e.stopPropagation(); onQuickEdit(); } }} {...attributes} {...listeners} className={`cursor-grab active:cursor-grabbing px-[10px] py-[7px] overflow-hidden flex-1 ${categoryDimmed && isTodayCard ? 'opacity-[0.12] ' : ''}${singleLine ? 'flex flex-row items-center gap-[4px] pr-[26px]' : 'flex flex-col justify-center gap-[2px]'}`}>
+      <div onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} onContextMenu={(e) => { if (onQuickEdit) { e.preventDefault(); e.stopPropagation(); onQuickEdit(); } }} {...attributes} {...listeners} className={`cursor-grab active:cursor-grabbing px-[10px] py-[7px] overflow-hidden flex-1 ${categoryDimmed && isTodayCard ? 'opacity-0 ' : ''}${singleLine ? 'flex flex-row items-center gap-[4px] pr-[26px]' : 'flex flex-col justify-center gap-[2px]'}`}>
         {/* Calendar cards always render Title on line 1, all other meta on line 2 — taskOrder
             setting doesn't apply here. Line 1: checkbox + title. Line 2: client › project,
             assignees, deadline, + button. Checkbox is INLINE with the title so it stays aligned
@@ -4890,7 +4901,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
                     <>
                       <div className="flex flex-row items-center gap-3">
                         <span className="inline-block w-[8px] h-[8px] rounded-full" style={{ backgroundColor: dotColor }} />
-                        <span className="text-white">Ctrl Focus v{__APP_VERSION__}</span>
+                        <span className="text-white">Ctrl-Project v{__APP_VERSION__}</span>
                         <span className="text-[#656464]">built {ageLabel}</span>
                       </div>
                       <button type="button" onClick={() => window.location.reload()} className="self-start px-3 py-1 rounded-md bg-[#1f1f1f] hover:bg-[#262626] text-white transition-colors">Reload to latest</button>
@@ -11071,7 +11082,13 @@ export default function App() {
               className={`fixed right-0 top-0 bottom-0 w-[320px] pt-[104px] z-40 bg-[#151412] flex flex-col duration-300 ease-in-out ${trayDrag ? 'transition-opacity' : 'transition-[transform,opacity]'}`}
               style={{
                 transform: (trayOpen || trayDrag) ? 'translateX(0)' : 'translateX(320px)',
-                opacity: (trayDrag && !trayOpen) ? 0 : 1,
+                // Opacity is tied to OPEN alone (not "resting"). During a drag the tray sits at
+                // translateX(0) so dnd-kit measures its drop rows on-screen, but stays fully
+                // transparent unless actually opened. Key fix: on DROP without opening, opacity
+                // stays 0 while the tray slides back off — no fade-in, so it no longer flashes
+                // open-then-shut when you just drop a card in the Next column. (An intentional
+                // open→close still fades out nicely, since opacity was 1 while open.)
+                opacity: trayOpen ? 1 : 0,
                 pointerEvents: trayOpen ? 'auto' : (trayDrag ? 'none' : 'auto'),
               }}
             >

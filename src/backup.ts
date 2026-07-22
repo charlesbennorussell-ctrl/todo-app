@@ -145,7 +145,7 @@ export async function readSnapshotFile(file: File): Promise<BackupSnapshot> {
   if (!parsed || typeof parsed !== 'object') throw new Error('Snapshot must be a JSON object.');
   const snap = parsed as Partial<BackupSnapshot>;
   if (snap.app !== APP_ID) {
-    throw new Error('This file is not a Ctrl Focus backup.');
+    throw new Error('This file is not a Ctrl-Project backup.');
   }
   if (typeof snap.schemaVersion !== 'number') throw new Error('Missing schemaVersion.');
   if (Math.floor(snap.schemaVersion) !== BACKUP_SCHEMA_VERSION) {
