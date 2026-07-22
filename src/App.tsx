@@ -1,4 +1,4 @@
-import { Fragment, memo, useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect } from 'react';
+import { Fragment, memo, useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect, createContext, useContext } from 'react';
 import { flushSync } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { Plus, X, List, FolderTree, SlidersHorizontal as SettingsIcon, Folder, Trash2, Calendar as CalendarIcon, ChevronLeft, ChevronRight, ArrowUp, LayoutDashboard, Heart, FileText, Search, ExternalLink } from 'lucide-react';
@@ -52,6 +52,10 @@ const TOUCH_DEVICE = typeof window !== 'undefined' && (
 // flag is present the app renders ONLY the daily Dashboard stack — no nav, no
 // other views — sized for a tall narrow window floating over other apps.
 const PIP_MODE = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('pip');
+
+// Card density (Settings → 1 or 2 rows). Provided once at the app root and read by CalendarCard
+// so the setting reaches every calendar/focus card without threading through every component.
+const CardRowsContext = createContext<1 | 2>(2);
 
 // Focus-page column toggles. References (the DAM gallery) + Information are
 // PARKED, not deleted — the external ctrl-assets app is taking over reference
@@ -4101,6 +4105,8 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
   const client = resolvedClientId ? clients.find((c) => c.id === resolvedClientId) : undefined;
   // Right-click-on-date mini menu anchor (viewport coords; rendered via portal).
   const [dateMenu, setDateMenu] = useState<{ x: number; y: number } | null>(null);
+  // 1-row mode (Settings): collapse to a single continuous line, title truncates first.
+  const oneRow = useContext(CardRowsContext) === 1;
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: task.id,
     data: { type: 'task', task, calendarCellId: cellId },
@@ -4149,16 +4155,16 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
       ref={setNodeRef}
       style={style}
       data-cal-card={task.id}
-      className={`relative mx-[6px] mb-[4px] group min-h-[45px] flex ${isTodayCard ? '' : 'bg-white/[0.03]'} ${dimmed ? 'opacity-60' : ''}`}
+      className={`relative mx-[6px] mb-[4px] group ${oneRow ? 'min-h-[30px]' : 'min-h-[45px]'} flex ${isTodayCard ? '' : 'bg-white/[0.03]'} ${dimmed ? 'opacity-60' : ''}`}
       animate={{ opacity: isDragging ? 0 : 1 }}
       transition={{ opacity: { duration: 0.12, ease: 'easeOut' } }}
     >
-      <div onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} onContextMenu={(e) => { if (onQuickEdit) { e.preventDefault(); e.stopPropagation(); onQuickEdit(); } }} {...attributes} {...listeners} className={`cursor-grab active:cursor-grabbing px-[10px] py-[7px] overflow-hidden flex-1 ${stacked ? 'flex flex-col justify-center gap-[2px]' : 'flex flex-row flex-wrap items-center content-center gap-x-[10px] gap-y-[1px]'}`}>
+      <div onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} onContextMenu={(e) => { if (onQuickEdit) { e.preventDefault(); e.stopPropagation(); onQuickEdit(); } }} {...attributes} {...listeners} className={`cursor-grab active:cursor-grabbing px-[10px] py-[7px] overflow-hidden flex-1 ${oneRow ? 'flex flex-row items-center gap-[4px]' : stacked ? 'flex flex-col justify-center gap-[2px]' : 'flex flex-row flex-wrap items-center content-center gap-x-[10px] gap-y-[1px]'}`}>
         {/* Calendar cards always render Title on line 1, all other meta on line 2 — taskOrder
             setting doesn't apply here. Line 1: checkbox + title. Line 2: client › project,
             assignees, deadline, + button. Checkbox is INLINE with the title so it stays aligned
             with the title cap-height when the whole content block is vertically centered. */}
-        <div className="flex flex-row items-center gap-[10px] w-full pr-5">
+        <div className={`flex flex-row items-center gap-[10px] pr-5 ${oneRow ? 'min-w-0 shrink' : 'w-full'}`}>
           {!isScheduled && (
             <div onPointerDown={(e) => e.stopPropagation()} className="shrink-0 flex items-center justify-center">
               <TaskCheckbox completed={task.completed} started={task.started} onToggle={onToggle} accent={isTodayCard && !categoryDimmed ? '#8465ff' : undefined} />
@@ -4197,7 +4203,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
             the checkbox. 22px = checkbox width (12) + title-row gap (10). When there's no checkbox
             (isScheduled milestones in this branch), the indent collapses to 0. In stacked mode the
             row reserves a min-height so even a meta-less task still reads as two lines (no mix). */}
-          <div className={`flex flex-row items-center gap-[6px] ${stacked ? 'min-h-[15px]' : ''}`}>
+          <div className={`flex flex-row items-center gap-[6px] shrink-0 ${oneRow ? '' : stacked ? 'min-h-[15px]' : ''}`}>
             {/* When completed, all line-2 meta drops to the same faint #383838 — visually quieted to match the title.
                 Only render the client/project paragraph when there's actual non-empty text to show; otherwise an
                 empty <p> sits at the start of the row and the gap-[6px] pushes the next item (e.g. an assignee
@@ -4755,7 +4761,7 @@ function BackupSection({
   );
 }
 
-function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePersonShort, onDeletePerson, currentUserShort, onSetCurrentUser, taskOrder, onSetTaskOrder, listSequence, onSetListSequence, caseMode, onSetCaseMode, trashedTasks, completedTasks, projects, clients, onUntrashTask, onPurgeTask, onToggleTask, onPurgeEmptyProjects, onListClosedOutProjects, onRemoveProjectsByIds, onListStragglerProjects, onDeleteStragglerProject, liveBackupAt, dailyBackupAt, onDownloadBackup, onRestoreFromFile, onRestoreFromSlot, onAddClient, onRenameClient, onRenameClientShort, onDeleteClient }: {
+function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePersonShort, onDeletePerson, currentUserShort, onSetCurrentUser, taskOrder, onSetTaskOrder, listSequence, onSetListSequence, caseMode, onSetCaseMode, cardRows, onSetCardRows, trashedTasks, completedTasks, projects, clients, onUntrashTask, onPurgeTask, onToggleTask, onPurgeEmptyProjects, onListClosedOutProjects, onRemoveProjectsByIds, onListStragglerProjects, onDeleteStragglerProject, liveBackupAt, dailyBackupAt, onDownloadBackup, onRestoreFromFile, onRestoreFromSlot, onAddClient, onRenameClient, onRenameClientShort, onDeleteClient }: {
   people: Person[]; newId: string | null;
   onAddPerson: () => void;
   onRenamePerson: (id: string, name: string) => void;
@@ -4774,6 +4780,8 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
   onDeleteStragglerProject: (id: string) => void;
   caseMode: 'off' | 'title';
   onSetCaseMode: (v: 'off' | 'title') => void;
+  cardRows: 1 | 2;
+  onSetCardRows: (v: 1 | 2) => void;
   trashedTasks: Task[];
   completedTasks: Task[];
   projects: Project[];
@@ -4897,6 +4905,16 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
               <div className="px-[31px] pt-[4px] flex flex-row gap-4">
                 <button type="button" onClick={() => onSetCaseMode('off')} className={`text-[13px] transition-colors ${caseMode === 'off' ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>Off</button>
                 <button type="button" onClick={() => onSetCaseMode('title')} className={`text-[13px] transition-colors ${caseMode === 'title' ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>On</button>
+              </div>
+            </div>
+            <div>
+              {sectionTitle('Card Layout')}
+              <div className="px-[31px] pt-[4px] flex flex-col gap-1">
+                <div className="flex flex-row gap-4">
+                  <button type="button" onClick={() => onSetCardRows(2)} className={`text-[13px] transition-colors ${cardRows === 2 ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>Two rows</button>
+                  <button type="button" onClick={() => onSetCardRows(1)} className={`text-[13px] transition-colors ${cardRows === 1 ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>One row</button>
+                </div>
+                <p className="text-[11px] text-[#5e5e5e]">One row collapses title + client › project + deadline onto a single line and truncates the title first.</p>
               </div>
             </div>
           </div>
@@ -5768,6 +5786,16 @@ export default function App() {
   const setCaseMode = useCallback((v: CaseMode) => {
     setCaseModeState(v);
     try { window.localStorage.setItem('todo-app-case-mode', v); } catch {}
+  }, []);
+  // Card density: 2 = the two-line card (title on top, meta below — the default); 1 = a single
+  // continuous line (title, then client › project, then deadline) that aggressively truncates.
+  const [cardRows, setCardRowsState] = useState<1 | 2>(() => {
+    if (typeof window === 'undefined') return 2;
+    return window.localStorage.getItem('todo-app-card-rows') === '1' ? 1 : 2;
+  });
+  const setCardRows = useCallback((v: 1 | 2) => {
+    setCardRowsState(v);
+    try { window.localStorage.setItem('todo-app-card-rows', String(v)); } catch {}
   }, []);
   // Convenience boolean for the schedule callbacks below.
   const sentenceCaseEnabled = caseMode !== 'off';
@@ -9380,6 +9408,7 @@ export default function App() {
   }, [mode]);
 
   return (
+    <CardRowsContext.Provider value={cardRows}>
     <DndContext
       sensors={sensors}
       collisionDetection={calendarCollision}
@@ -10925,6 +10954,8 @@ export default function App() {
             onDeleteStragglerProject={deleteStragglerProject}
             caseMode={caseMode}
             onSetCaseMode={setCaseMode}
+            cardRows={cardRows}
+            onSetCardRows={setCardRows}
             trashedTasks={trashedTasks}
             completedTasks={completedTasksForSettings}
             projects={projects}
@@ -11277,5 +11308,6 @@ export default function App() {
       </div>
       <DebugOverlay />
     </DndContext>
+    </CardRowsContext.Provider>
   );
 }
