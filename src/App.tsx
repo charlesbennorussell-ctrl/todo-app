@@ -3970,6 +3970,12 @@ function computeCalendarDistribution(tasks: Task[], todayAnchor: Date, horizonDa
     ).sort((a, b) => a.order - b.order);
     queueIdxs[listId] = 0;
   }
+  // A task with a DATE RANGE (both startDate + deadline set) tracks the START of its range on the
+  // calendar, not the deadline: 3 days before the range opens it sits 3 columns out, then walks
+  // inward day by day (→ tomorrow → today). Once the range has begun (startDate ≤ today, i.e. we're
+  // inside [start, deadline]) TODAY absorbs it so it reads "I need to be working on this now". Plain
+  // single-date tasks (deadline only) keep anchoring on the deadline exactly as before.
+  const anchorOf = (t: Task) => (t.startDate && t.deadline) ? t.startDate : t.deadline;
   for (let off = 0; off < horizonDays; off++) {
     const d = addDaysToDate(todayAnchor, off);
     const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -3987,11 +3993,13 @@ function computeCalendarDistribution(tasks: Task[], todayAnchor: Date, horizonDa
       // (deadline before today) — universal pile-up matching list view's due-or-overdue
       // promotion. Oldest deadline sorts first so the longest-overdue sits on top; their
       // dates render late-red via isLateDeadline on the card.
-      const datedHere = (t: Task) =>
-        t.deadline === iso || (iso === todayIso && !!t.deadline && t.deadline < todayIso);
+      const datedHere = (t: Task) => {
+        const anc = anchorOf(t);
+        return anc === iso || (iso === todayIso && !!anc && anc < todayIso);
+      };
       m.push(...tasks.filter((t) =>
         t.list === listId && datedHere(t) && t.type !== 'scheduled' && !t.completed
-      ).sort((a, b) => (a.deadline !== b.deadline ? (a.deadline! < b.deadline! ? -1 : 1) : a.order - b.order)));
+      ).sort((a, b) => { const aa = anchorOf(a), bb = anchorOf(b); return aa !== bb ? (aa! < bb! ? -1 : 1) : a.order - b.order; }));
       if (iso === todayIso) {
         m.push(...tasks.filter((t) =>
           t.list === listId && t.section === 'today' && !t.deadline && t.type !== 'scheduled' && !t.completed
@@ -4061,7 +4069,7 @@ function CalendarCardBody({ task, projects, clients, taskOrder = 'ptc', isTodayC
       <div className="flex flex-row items-center gap-[10px]">
         {!isScheduled && (
           <div className="shrink-0 flex items-center justify-center">
-            <TaskCheckbox completed={task.completed} started={task.started} onToggle={() => {}} />
+            <TaskCheckbox completed={task.completed} started={task.started} onToggle={() => {}} accent={isTodayCard ? '#8465ff' : undefined} />
           </div>
         )}
         <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleColor}`}>{task.title}</span>
@@ -4070,8 +4078,8 @@ function CalendarCardBody({ task, projects, clients, taskOrder = 'ptc', isTodayC
         {client && project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap text-[#656464]`}>{client.short}<Arrowhead dim={task.completed} />{project.name}</p>}
         {client && !project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${metaColor}`}>{client.short}</p>}
         {!client && project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap text-[#656464]`}>{project.name}</p>}
-        {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} />)}
-        {task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${isScheduled ? 'text-[#8465ff]' : isLateDeadline(task.deadline) ? 'text-white' : 'text-[#656464]'}`}>{formatDeadline(task.deadline)}</p>}
+        {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={(isScheduled || isTodayCard) ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} />)}
+        {task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${(isScheduled || isTodayCard) ? 'text-[#8465ff]' : isLateDeadline(task.deadline) ? 'text-white' : 'text-[#656464]'}`}>{formatDeadline(task.deadline)}</p>}
       </div>
     </div>
   );
@@ -9426,7 +9434,10 @@ export default function App() {
         // state key, kept as-is; the tray itself now lives on the right.)
         if (activeType === 'task' || activeType === 'projTask') {
           if (x > window.innerWidth - 110 && mode !== 'settings') setEdgeDrawer('left');
-          else if (x < window.innerWidth - 360) setEdgeDrawer(null);
+          // Once open, LOCK it: only tuck away when the cursor leaves the drawer to the LEFT
+          // (past its 320px left edge). Dropping on a row closes it via onDragEnd. This stops the
+          // random mid-drag close when the pointer jitters just inside the panel.
+          else if (x < window.innerWidth - 320) setEdgeDrawer(null);
         }
       }}
       onDragEnd={(ev) => { setEdgeDrawer(null); handleDragEnd(ev); }}
