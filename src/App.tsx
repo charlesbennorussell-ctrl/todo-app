@@ -561,17 +561,11 @@ function TopHeader({ viewName }: { viewName: string }) {
   return (
     // PIP: the quick window's columns inset their text 16px, so the header matches (35px
     // reads indented there — "nudge it over to the left").
-    <div className={`relative ${PIP_MODE ? 'px-[16px]' : 'px-[35px]'} h-[37px] flex items-center`} style={{ marginBottom: SPACING.cr }}>
+    <div className={`${PIP_MODE ? 'px-[16px] justify-start' : 'px-[35px] justify-center'} h-[37px] flex items-center`} style={{ marginBottom: SPACING.cr }}>
+      {/* Header line centered in the top bar (left-aligned only in the narrow PIP window). */}
       <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">
         {viewName} — {day}, {month} {n}{ord} — {time}
       </p>
-      {/* Ctrl-Project wordmark + keycap logo, centered in the top bar across every view. */}
-      {!PIP_MODE && (
-        <div className="absolute left-1/2 -translate-x-1/2 flex items-center gap-[7px] pointer-events-none select-none">
-          <span className="inline-flex items-center justify-center w-[19px] h-[19px] rounded-[5px] bg-[#7363FF] text-[#151412] text-[13px] font-bold leading-none">⌃</span>
-          <span className="font-['NB_International:Regular',sans-serif] text-white text-[13px]">Ctrl-Project</span>
-        </div>
-      )}
     </div>
   );
 }
@@ -1933,6 +1927,10 @@ function SectionDroppable({ id, children }: { id: string; children: React.ReactN
 
 function BottomBar({ mode, onSetMode, onAdd }: { mode: AppMode; onSetMode: (m: AppMode) => void; onAdd: () => void }) {
   const iconClass = (active: boolean) => `p-2 rounded-full transition-colors ${active ? 'text-white' : 'text-[#656464] hover:text-white'}`;
+  // Settings acts as a TOGGLE: tapping it while already in Settings returns you to the view you
+  // came from (tracked here, updated on every render that isn't Settings).
+  const prevModeRef = useRef<AppMode>('focus');
+  if (mode !== 'settings') prevModeRef.current = mode;
   return (
     // Vertical nav rail hugging the far-left edge. Top cluster: the four view icons + the
     // add-task button. Settings is pinned to the bottom (mt-auto). Tooltips fly out to the
@@ -1960,7 +1958,7 @@ function BottomBar({ mode, onSetMode, onAdd }: { mode: AppMode; onSetMode: (m: A
       <div className="mt-auto flex flex-col items-center gap-[22px]">
         {/* Account chip — the user's initial inside a stroked ring, like most apps' avatar. */}
         <div className="size-[30px] rounded-full border border-[#4a4a4a] flex items-center justify-center text-[#a8a8a8] text-[12px] font-medium select-none" aria-label="Account">B</div>
-        <button title="Settings" aria-label="Settings" onClick={() => onSetMode('settings')} className={iconClass(mode === 'settings')}><SettingsIcon size={22} /></button>
+        <button title="Settings" aria-label="Settings" onClick={() => onSetMode(mode === 'settings' ? prevModeRef.current : 'settings')} className={iconClass(mode === 'settings')}><SettingsIcon size={22} /></button>
       </div>
     </div>
   );
@@ -4157,8 +4155,10 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
   // Category-dim color: 5% brighter than the completed-task #383838 (rgb 56 → 69 = #454545).
   // Wins over every other state — when the user is dragging across categories, ALL non-source
   // cards drop to this single muted gray regardless of whether they're scheduled, completed,
-  // next, or normal.
-  const DIM = 'text-[#454545]';
+  // next, or normal. On a TODAY card (purple wash) the dim text/graphics instead take the APP
+  // background color (#1c1b19, the dark grayish-brown) so they read as a quiet dark-on-purple carve
+  // — legible but recessive — rather than an illegible grayish-purple.
+  const DIM = isTodayCard ? 'text-[#1c1b19]' : 'text-[#454545]';
   // Today's column reads loud (white); every other column is a future/other day and reads
   // muted (gray) — a card whose deadline moved out of today no longer renders white just
   // because its section is still 'today'. Scheduled/completed/category-dim still win above.
@@ -4167,6 +4167,21 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
   // Hover controls (+ / trash): on a TODAY card they read purple to match the wash when revealed
   // on card-hover, then flip white when the pointer is directly over the icon. Elsewhere: gray → white.
   const iconColor = isTodayCard && !categoryDimmed ? 'text-[#8465ff]' : 'text-[#5e5e5e]';
+  // Task/Client/Project order (Settings) now drives the calendar + focus cards too. The slot helper
+  // returns the sequence; slots BEFORE the title render inline ahead of it in the title row, slots
+  // AFTER render in the meta row ahead of the deadline. For the default 'tcp' this reproduces the
+  // old layout exactly (title, then client→project on the meta line) — only cpt/ptc reflow.
+  const cpSlots = taskOrderSlots(taskOrder, !!project?.name, !!client?.short);
+  const titleSlotIdx = cpSlots.indexOf('title');
+  const beforeTitleSlots = cpSlots.slice(0, titleSlotIdx);
+  const afterTitleSlots = cpSlots.slice(titleSlotIdx + 1);
+  const renderMetaSlot = (slot: TaskMetaSlot, key: string) => {
+    const cls = `font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : metaColor}`;
+    if (slot === 'cp' && client?.short && project?.name) return <p key={key} className={cls}>{client.short}<Arrowhead dim={task.completed || categoryDimmed} tone={isTodayCard ? 'milestone' : 'default'} />{project.name}</p>;
+    if (slot === 'client' && client?.short) return <p key={key} className={cls}>{client.short}</p>;
+    if (slot === 'project' && project?.name) return <p key={key} className={cls}>{project.name}</p>;
+    return null;
+  };
   // Source-collapse: outer wrapper uses max-height (CSS can't transition from auto, but it CAN
   // transition from a fixed max-height to 0) + marginBottom so the column reflows when this card
   // becomes the active drag.
@@ -4185,7 +4200,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
       animate={{ opacity: isDragging ? 0 : 1 }}
       transition={{ opacity: { duration: 0.12, ease: 'easeOut' } }}
     >
-      <div onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} onContextMenu={(e) => { if (onQuickEdit) { e.preventDefault(); e.stopPropagation(); onQuickEdit(); } }} {...attributes} {...listeners} className={`cursor-grab active:cursor-grabbing px-[10px] py-[7px] overflow-hidden flex-1 ${categoryDimmed && isTodayCard ? 'opacity-0 ' : ''}${singleLine ? 'flex flex-row items-center gap-[4px] pr-[26px]' : 'flex flex-col justify-center gap-[2px]'}`}>
+      <div onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} onContextMenu={(e) => { if (onQuickEdit) { e.preventDefault(); e.stopPropagation(); onQuickEdit(); } }} {...attributes} {...listeners} className={`cursor-grab active:cursor-grabbing px-[10px] py-[7px] overflow-hidden flex-1 ${singleLine ? 'flex flex-row items-center gap-[4px] pr-[26px]' : 'flex flex-col justify-center gap-[2px]'}`}>
         {/* Calendar cards always render Title on line 1, all other meta on line 2 — taskOrder
             setting doesn't apply here. Line 1: checkbox + title. Line 2: client › project,
             assignees, deadline, + button. Checkbox is INLINE with the title so it stays aligned
@@ -4193,10 +4208,11 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
         <div className={`flex flex-row items-center gap-[10px] ${singleLine ? 'min-w-0 shrink' : 'w-full pr-5'}`}>
           {!isScheduled && (
             <div onPointerDown={(e) => e.stopPropagation()} className="shrink-0 flex items-center justify-center">
-              <TaskCheckbox completed={task.completed} started={task.started} onToggle={onToggle} accent={isTodayCard && !categoryDimmed ? '#8465ff' : undefined} />
+              <TaskCheckbox completed={task.completed} started={task.started} onToggle={onToggle} accent={isTodayCard ? (categoryDimmed ? '#1c1b19' : '#8465ff') : undefined} />
             </div>
           )}
           <div className="flex flex-row items-center gap-[4px] min-w-0">
+            {beforeTitleSlots.map((s, i) => renderMetaSlot(s, `bt-${i}`))}
             {/* Title is ALWAYS an inline EditableText now — click to edit, drag-in-text to select
                 (EditableText swallows the pointer while editing so it doesn't start a card drag).
                 autoFocus only for a freshly created task. No onDiscardIfEmpty: the 3-min blank-sweep
@@ -4234,9 +4250,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
                 Only render the client/project paragraph when there's actual non-empty text to show; otherwise an
                 empty <p> sits at the start of the row and the gap-[6px] pushes the next item (e.g. an assignee
                 circle) 6px to the right, making it look indented. */}
-            {client?.short && project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : metaColor}`}>{client.short}<Arrowhead dim={task.completed || categoryDimmed} tone={isTodayCard ? 'milestone' : 'default'} />{project.name}</p>}
-            {client?.short && !project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : metaColor}`}>{client.short}</p>}
-            {!client?.short && project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : metaColor}`}>{project.name}</p>}
+            {afterTitleSlots.map((s, i) => renderMetaSlot(s, `at-${i}`))}
             {/* Deadline arrow — the same glyph list view puts before dates (small variant for
                 the tighter card meta). Milestones get it too, tinted milestone purple. */}
             {task.deadline && <DeadlineArrow dim={task.completed || categoryDimmed} color={(isScheduled || isTodayCard) ? '#8465ff' : undefined} />}
@@ -6866,6 +6880,11 @@ export default function App() {
   // records which edge pulled it out. Opened by hovering/clicking the thin edge bars or by
   // dragging a task card into the edge zones; drops on drawer rows reassign.
   const [edgeDrawer, setEdgeDrawer] = useState<'left' | 'right' | null>(null);
+  // Brief window right after a drag ends during which the (invisible, sliding-off) tray ignores
+  // pointer events — the drop releases the cursor over the tray's on-screen footprint (it sits at
+  // translateX(0) during a drag so its rows are measured), and without this the reactivating
+  // hover handler fires a spurious open the instant you let go over the Next column.
+  const [traySettling, setTraySettling] = useState(false);
   // Mirror of edgeDrawer for the collision fn (which is a useCallback and would otherwise
   // capture a stale value). The tray's drop rows are always MOUNTED (so dnd-kit measures them
   // at their real on-screen position), so collision must only honour edge hits while the tray
@@ -9478,7 +9497,7 @@ export default function App() {
           else if (x < window.innerWidth - 342) setEdgeDrawer(null);
         }
       }}
-      onDragEnd={(ev) => { setEdgeDrawer(null); handleDragEnd(ev); }}
+      onDragEnd={(ev) => { setEdgeDrawer(null); setTraySettling(true); window.setTimeout(() => setTraySettling(false), 400); handleDragEnd(ev); }}
       measuring={measuringConfig}
       // NO axis lock on task drags any more — cards must be able to travel horizontally
       // into the edge assign drawers (and the Projects-view tray). The category lock is
@@ -11089,7 +11108,7 @@ export default function App() {
                 // open-then-shut when you just drop a card in the Next column. (An intentional
                 // open→close still fades out nicely, since opacity was 1 while open.)
                 opacity: trayOpen ? 1 : 0,
-                pointerEvents: trayOpen ? 'auto' : (trayDrag ? 'none' : 'auto'),
+                pointerEvents: trayOpen ? 'auto' : ((trayDrag || traySettling) ? 'none' : 'auto'),
               }}
             >
                 <TrayMask />
