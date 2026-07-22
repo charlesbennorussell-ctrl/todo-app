@@ -4053,10 +4053,11 @@ function CalendarCardBody({ task, projects, clients, taskOrder = 'ptc' }: { task
   // applies to 'cpt' and 'tcp' modes where client + project sit adjacent. In 'ptc' the client
   // stays on the second row alongside assignees + date (legacy two-row calendar layout).
   const clientOnFirstRow = taskOrder !== 'ptc';
+  // Match the live card exactly so the floating drag copy never reshapes / drops meta: two-row
+  // stack by default, one continuous row when the 1-row setting is on.
+  const oneRow = useContext(CardRowsContext) === 1;
   return (
-    // Mirror the live card's flex-wrap layout so the floating drag copy is the SAME shape/height
-    // (one line when wide, two when narrow) instead of a fixed two-row block.
-    <div className="px-[10px] py-[7px] flex flex-row flex-wrap items-center content-center gap-x-[10px] gap-y-[1px] overflow-hidden h-full">
+    <div className={`px-[10px] py-[7px] overflow-hidden h-full flex ${oneRow ? 'flex-row items-center gap-[4px]' : 'flex-col justify-center gap-[2px]'}`}>
       <div className="flex flex-row items-center gap-[10px]">
         {!isScheduled && (
           <div className="shrink-0 flex items-center justify-center">
@@ -9606,7 +9607,10 @@ export default function App() {
           const msRank = (t: Task) => { const idx = listSequence.indexOf(effectiveListFor(t)); return idx < 0 ? 99 : idx; };
           const clientOfMs = (t: Task) => t.clientId ?? (t.projectId ? projects.find((p) => p.id === t.projectId)?.clientId : undefined);
           const focusMilestones = visibleTasks
-            .filter((t) => t.type === 'scheduled' && taskMatchesQuery(t, focusSearch, projects, clients) && passesMilestoneFilter(t) && (focusProjectId ? t.projectId === focusProjectId : focusClientId ? clientOfMs(t) === focusClientId : true))
+            // The milestones roster stays PUT while a client/project filter is active (only the day
+            // columns narrow) — so selecting a filter never reshuffles this list under your cursor.
+            // Search + the milestone filter still apply.
+            .filter((t) => t.type === 'scheduled' && taskMatchesQuery(t, focusSearch, projects, clients) && passesMilestoneFilter(t))
             .sort((a, b) => { if (msRank(a) !== msRank(b)) return msRank(a) - msRank(b); const ad = a.deadline || '￿'; const bd = b.deadline || '￿'; if (ad !== bd) return ad < bd ? -1 : 1; return a.title.localeCompare(b.title); });
           // 62px = the milestone→search gap that lands Search exactly on the Work band's line.
           // (The day column's date→Work spacer is 74px, but Search sits in a 37px row whose text
@@ -9843,7 +9847,8 @@ export default function App() {
                   const clientOfMs = (t: Task) => t.clientId ?? (t.projectId ? projects.find((p) => p.id === t.projectId)?.clientId : undefined);
                   const msRank = (t: Task) => { const idx = listSequence.indexOf(effectiveListFor(t)); return idx < 0 ? 99 : idx; };
                   const milestones = visibleTasks
-                    .filter((t) => t.type === 'scheduled' && taskMatchesQuery(t, focusSearch, projects, clients) && passesMilestoneFilter(t) && (focusProjectId ? t.projectId === focusProjectId : focusClientId ? clientOfMs(t) === focusClientId : true))
+                    // Milestones roster stays PUT while filtering (see the stacked flow's note).
+                    .filter((t) => t.type === 'scheduled' && taskMatchesQuery(t, focusSearch, projects, clients) && passesMilestoneFilter(t))
                     .sort((a, b) => {
                       if (msRank(a) !== msRank(b)) return msRank(a) - msRank(b);
                       const ad = a.deadline || '￿'; const bd = b.deadline || '￿';
@@ -10985,6 +10990,10 @@ export default function App() {
             (people) on top, then Assign Project (grouped by client, collapsed)
             below. On the Projects view the LEFT edge belongs to the existing
             Resources/Clients tray, so only the right rail shows there. */}
+        {/* Persistent right-edge tray bar — ALWAYS visible, even mid-drag (when the drawer itself
+            is pinned open + invisible so its drop rows stay measured on-screen). Sits behind the
+            drawer (z-30 < z-40), so the tray never vanishes the moment you grab a card. */}
+        {!PIP_MODE && mode !== 'settings' && <div className="fixed right-0 top-0 bottom-0 w-[22px] bg-[#151412] z-30" aria-hidden />}
         {!PIP_MODE && mode !== 'settings' && (() => {
           // Assign rail + tray. The rail is a FULL-HEIGHT lighter bar living in the far-left
           // gutter (the pl-[22px] on the wrapper reserves the space) — ONLY the bar is the
@@ -11010,11 +11019,11 @@ export default function App() {
                body translates off-screen-left and only the 22px chevron handle (absolute, added
                as the last child) stays visible. Open: translateX(0). Drag-safe: during a task
                drag the transform is pinned to 0 and only opacity animates, so dnd-kit keeps every
-               drop row measured on-screen. One flat #333333 material, 300ms ease-in-out. */
+               drop row measured on-screen. One flat #151412 material, 300ms ease-in-out. */
             <div
               onMouseEnter={() => setEdgeDrawer('left')}
               onMouseLeave={() => { setEdgeDrawer((d) => (d === 'left' ? null : d)); cancelHoverExpand(); setEdgeExpandedClient(null); }}
-              className={`fixed right-0 top-0 bottom-0 w-[320px] pt-[104px] z-40 bg-[#333333] flex flex-col duration-300 ease-in-out ${trayDrag ? 'transition-opacity' : 'transition-[transform,opacity]'}`}
+              className={`fixed right-0 top-0 bottom-0 w-[320px] pt-[104px] z-40 bg-[#151412] flex flex-col duration-300 ease-in-out ${trayDrag ? 'transition-opacity' : 'transition-[transform,opacity]'}`}
               style={{
                 transform: (trayOpen || trayDrag) ? 'translateX(0)' : 'translateX(320px)',
                 opacity: (trayDrag && !trayOpen) ? 0 : 1,
@@ -11078,13 +11087,13 @@ export default function App() {
                 </CustomScroll>
                 {/* Chevron handle — the visible sliver when the drawer is closed. Absolute at the
                     panel's right edge (right:-22) so it sits just past the 320px body; being a
-                    child, it slides out WITH the drawer. Full-height, same #333333, no hover tint
+                    child, it slides out WITH the drawer. Full-height, same #151412, no hover tint
                     (one monolithic material). Rotates 180° when open to read as "close". */}
                 <button
                   type="button"
                   onClick={() => setEdgeDrawer('left')}
                   style={{ left: -22 }}
-                  className="absolute top-0 bottom-0 w-[22px] bg-[#333333] flex items-center justify-center"
+                  className="absolute top-0 bottom-0 w-[22px] bg-[#151412] flex items-center justify-center"
                   aria-label="Assign drawer"
                   title="Assign project / person"
                 >
@@ -11205,7 +11214,7 @@ export default function App() {
                   scale: { type: "spring", stiffness: 600, damping: 30, mass: 0.4 },
                   x: { type: "spring", stiffness: 320, damping: 34, mass: 0.7 },
                 }}
-                className="bg-[#333333]"
+                className="bg-[#151412]"
                 style={{ width: activeRectWidth ?? '100%', willChange: 'transform' }}
               >
                 {/* Forward the SAME render-controlling props the source row uses
@@ -11241,7 +11250,7 @@ export default function App() {
                 boxShadow: "0 1.875px 7.5px -0.625px rgba(0, 0, 0, 0.35), 0 1.25px 3.125px -0.3125px rgba(0, 0, 0, 0.25)",
               }}
               transition={{ scale: { type: "spring", stiffness: 600, damping: 30, mass: 0.4 } }}
-              className="bg-[#333333] h-[37px] box-border flex flex-row gap-2 items-center px-[31px]"
+              className="bg-[#151412] h-[37px] box-border flex flex-row gap-2 items-center px-[31px]"
               style={{ width: activeRectWidth ?? '100%', willChange: 'transform' }}
             >
               <Folder size={12} className="text-[#656464]" />
@@ -11249,7 +11258,7 @@ export default function App() {
             </motion.div>
           ) : null}
           {activeFocusProject ? (
-            <div className="bg-[#333333] h-[37px] box-border flex flex-row gap-2 items-center px-[31px] shadow-lg">
+            <div className="bg-[#151412] h-[37px] box-border flex flex-row gap-2 items-center px-[31px] shadow-lg">
               <Folder size={12} className="text-[#656464]" />
               <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] text-white whitespace-nowrap">{activeFocusProject.name || 'Untitled'}</span>
             </div>
@@ -11266,7 +11275,7 @@ export default function App() {
                 scale: { type: "spring", stiffness: 600, damping: 30, mass: 0.4 },
                 x: { type: "spring", stiffness: 320, damping: 34, mass: 0.7 },
               }}
-              className="bg-[#333333] h-[37px] box-border flex flex-row gap-2 items-center pl-[43px] pr-[31px]"
+              className="bg-[#151412] h-[37px] box-border flex flex-row gap-2 items-center pl-[43px] pr-[31px]"
               style={{ width: activeRectWidth ?? '100%', willChange: 'transform' }}
             >
               <LIndent />
