@@ -1,9 +1,9 @@
 import { Fragment, memo, useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect, createContext, useContext } from 'react';
 import { flushSync } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
-import { Plus, X, List, FolderTree, SlidersHorizontal as SettingsIcon, Folder, Trash2, Calendar as CalendarIcon, ChevronLeft, ChevronRight, ArrowUp, LayoutDashboard, Heart, FileText, Search, ExternalLink } from 'lucide-react';
-// Google Material Symbols (outline) for the left nav rail — a harmonized Material icon set.
-import { MdOutlineSpaceDashboard, MdOutlineCalendarMonth, MdOutlineViewList, MdOutlineAccountTree, MdOutlineSettings, MdAdd } from 'react-icons/md';
+import { Plus, X, List, FolderTree, SlidersHorizontal as SettingsIcon, Folder, Trash2, Calendar as CalendarIcon, ChevronLeft, ChevronRight, ArrowUp, LayoutDashboard, SquareKanban, Heart, FileText, Search, ExternalLink } from 'lucide-react';
+// Material Symbols — only the Calendar nav icon stayed Material (the rest reverted to Lucide).
+import { MdOutlineCalendarMonth } from 'react-icons/md';
 import { createPortal } from 'react-dom';
 import {
   DndContext,
@@ -635,12 +635,13 @@ function MilestoneToggle({ value, onChange }: { value: boolean; onChange: (v: bo
   );
 }
 
-function AssigneeBadge({ letter, tone, hollow = false, dim = false, active = false, faint = false }: { letter: Assignee; tone: 'scheduled' | 'todo'; hollow?: boolean; dim?: boolean; active?: boolean; faint?: boolean }) {
+function AssigneeBadge({ letter, tone, hollow = false, dim = false, active = false, faint = false, dimColor = '#383838' }: { letter: Assignee; tone: 'scheduled' | 'todo'; hollow?: boolean; dim?: boolean; active?: boolean; faint?: boolean; dimColor?: string }) {
   // `dim` matches the muted palette used for completed tasks; `active` swaps the fill to white
   // for the panel's "selected resource" treatment so the badge pops alongside its bold-white name.
   // `faint` (used for expired milestones) drops the scheduled purple to its faint variant.
+  // `dimColor` overrides the dim fill (dim-today cards pass the app bg #1c1b19 so the circle carves).
   const scheduledColor = faint ? '#4f4290' : '#8465FF';
-  const color = dim ? '#383838' : active ? '#ffffff' : (tone === 'scheduled' ? scheduledColor : '#656464');
+  const color = dim ? dimColor : active ? '#ffffff' : (tone === 'scheduled' ? scheduledColor : '#656464');
   // Multi-character shorts (auto-disambiguated when two people share an initial) render as a
   // pill instead of a circle: same height, expanded width, fully rounded ends. The width grows
   // ~5px per extra character beyond the first.
@@ -701,10 +702,11 @@ function taskOrderSlots(order: TaskOrder, hasProject: boolean, hasClient: boolea
 // to land on the text's baseline band — see DeadlineArrow). Tone:
 //   - 'default'   → #656464 (matches DeadlineArrow's fill)
 //   - 'milestone' → #8465ff (matches milestone purple)
-function Arrowhead({ dim = false, tone = 'default', faint = false }: { dim?: boolean; tone?: 'default' | 'milestone'; faint?: boolean }) {
+function Arrowhead({ dim = false, tone = 'default', faint = false, color }: { dim?: boolean; tone?: 'default' | 'milestone'; faint?: boolean; color?: string }) {
   // `faint` (used for expired milestones) drops the milestone purple to its faint variant.
+  // `color` hard-overrides everything (dim-today cards pass the app bg #1c1b19 so the arrow carves).
   const milestoneFill = faint ? '#4f4290' : '#8465ff';
-  const fill = dim ? '#383838' : tone === 'milestone' ? milestoneFill : '#656464';
+  const fill = color || (dim ? '#383838' : tone === 'milestone' ? milestoneFill : '#656464');
   return (
     <span className="inline-flex items-center shrink-0 mx-[4px] -mt-[2px] align-middle" style={{ height: 12 }}>
       <svg width="4" height="8" viewBox="0 0 4 8" fill="none">
@@ -1943,10 +1945,10 @@ function BottomBar({ mode, onSetMode, onAdd }: { mode: AppMode; onSetMode: (m: A
         {/* Order: Focus, Calendar, List, Project. Each icon carries a styled hover tooltip
             (the native title= delay/skin read as missing). */}
         {([
-          { m: 'focus', label: 'Focus', Icon: MdOutlineSpaceDashboard },
+          { m: 'focus', label: 'Focus', Icon: SquareKanban },
           { m: 'calendar', label: 'Calendar', Icon: MdOutlineCalendarMonth },
-          { m: 'dashboard', label: 'List', Icon: MdOutlineViewList },
-          { m: 'projectView', label: 'Project', Icon: MdOutlineAccountTree },
+          { m: 'dashboard', label: 'List', Icon: List },
+          { m: 'projectView', label: 'Project', Icon: FolderTree },
         ] as { m: AppMode; label: string; Icon: React.ComponentType<{ size?: number }> }[]).map(({ m, label, Icon }) => (
           <div key={m} className="group relative flex items-center">
             <button aria-label={label} onClick={() => onSetMode(m)} className={iconClass(mode === m)}><Icon size={22} /></button>
@@ -1954,14 +1956,14 @@ function BottomBar({ mode, onSetMode, onAdd }: { mode: AppMode; onSetMode: (m: A
           </div>
         ))}
         <motion.button title="Add task" aria-label="Add task" onClick={onAdd} whileHover={{ scale: 1.06 }} whileTap={{ scale: 0.94 }} className="size-[27px] rounded-full bg-[#7363FF] flex items-center justify-center shadow-lg">
-          <MdAdd size={18} color="#151412" />
+          <Plus size={16} color="#151412" strokeWidth={2.5} />
         </motion.button>
       </div>
       {/* Bottom cluster: the user avatar sits just above Settings, both pinned to the bottom. */}
       <div className="mt-auto flex flex-col items-center gap-[22px]">
         {/* Account chip — the user's initial inside a stroked ring, like most apps' avatar. */}
         <div className="size-[30px] rounded-full border border-[#4a4a4a] flex items-center justify-center text-[#a8a8a8] text-[12px] font-medium select-none" aria-label="Account">B</div>
-        <button title="Settings" aria-label="Settings" onClick={() => onSetMode(mode === 'settings' ? prevModeRef.current : 'settings')} className={iconClass(mode === 'settings')}><MdOutlineSettings size={22} /></button>
+        <button title="Settings" aria-label="Settings" onClick={() => onSetMode(mode === 'settings' ? prevModeRef.current : 'settings')} className={iconClass(mode === 'settings')}><SettingsIcon size={22} /></button>
       </div>
     </div>
   );
@@ -4180,7 +4182,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
   const afterTitleSlots = cpSlots.slice(titleSlotIdx + 1);
   const renderMetaSlot = (slot: TaskMetaSlot, key: string) => {
     const cls = `font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : metaColor}`;
-    if (slot === 'cp' && client?.short && project?.name) return <p key={key} className={cls}>{client.short}<Arrowhead dim={task.completed || categoryDimmed} tone={isTodayCard ? 'milestone' : 'default'} />{project.name}</p>;
+    if (slot === 'cp' && client?.short && project?.name) return <p key={key} className={cls}>{client.short}<Arrowhead dim={task.completed || categoryDimmed} tone={isTodayCard ? 'milestone' : 'default'} color={categoryDimmed && isTodayCard ? '#1c1b19' : undefined} />{project.name}</p>;
     if (slot === 'client' && client?.short) return <p key={key} className={cls}>{client.short}</p>;
     if (slot === 'project' && project?.name) return <p key={key} className={cls}>{project.name}</p>;
     return null;
@@ -4256,7 +4258,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
             {afterTitleSlots.map((s, i) => renderMetaSlot(s, `at-${i}`))}
             {/* Deadline arrow — the same glyph list view puts before dates (small variant for
                 the tighter card meta). Milestones get it too, tinted milestone purple. */}
-            {task.deadline && <DeadlineArrow dim={task.completed || categoryDimmed} color={(isScheduled || isTodayCard) ? '#8465ff' : undefined} />}
+            {task.deadline && <DeadlineArrow dim={task.completed || (categoryDimmed && !isTodayCard)} color={categoryDimmed && isTodayCard ? '#1c1b19' : (isScheduled || isTodayCard) ? '#8465ff' : undefined} />}
             {/* Overdue dates render WHITE (red read as alarmist next to the purple wash).
                 The date chip is interactive: dblclick kicks it +1 day; right-click opens the
                 mini date menu. pointer-down stays local so pressing the date never starts a drag. */}
@@ -4275,7 +4277,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
                 roll-off linger ~1s then fade out over 500ms (asymmetric group-hover transition). */}
             {task.assignees.length > 0 && (
               <span className="flex flex-row items-center gap-[6px] linger-reveal">
-                {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={(isScheduled || isTodayCard) ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed || categoryDimmed} />)}
+                {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={(isScheduled || isTodayCard) ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed || categoryDimmed} dimColor={categoryDimmed && isTodayCard ? '#1c1b19' : '#383838'} />)}
               </span>
             )}
             {/* One-line layout: the + is the LAST item in the content lineup — right after the
