@@ -4384,7 +4384,7 @@ function WeekCalendarMode({
     // (flex-1 min-h-0). Within the grid each day-column has a shrink-0 day-name row and a
     // flex-1 overflow-y-auto body — every column scrolls independently while the day names,
     // week-range bar, and TopHeader stay pinned at the top.
-    <div className="h-full flex flex-col" style={{ paddingTop: SPACING.topMargin, paddingBottom: 76 }}>
+    <div className="h-full flex flex-col" style={{ paddingTop: SPACING.topMargin, paddingBottom: 12 }}>
       <div className="shrink-0">
         <TopHeader viewName="Calendar" />
       </div>
@@ -4844,7 +4844,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
   );
 
   return (
-    <div className="h-full flex flex-col" style={{ paddingTop: SPACING.topMargin, paddingBottom: 76 }}>
+    <div className="h-full flex flex-col" style={{ paddingTop: SPACING.topMargin, paddingBottom: 12 }}>
       <div className="shrink-0"><TopHeader viewName="Settings" /></div>
       <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
         <div className="grid grid-cols-4 gap-x-5 pb-[106px]">
@@ -8835,7 +8835,10 @@ export default function App() {
         const isActiveRow = activeRowId === task.id;
         // Milestones (isScheduled) keep their purple even when the active filter row — the ×
         // marks the filter, not a color flip. Non-milestone active rows still go white.
-        const titleColor = isScheduled ? 'text-[#8465ff]' : isActiveRow ? 'text-white' : task.completed ? 'text-[#474747]' : isNext ? 'text-[#a8a8a8]' : 'text-white';
+        // When a milestone filter is active, the SELECTED milestone keeps full purple; the rest
+        // dim to a faint purple (the today-column wash tone) so the active one clearly stands out.
+        const milestoneDim = isScheduled && !!activeRowId && !isActiveRow;
+        const titleColor = isScheduled ? (milestoneDim ? 'text-[#8465ff]/40' : 'text-[#8465ff]') : isActiveRow ? 'text-white' : task.completed ? 'text-[#474747]' : isNext ? 'text-[#a8a8a8]' : 'text-white';
         const metaColor = task.completed ? 'text-[#474747]' : isScheduled ? 'text-[#8465ff]' : 'text-[#656464]';
         return (
           <div key={`dash-${task.id}`} onClick={onRowClick ? () => onRowClick(task) : undefined} onDoubleClick={() => openEdit(task)} onContextMenu={(e) => { e.preventDefault(); openQuick(task); }} className={`h-[37px] box-border flex flex-row gap-2 items-center px-[31px] w-full group hover:bg-white/[0.03] ${onRowClick ? 'cursor-pointer' : ''}`}>
@@ -8861,8 +8864,8 @@ export default function App() {
             {!titleOnly && task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} />)}
             {task.deadline && task.deadline !== omitDeadlineIso && (
               <>
-                <DeadlineArrow dim={task.completed} color={isScheduled ? '#8465ff' : undefined} />
-                <p className={`font-['NB_International:Regular',sans-serif] text-[14.333px] whitespace-nowrap ${task.completed ? 'text-[#474747]' : isScheduled ? 'text-[#8465ff]' : isLateDeadline(task.deadline) ? 'text-[#FF7171]' : isNext ? 'text-[#a8a8a8]' : 'text-white'}`}>{formatDeadline(task.deadline)}</p>
+                <DeadlineArrow dim={task.completed} color={isScheduled ? (milestoneDim ? 'rgba(132,101,255,0.4)' : '#8465ff') : undefined} />
+                <p className={`font-['NB_International:Regular',sans-serif] text-[14.333px] whitespace-nowrap ${task.completed ? 'text-[#474747]' : isScheduled ? (milestoneDim ? 'text-[#8465ff]/40' : 'text-[#8465ff]') : isLateDeadline(task.deadline) ? 'text-[#FF7171]' : isNext ? 'text-[#a8a8a8]' : 'text-white'}`}>{formatDeadline(task.deadline)}</p>
               </>
             )}
             {isActiveRow && <X size={13} className="ml-auto text-[#a8a8a8] shrink-0" />}
@@ -9473,7 +9476,7 @@ export default function App() {
             Edits sync live via Liveblocks, so changes here land in the main window instantly.
             The focus block's guard (PIP_MODE || mode === 'focus') is what fires it in PIP. */}
         {!PIP_MODE && mode === 'dashboard' && (
-          <div className="h-full flex flex-col" style={{ paddingTop: SPACING.topMargin, paddingBottom: 76 }}>
+          <div className="h-full flex flex-col" style={{ paddingTop: SPACING.topMargin, paddingBottom: 12 }}>
             <div className="shrink-0">
               <TopHeader viewName="List" />
             </div>
@@ -9495,7 +9498,7 @@ export default function App() {
           // renderColumn. The Dashboard column is replaced with a Resources + Clients sidebar.
           // Layout: TopHeader is fixed (shrink-0), then a flex-1 row with each column carrying
           // its own scroll. Same fixed-header / per-column-scroll pattern as list view.
-          <div className="h-full flex flex-col" style={{ paddingTop: SPACING.topMargin, paddingBottom: 76 }}>
+          <div className="h-full flex flex-col" style={{ paddingTop: SPACING.topMargin, paddingBottom: 12 }}>
             <div className="shrink-0">
               <TopHeader viewName="Projects" />
             </div>
@@ -9660,7 +9663,7 @@ export default function App() {
             // independently. Same pattern as List / Project / Calendar.
             <div
               className="h-full flex flex-col"
-              style={{ paddingTop: PIP_MODE ? 14 : SPACING.topMargin, paddingBottom: PIP_MODE ? 12 : 76 }}
+              style={{ paddingTop: PIP_MODE ? 14 : SPACING.topMargin, paddingBottom: PIP_MODE ? 12 : 12 }}
               // PIP: right-click anywhere on the BACKGROUND opens the full app (cards keep
               // their own right-click quick-edit via stopPropagation).
               onContextMenu={PIP_MODE ? (e) => { e.preventDefault(); openRealAppFromPip(); } : undefined}
