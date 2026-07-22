@@ -1923,17 +1923,13 @@ function SectionDroppable({ id, children }: { id: string; children: React.ReactN
 function BottomBar({ mode, onSetMode, onAdd }: { mode: AppMode; onSetMode: (m: AppMode) => void; onAdd: () => void }) {
   const iconClass = (active: boolean) => `p-2 rounded-full transition-colors ${active ? 'text-white' : 'text-[#656464] hover:text-white'}`;
   return (
-    <div className="fixed bottom-0 left-0 right-0 h-[76px] bg-[#232323] flex flex-row items-center justify-between pl-[17px] pr-[35px] z-40">
-      {/* Left cluster: four view icons followed by the + add-task button. The 17px left
-          gutter makes the Dashboard icon's geometric center (17 + p-2 padding + half of
-          the 22px icon = 36) line up with the task-row checkbox center above (31px row
-          padding + half of the 12px checkbox = 37) — within a sub-pixel of vertical
-          alignment with the leftmost column's checkboxes. Settings stays at the standard
-          35px right gutter. */}
-      <div className="flex flex-row gap-10 items-center">
+    // Vertical nav rail hugging the far-left edge. Top cluster: the four view icons + the
+    // add-task button. Settings is pinned to the bottom (mt-auto). Tooltips fly out to the
+    // RIGHT of each icon (the bar is only 52px wide). The Assign rail lives just to its right.
+    <div className="fixed left-0 top-0 bottom-0 w-[52px] bg-[#232323] flex flex-col items-center py-[22px] z-40">
+      <div className="flex flex-col gap-[26px] items-center">
         {/* Order: Focus, Calendar, List, Project. Each icon carries a styled hover tooltip
-            (the native title= delay/skin read as missing). Focus stays first so its glyph
-            center keeps aligning with the leftmost column's checkboxes (see comment above). */}
+            (the native title= delay/skin read as missing). */}
         {([
           { m: 'focus', label: 'Focus', Icon: LayoutDashboard },
           { m: 'calendar', label: 'Calendar', Icon: CalendarIcon },
@@ -1942,15 +1938,15 @@ function BottomBar({ mode, onSetMode, onAdd }: { mode: AppMode; onSetMode: (m: A
         ] as { m: AppMode; label: string; Icon: React.ComponentType<{ size?: number }> }[]).map(({ m, label, Icon }) => (
           <div key={m} className="group relative flex items-center">
             <button aria-label={label} onClick={() => onSetMode(m)} className={iconClass(mode === m)}><Icon size={22} /></button>
-            <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 rounded bg-[#333333] text-white text-[11px] whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity">{label}</span>
+            <span className="pointer-events-none absolute left-full top-1/2 -translate-y-1/2 ml-2 px-2 py-1 rounded bg-[#333333] text-white text-[11px] whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-50">{label}</span>
           </div>
         ))}
         <motion.button title="Add task" aria-label="Add task" onClick={onAdd} whileHover={{ scale: 1.06 }} whileTap={{ scale: 0.94 }} className="size-[27px] rounded-full bg-[#7363FF] flex items-center justify-center shadow-lg">
           <Plus size={16} color="#232323" strokeWidth={2.5} />
         </motion.button>
       </div>
-      {/* Settings — pinned to the right edge with the same 35px gutter. */}
-      <button title="Settings" aria-label="Settings" onClick={() => onSetMode('settings')} className={iconClass(mode === 'settings')}><SettingsIcon size={22} /></button>
+      {/* Settings — pinned to the bottom of the rail. */}
+      <button title="Settings" aria-label="Settings" onClick={() => onSetMode('settings')} className={`${iconClass(mode === 'settings')} mt-auto`}><SettingsIcon size={22} /></button>
     </div>
   );
 }
@@ -9436,11 +9432,11 @@ export default function App() {
           </div>
         </div>
       )}
-      {/* pl-[22px] carves a permanent gutter on the far left for the assign rail, so the rail
-          lives in its OWN space and never overlaps a column. Fixed overlays (rail, tray, nav,
-          modals) are position:fixed → unaffected by this padding; only the flowing mode views
-          shift right into place. PIP has no rail, so no gutter there. */}
-      <div className={`relative h-screen bg-[#282828] overflow-hidden ${PIP_MODE ? '' : 'pl-[22px]'}`}>
+      {/* Far-left layout: a 52px vertical nav rail, then the 22px Assign-rail chevron gutter
+          beside it, so pl-[74px] carves the combined space and the flowing views start clear of
+          both. Fixed overlays (nav, assign rail, tray, modals) are position:fixed → unaffected by
+          this padding. PIP has neither nav nor rail, so no gutter there. */}
+      <div className={`relative h-screen bg-[#282828] overflow-hidden ${PIP_MODE ? '' : 'pl-[74px]'}`}>
         {/* PIP quick-view: an always-on-top mini-window (?pip=1, opened by the Tauri shell's
             global shortcut) that renders the FOCUS view below with NO BottomBar / tray chrome.
             Edits sync live via Liveblocks, so changes here land in the main window instantly.
@@ -9589,19 +9585,12 @@ export default function App() {
           const stackGap = 62;
           // Stack the side column into ONE flow only while it FITS the available height; the moment
           // it would overflow — shorter window OR more milestones/clients — snap to the two-column
-          // split. Fixed rows: Milestones + Search + Clients headers (3×37) + four stackGap gaps;
-          // plus every 37px list row. (winH - 180 ≈ the grid height below the header/nav chrome.)
-          const estStackH = 111 + 4 * stackGap + 37 * (focusMilestones.length + proj2SortedClients.length);
+          // split. Fixed rows: Milestones + Clients headers (2×37) + three stackGap gaps; plus
+          // every 37px list row. (winH - 180 ≈ the grid height below the header/nav chrome.)
+          const estStackH = 74 + 3 * stackGap + 37 * (focusMilestones.length + proj2SortedClients.length);
           const stackSide = !PIP_MODE && estStackH <= (winH - 180);
           // Shared side pieces — the stacked flow and the split columns compose from the same nodes.
           const focusClearFilter = (focusClientId || focusProjectId || focusMilestoneId) ? () => { setFocusClientId(null); setFocusProjectId(null); setFocusMilestoneId(null); } : undefined;
-          const focusSearchRow = (
-            <div className="shrink-0 h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px]">
-              <Search size={12} className="shrink-0 text-[#656464]" />
-              <input value={focusSearch} onChange={(e) => setFocusSearch(e.target.value)} placeholder="Search" className="focus-search-input flex-1 min-w-0 bg-transparent border-0 outline-none text-white text-[14px]" />
-              {focusSearch && (<button type="button" onClick={() => setFocusSearch('')} className="shrink-0 text-[#a8a8a8] hover:text-white transition-colors" aria-label="Clear search"><X size={13} /></button>)}
-            </div>
-          );
           const focusMilestonesHeader = (
             <div className="group shrink-0 h-[37px] flex items-center gap-2 px-[31px]">
               <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">Milestones</p>
@@ -9701,8 +9690,6 @@ export default function App() {
                 {!PIP_MODE && stackSide && (
                   <div className="min-w-0 min-h-0 overflow-y-auto flex flex-col">
                     {focusMilestonesHeader}
-                    <div className="shrink-0" style={{ height: stackGap }} aria-hidden />
-                    {focusSearchRow}
                     <div className="shrink-0" style={{ height: stackGap }} aria-hidden />
                     {renderReadonlyBucket(focusMilestones, undefined, true, milestoneClickTo, focusMilestoneId)}
                     <div className="shrink-0" style={{ height: stackGap }} aria-hidden />
@@ -10986,7 +10973,7 @@ export default function App() {
             <div
               onMouseEnter={() => setEdgeDrawer('left')}
               onMouseLeave={() => { setEdgeDrawer((d) => (d === 'left' ? null : d)); cancelHoverExpand(); setEdgeExpandedClient(null); }}
-              className={`fixed left-0 top-[104px] bottom-[84px] w-[320px] z-40 bg-[#333333] flex flex-col duration-300 ease-in-out ${trayDrag ? 'transition-opacity' : 'transition-[transform,opacity]'}`}
+              className={`fixed left-[52px] top-[104px] bottom-[84px] w-[320px] z-40 bg-[#333333] flex flex-col duration-300 ease-in-out ${trayDrag ? 'transition-opacity' : 'transition-[transform,opacity]'}`}
               style={{
                 transform: (trayOpen || trayDrag) ? 'translateX(0)' : 'translateX(-320px)',
                 opacity: (trayDrag && !trayOpen) ? 0 : 1,
@@ -11066,6 +11053,16 @@ export default function App() {
           );
         })()}
         {!PIP_MODE && <BottomBar mode={mode} onSetMode={setMode} onAdd={addAndEditTask} />}
+        {/* Top-bar search — fixed to the top-right, on the TopHeader's line (paddingTop 30 + the
+            37px header row). Shown on every task view (not Settings/PIP). Wired to focusSearch, so
+            it live-filters the Focus view today; other views show it but don't filter yet. */}
+        {!PIP_MODE && mode !== 'settings' && (
+          <div className="fixed top-[30px] right-[35px] h-[37px] w-[240px] z-40 flex items-center gap-2">
+            <Search size={12} className="shrink-0 text-[#656464]" />
+            <input value={focusSearch} onChange={(e) => setFocusSearch(e.target.value)} placeholder="Search" className="focus-search-input flex-1 min-w-0 bg-transparent border-0 outline-none text-white text-[14px]" />
+            {focusSearch && (<button type="button" onClick={() => setFocusSearch('')} className="shrink-0 text-[#a8a8a8] hover:text-white transition-colors" aria-label="Clear search"><X size={13} /></button>)}
+          </div>
+        )}
 
         <AnimatePresence>
           {pendingTrash && (
