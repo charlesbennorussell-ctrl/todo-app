@@ -60,7 +60,9 @@ const PIP_MODE = typeof window !== 'undefined' && new URLSearchParams(window.loc
 // stays 0 → zero layout shift (and the browser stays fully testable). Every fixed top-0 rail and
 // the root read var(--titlebar-h) to sit below the bar when it's present.
 const IS_TAURI = typeof window !== 'undefined' && !!(window as { __TAURI__?: unknown }).__TAURI__;
-const SHOW_TITLEBAR = IS_TAURI && !PIP_MODE;
+// Custom title bar DISABLED — reverted to the native Windows bar per user. The TauriTitlebar
+// component + --titlebar-h offsets stay dormant (var forced to 0px below) in case we revisit.
+const SHOW_TITLEBAR = false && IS_TAURI && !PIP_MODE;
 if (typeof document !== 'undefined') {
   document.documentElement.style.setProperty('--titlebar-h', SHOW_TITLEBAR ? '40px' : '0px');
 }
@@ -94,7 +96,7 @@ function TauriTitlebar() {
       <div className="flex items-center gap-[8px] pointer-events-none">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
           <rect x="2.5" y="2.5" width="19" height="19" rx="5.5" fill="#8465ff" />
-          <rect x="7.5" y="7.5" width="9" height="9" rx="2.5" fill="#151412" />
+          <rect x="7.5" y="7.5" width="9" height="9" rx="2.5" fill="none" stroke="#151412" strokeWidth="1.8" />
         </svg>
         <span className="font-['NB_International:Regular',sans-serif] text-[14.333px]" style={{ color: '#8465ff' }}>Ctrl-Project</span>
       </div>

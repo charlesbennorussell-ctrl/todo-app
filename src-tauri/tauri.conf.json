@@ -20,7 +20,7 @@
         "minWidth": 800,
         "minHeight": 600,
         "url": "https://charlesbennorussell-ctrl.github.io/todo-app/",
-        "decorations": false,
+        "decorations": true,
         "resizable": true,
         "fullscreen": false,
         "dragDropEnabled": false
