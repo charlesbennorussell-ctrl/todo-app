@@ -581,7 +581,7 @@ function TaskCheckbox({ completed, started = false, onToggle, accent }: { comple
   const doneFill = '#383838';
   // Tick stroke is the page background color so the check reads as a cut-out shape from the
   // muted fill — same look as the original design, just on the dimmer fill.
-  const tickStroke = '#282828';
+  const tickStroke = '#1c1b19';
   const fill = completed ? doneFill : (started ? startedFill : 'transparent');
   const border = completed ? doneFill : (started ? startedFill : idleStroke);
   return (
@@ -644,7 +644,7 @@ function AssigneeBadge({ letter, tone, hollow = false, dim = false, active = fal
     <div className="relative shrink-0 -mt-[2px] flex items-center justify-center" title={letter} style={{ width: widthPx, height: 12.333, borderRadius: 999, backgroundColor: hollow ? 'transparent' : color, border: hollow ? `1px solid ${color}` : 'none' }}>
       <span
         className="assignee-initial font-['Untitled_Sans:Heavy',sans-serif] font-extrabold leading-none not-italic text-[7.5px] text-center"
-        style={{ color: hollow ? color : '#282828' }}
+        style={{ color: hollow ? color : '#1c1b19' }}
       >{letter}</span>
     </div>
   );
@@ -981,7 +981,7 @@ function SortableTaskItem({
   // Live milestones: vivid purple. Expired milestones (lingering for 24h): faint purple.
   const milestonePurpleClass = isExpiredMilestone ? 'text-[#4f4290]' : 'text-[#8465ff]';
   // Completed tasks fade to a near-background color across ALL their text — no strikethrough,
-  // just visually quieted. #474747 sits a few steps off the #282828 page background, slightly
+  // just visually quieted. #474747 sits a few steps off the #1c1b19 page background, slightly
   // brighter than the calendar's #383838 so completed rows in list / project / dashboard read
   // at arm's length. (Calendar keeps its own #383838 since its tighter card density already
   // pulls the eye.) Progressively bumped (3d3d3d → 424242 → 474747, ~2% per step) to make
@@ -1660,7 +1660,7 @@ function StickyOverlay({ scrollElRef }: { scrollElRef: React.RefObject<HTMLDivEl
   // below the drag overlay (z-50).
   //
   // LAYERED STRUCTURE (bottom → top):
-  //   1. bg layer    — single always-opaque bg-[#282828] rect covering the full
+  //   1. bg layer    — single always-opaque bg-[#1c1b19] rect covering the full
   //                    overlay zone (date height + 37 for category if active).
   //                    NEVER animates opacity, so the backdrop is always 100%
   //                    opaque. Earlier we combined bg + label in one motion.div
@@ -1679,7 +1679,7 @@ function StickyOverlay({ scrollElRef }: { scrollElRef: React.RefObject<HTMLDivEl
           no fade-related alpha gaps appear. */}
       {bgHeight > 0 && (
         <div
-          className="absolute top-0 left-0 right-0 bg-[#282828]"
+          className="absolute top-0 left-0 right-0 bg-[#1c1b19]"
           style={{ height: bgHeight }}
         />
       )}
@@ -1926,7 +1926,7 @@ function BottomBar({ mode, onSetMode, onAdd }: { mode: AppMode; onSetMode: (m: A
     // Vertical nav rail hugging the far-left edge. Top cluster: the four view icons + the
     // add-task button. Settings is pinned to the bottom (mt-auto). Tooltips fly out to the
     // RIGHT of each icon (the bar is only 52px wide). The Assign rail lives just to its right.
-    <div className="fixed left-0 top-0 bottom-0 w-[52px] bg-[#232323] flex flex-col items-center py-[22px] z-40">
+    <div className="fixed left-0 top-0 bottom-0 w-[66px] bg-[#232323] flex flex-col items-center py-[22px] z-40">
       <div className="flex flex-col gap-[26px] items-center">
         {/* Order: Focus, Calendar, List, Project. Each icon carries a styled hover tooltip
             (the native title= delay/skin read as missing). */}
@@ -4448,7 +4448,7 @@ function WeekCalendarMode({
                 const categoryDimmed = !!activeTask && activeTask.list !== listId;
                 return (
                   <CalendarDayDroppable key={listId} id={`cal:${iso}:${listId}`} isEmpty={bucket.length === 0 && dayMilestones.length === 0} slotHeight={activeSlotHeight} className="pb-[37px] last:pb-0">
-                    <div className="group/band h-[20px] px-[16px] pb-[6px] flex items-center gap-2 sticky top-0 z-10 bg-[#282828]">
+                    <div className="group/band h-[20px] px-[16px] pb-[6px] flex items-center gap-2 sticky top-0 z-10 bg-[#1c1b19]">
                       <p onClick={scrollBandToTop} className={`${bodyFont} text-[#5e5e5e] cursor-pointer`}>{label}</p>
                       <button
                         type="button"
@@ -4579,7 +4579,7 @@ function WeekCalendarMode({
                   const cellId = `cal:${nwToken}:${listId}`;
                   return (
                     <CalendarDayDroppable key={listId} id={cellId} isEmpty={bucket.length === 0 && bandMilestones.length === 0} slotHeight={activeSlotHeight} className="pb-[37px] last:pb-0">
-                      <div className="group/band h-[20px] px-[16px] pb-[6px] flex items-center gap-2 sticky top-0 z-10 bg-[#282828]">
+                      <div className="group/band h-[20px] px-[16px] pb-[6px] flex items-center gap-2 sticky top-0 z-10 bg-[#1c1b19]">
                         <p onClick={scrollBandToTop} className={`${bodyFont} text-[#5e5e5e] cursor-pointer`}>{label}</p>
                         <button
                           type="button"
@@ -9388,11 +9388,12 @@ export default function App() {
       onDragMove={(ev) => {
         const ae = ev.activatorEvent as PointerEvent | null;
         const x = (ae && typeof ae.clientX === 'number' ? ae.clientX : 0) + ev.delta.x;
-        // Left-only assign tray: enter the left edge zone while dragging a task → the tray
-        // pulls out; drift back toward the middle → it tucks away.
+        // Right-edge assign tray: enter the right edge zone while dragging a task → the tray
+        // pulls out; drift back toward the middle → it tucks away. ('left' is just the tray's
+        // state key, kept as-is; the tray itself now lives on the right.)
         if (activeType === 'task' || activeType === 'projTask') {
-          if (x < 110 && mode !== 'settings') setEdgeDrawer('left');
-          else if (x > 360) setEdgeDrawer(null);
+          if (x > window.innerWidth - 110 && mode !== 'settings') setEdgeDrawer('left');
+          else if (x < window.innerWidth - 360) setEdgeDrawer(null);
         }
       }}
       onDragEnd={(ev) => { setEdgeDrawer(null); handleDragEnd(ev); }}
@@ -9436,7 +9437,7 @@ export default function App() {
           beside it, so pl-[74px] carves the combined space and the flowing views start clear of
           both. Fixed overlays (nav, assign rail, tray, modals) are position:fixed → unaffected by
           this padding. PIP has neither nav nor rail, so no gutter there. */}
-      <div className={`relative h-screen bg-[#282828] overflow-hidden ${PIP_MODE ? '' : 'pl-[74px]'}`}>
+      <div className={`relative h-screen bg-[#1c1b19] overflow-hidden ${PIP_MODE ? '' : 'pl-[74px] pr-[42px]'}`}>
         {/* PIP quick-view: an always-on-top mini-window (?pip=1, opened by the Tauri shell's
             global shortcut) that renders the FOCUS view below with NO BottomBar / tray chrome.
             Edits sync live via Liveblocks, so changes here land in the main window instantly.
@@ -9585,12 +9586,19 @@ export default function App() {
           const stackGap = 62;
           // Stack the side column into ONE flow only while it FITS the available height; the moment
           // it would overflow — shorter window OR more milestones/clients — snap to the two-column
-          // split. Fixed rows: Milestones + Clients headers (2×37) + three stackGap gaps; plus
-          // every 37px list row. (winH - 180 ≈ the grid height below the header/nav chrome.)
-          const estStackH = 74 + 3 * stackGap + 37 * (focusMilestones.length + proj2SortedClients.length);
+          // split. Fixed rows: Milestones + Search + Clients headers (3×37) + four stackGap gaps;
+          // plus every 37px list row. (winH - 180 ≈ the grid height below the header/nav chrome.)
+          const estStackH = 111 + 4 * stackGap + 37 * (focusMilestones.length + proj2SortedClients.length);
           const stackSide = !PIP_MODE && estStackH <= (winH - 180);
           // Shared side pieces — the stacked flow and the split columns compose from the same nodes.
           const focusClearFilter = (focusClientId || focusProjectId || focusMilestoneId) ? () => { setFocusClientId(null); setFocusProjectId(null); setFocusMilestoneId(null); } : undefined;
+          const focusSearchRow = (
+            <div className="shrink-0 h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px]">
+              <Search size={12} className="shrink-0 text-[#656464]" />
+              <input value={focusSearch} onChange={(e) => setFocusSearch(e.target.value)} placeholder="Search" className="focus-search-input flex-1 min-w-0 bg-transparent border-0 outline-none text-white text-[14px]" />
+              {focusSearch && (<button type="button" onClick={() => setFocusSearch('')} className="shrink-0 text-[#a8a8a8] hover:text-white transition-colors" aria-label="Clear search"><X size={13} /></button>)}
+            </div>
+          );
           const focusMilestonesHeader = (
             <div className="group shrink-0 h-[37px] flex items-center gap-2 px-[31px]">
               <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">Milestones</p>
@@ -9690,6 +9698,8 @@ export default function App() {
                 {!PIP_MODE && stackSide && (
                   <div className="min-w-0 min-h-0 overflow-y-auto flex flex-col">
                     {focusMilestonesHeader}
+                    <div className="shrink-0" style={{ height: stackGap }} aria-hidden />
+                    {focusSearchRow}
                     <div className="shrink-0" style={{ height: stackGap }} aria-hidden />
                     {renderReadonlyBucket(focusMilestones, undefined, true, milestoneClickTo, focusMilestoneId)}
                     <div className="shrink-0" style={{ height: stackGap }} aria-hidden />
@@ -9895,7 +9905,7 @@ export default function App() {
                       <div key={`${colKey}-${listId}`} className={cellTasks.length > 0 ? 'pb-[24px] last:pb-0' : 'pb-[12px] last:pb-0'}>
                         {/* Band label — same treatment as the calendar's in-column
                             category labels (grey, 20px row, 16px inset) + hover +. */}
-                        <div className="group/band h-[20px] px-[16px] pb-[6px] flex items-center gap-2 sticky top-0 z-10 bg-[#282828]">
+                        <div className="group/band h-[20px] px-[16px] pb-[6px] flex items-center gap-2 sticky top-0 z-10 bg-[#1c1b19]">
                           <p onClick={scrollBandToTop} className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap text-[#5e5e5e] cursor-pointer">{bandLabel}</p>
                           <button
                             type="button"
@@ -10033,7 +10043,7 @@ export default function App() {
                       scroll body is replaced by a single full-fill rectangle:
                       bg = the row hover-tint (rgba(255,255,255,0.03)), so it
                       reads as a soft "drop a task here" surface; centered text
-                      "Select a Task" in the page background color (#282828) so
+                      "Select a Task" in the page background color (#1c1b19) so
                       it's a quiet emboss rather than a foreground label. The
                       rectangle takes the full remaining flex space below the
                       column title — no gap, no extra padding chrome — so the
@@ -10724,7 +10734,7 @@ export default function App() {
                       </div>
                     );
                   })()}
-                  {/* Drag-over overlay: covers the column fully (solid #282828) when
+                  {/* Drag-over overlay: covers the column fully (solid #1c1b19) when
                       the user drags an external file over the column AND there are
                       already images visible (the empty-state path doesn't need
                       this — its drop zones are always on screen). The same three
@@ -10732,7 +10742,7 @@ export default function App() {
                       one ingests the file. pointer-events:none on the wrapper text
                       so only the FocusDropZones are draggable targets. */}
                   {refsDragActive && allImages.length > 0 && (projectKey || taskKey) && (
-                    <div className="absolute inset-0 z-50 bg-[#282828] flex flex-col items-center justify-center gap-3 p-6">
+                    <div className="absolute inset-0 z-50 bg-[#1c1b19] flex flex-col items-center justify-center gap-3 p-6">
                       <span className="text-[#656464] text-[18px] font-bold pointer-events-none">Add Images</span>
                       <p className="text-[#656464] text-[13px] text-center max-w-[480px] pointer-events-none">
                         Drop Into One of the Zones Below
@@ -10973,9 +10983,9 @@ export default function App() {
             <div
               onMouseEnter={() => setEdgeDrawer('left')}
               onMouseLeave={() => { setEdgeDrawer((d) => (d === 'left' ? null : d)); cancelHoverExpand(); setEdgeExpandedClient(null); }}
-              className={`fixed left-[52px] top-[104px] bottom-[84px] w-[320px] z-40 bg-[#333333] flex flex-col duration-300 ease-in-out ${trayDrag ? 'transition-opacity' : 'transition-[transform,opacity]'}`}
+              className={`fixed right-0 top-0 bottom-0 w-[320px] pt-[104px] z-40 bg-[#333333] flex flex-col duration-300 ease-in-out ${trayDrag ? 'transition-opacity' : 'transition-[transform,opacity]'}`}
               style={{
-                transform: (trayOpen || trayDrag) ? 'translateX(0)' : 'translateX(-320px)',
+                transform: (trayOpen || trayDrag) ? 'translateX(0)' : 'translateX(320px)',
                 opacity: (trayDrag && !trayOpen) ? 0 : 1,
                 pointerEvents: trayOpen ? 'auto' : (trayDrag ? 'none' : 'auto'),
               }}
@@ -11042,27 +11052,17 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => setEdgeDrawer('left')}
-                  style={{ right: -22 }}
+                  style={{ left: -22 }}
                   className="absolute top-0 bottom-0 w-[22px] bg-[#333333] flex items-center justify-center"
                   aria-label="Assign drawer"
                   title="Assign project / person"
                 >
-                  <ChevronRight size={12} className={`text-[#a8a8a8] shrink-0 transition-transform duration-300 ${trayOpen ? 'rotate-180' : ''}`} />
+                  <ChevronRight size={12} className={`text-[#a8a8a8] shrink-0 transition-transform duration-300 ${trayOpen ? '' : 'rotate-180'}`} />
                 </button>
               </div>
           );
         })()}
         {!PIP_MODE && <BottomBar mode={mode} onSetMode={setMode} onAdd={addAndEditTask} />}
-        {/* Top-bar search — fixed to the top-right, on the TopHeader's line (paddingTop 30 + the
-            37px header row). Shown on every task view (not Settings/PIP). Wired to focusSearch, so
-            it live-filters the Focus view today; other views show it but don't filter yet. */}
-        {!PIP_MODE && mode !== 'settings' && (
-          <div className="fixed top-[30px] right-[35px] h-[37px] w-[240px] z-40 flex items-center gap-2">
-            <Search size={12} className="shrink-0 text-[#656464]" />
-            <input value={focusSearch} onChange={(e) => setFocusSearch(e.target.value)} placeholder="Search" className="focus-search-input flex-1 min-w-0 bg-transparent border-0 outline-none text-white text-[14px]" />
-            {focusSearch && (<button type="button" onClick={() => setFocusSearch('')} className="shrink-0 text-[#a8a8a8] hover:text-white transition-colors" aria-label="Clear search"><X size={13} /></button>)}
-          </div>
-        )}
 
         <AnimatePresence>
           {pendingTrash && (
