@@ -2,6 +2,8 @@ import { Fragment, memo, useState, useCallback, useMemo, useRef, useEffect, useL
 import { flushSync } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { Plus, X, List, FolderTree, SlidersHorizontal as SettingsIcon, Folder, Trash2, Calendar as CalendarIcon, ChevronLeft, ChevronRight, ArrowUp, LayoutDashboard, Heart, FileText, Search, ExternalLink } from 'lucide-react';
+// Google Material Symbols (outline) for the left nav rail — a harmonized Material icon set.
+import { MdOutlineSpaceDashboard, MdOutlineCalendarMonth, MdOutlineViewList, MdOutlineAccountTree, MdOutlineSettings, MdAdd } from 'react-icons/md';
 import { createPortal } from 'react-dom';
 import {
   DndContext,
@@ -1941,10 +1943,10 @@ function BottomBar({ mode, onSetMode, onAdd }: { mode: AppMode; onSetMode: (m: A
         {/* Order: Focus, Calendar, List, Project. Each icon carries a styled hover tooltip
             (the native title= delay/skin read as missing). */}
         {([
-          { m: 'focus', label: 'Focus', Icon: LayoutDashboard },
-          { m: 'calendar', label: 'Calendar', Icon: CalendarIcon },
-          { m: 'dashboard', label: 'List', Icon: List },
-          { m: 'projectView', label: 'Project', Icon: FolderTree },
+          { m: 'focus', label: 'Focus', Icon: MdOutlineSpaceDashboard },
+          { m: 'calendar', label: 'Calendar', Icon: MdOutlineCalendarMonth },
+          { m: 'dashboard', label: 'List', Icon: MdOutlineViewList },
+          { m: 'projectView', label: 'Project', Icon: MdOutlineAccountTree },
         ] as { m: AppMode; label: string; Icon: React.ComponentType<{ size?: number }> }[]).map(({ m, label, Icon }) => (
           <div key={m} className="group relative flex items-center">
             <button aria-label={label} onClick={() => onSetMode(m)} className={iconClass(mode === m)}><Icon size={22} /></button>
@@ -1952,14 +1954,14 @@ function BottomBar({ mode, onSetMode, onAdd }: { mode: AppMode; onSetMode: (m: A
           </div>
         ))}
         <motion.button title="Add task" aria-label="Add task" onClick={onAdd} whileHover={{ scale: 1.06 }} whileTap={{ scale: 0.94 }} className="size-[27px] rounded-full bg-[#7363FF] flex items-center justify-center shadow-lg">
-          <Plus size={16} color="#151412" strokeWidth={2.5} />
+          <MdAdd size={18} color="#151412" />
         </motion.button>
       </div>
       {/* Bottom cluster: the user avatar sits just above Settings, both pinned to the bottom. */}
       <div className="mt-auto flex flex-col items-center gap-[22px]">
         {/* Account chip — the user's initial inside a stroked ring, like most apps' avatar. */}
         <div className="size-[30px] rounded-full border border-[#4a4a4a] flex items-center justify-center text-[#a8a8a8] text-[12px] font-medium select-none" aria-label="Account">B</div>
-        <button title="Settings" aria-label="Settings" onClick={() => onSetMode(mode === 'settings' ? prevModeRef.current : 'settings')} className={iconClass(mode === 'settings')}><SettingsIcon size={22} /></button>
+        <button title="Settings" aria-label="Settings" onClick={() => onSetMode(mode === 'settings' ? prevModeRef.current : 'settings')} className={iconClass(mode === 'settings')}><MdOutlineSettings size={22} /></button>
       </div>
     </div>
   );
