@@ -9796,15 +9796,15 @@ export default function App() {
                     Information + References are parked behind FOCUS_SHOW_INFO /
                     FOCUS_SHOW_REFERENCES while ctrl-assets takes over reference handling. */}
                 {/* STACKED side column (content fits): one continuous flow that mirrors the day
-                    columns' rhythm. Milestones label sits at the top (aligned with the "Tue 21"
-                    date headers); a 74px master gap (= the date→Work spacing) drops Search onto the
-                    Work band's line; then the SAME fixed 74px gap separates every section (Search →
-                    milestones → Clients → client list). Hard gaps, never flex. */}
+                    columns' rhythm. Search sits at the top (aligned with the "Tue 21" date headers);
+                    a 74px master gap drops the Milestones header onto the Work band's line, kept
+                    directly above its own cards; then the SAME fixed 74px gap separates every section
+                    (Search → Milestones header → milestones → Clients → client list). Hard gaps. */}
                 {!PIP_MODE && stackSide && (
                   <div className="min-w-0 min-h-0 overflow-y-auto flex flex-col">
-                    {focusMilestonesHeader}
-                    <div className="shrink-0" style={{ height: stackGap }} aria-hidden />
                     {focusSearchRow}
+                    <div className="shrink-0" style={{ height: stackGap }} aria-hidden />
+                    {focusMilestonesHeader}
                     <div className="shrink-0" style={{ height: stackGap }} aria-hidden />
                     {renderReadonlyBucket(focusMilestones, undefined, true, milestoneClickTo, focusMilestoneId)}
                     <div className="shrink-0" style={{ height: stackGap }} aria-hidden />
