@@ -3901,7 +3901,7 @@ function MilestoneCardView({ task, projects, clients, showDate, categoryDimmed =
   // Inline style because Tailwind arbitrary opacity on hex colors wasn't reliably generating the CSS.
   const cardBgStyle: React.CSSProperties = { backgroundColor: 'rgba(132, 101, 255, 0.10)' };
   return (
-    <div onClick={onClick} onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onQuickEdit?.(); }} style={cardBgStyle} className="relative mx-[6px] mb-[4px] group cursor-pointer h-[30px]">
+    <div onClick={onClick} onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onQuickEdit?.(); }} style={cardBgStyle} className="relative mx-[6px] mb-[4px] group cursor-pointer h-[30px] rounded-[3.333px]">
       {/* One continuous line — title (truncates first), then client › project, assignees, date, +.
           Coming-Up cards stay ONE line in BOTH the calendar and focus views. */}
       <div className="px-[10px] flex flex-row items-center gap-[6px] h-full">
@@ -4170,7 +4170,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
       ref={setNodeRef}
       style={style}
       data-cal-card={task.id}
-      className={`relative mx-[6px] mb-[4px] group ${singleLine ? 'min-h-[30px]' : 'min-h-[45px]'} flex ${isTodayCard ? '' : 'bg-white/[0.03]'} ${dimmed ? 'opacity-60' : ''}`}
+      className={`relative mx-[6px] mb-[4px] group rounded-[3.333px] ${singleLine ? 'min-h-[30px]' : 'min-h-[45px]'} flex ${isTodayCard ? '' : 'bg-white/[0.03]'} ${dimmed ? 'opacity-60' : ''}`}
       animate={{ opacity: isDragging ? 0 : 1 }}
       transition={{ opacity: { duration: 0.12, ease: 'easeOut' } }}
     >
@@ -11237,7 +11237,7 @@ export default function App() {
                 transition={{ scale: { type: "spring", stiffness: 600, damping: 30, mass: 0.4 } }}
                 // Translucent so you can see the category underneath while dragging to
                 // recategorize: purple wash for a TODAY card, gray for everything else.
-                className="overflow-hidden"
+                className="overflow-hidden rounded-[3.333px]"
                 style={{ width: activeRectWidth ?? 220, height: activeRectHeight ?? 55, willChange: 'transform', backgroundColor: activeCalendarCellId && activeCalendarCellId.startsWith(`cal:${dateToISO(new Date())}:`) ? 'rgba(132, 101, 255, 0.10)' : 'rgba(58, 58, 58, 0.6)' }}
               >
                 <CalendarCardBody task={activeTask} projects={projects} clients={clients} taskOrder={taskOrder} isTodayCard={!!activeCalendarCellId && activeCalendarCellId.startsWith(`cal:${dateToISO(new Date())}:`)} stacked={mode === 'calendar'} />
