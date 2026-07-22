@@ -65,6 +65,9 @@ const IS_TAURI = typeof window !== 'undefined' && !!(window as { __TAURI__?: unk
 const SHOW_TITLEBAR = false && IS_TAURI && !PIP_MODE;
 if (typeof document !== 'undefined') {
   document.documentElement.style.setProperty('--titlebar-h', SHOW_TITLEBAR ? '40px' : '0px');
+  // Re-apply the user's saved theme colors over the index.css defaults, before first paint.
+  const savedBg = localStorage.getItem('app-bg'); if (savedBg) document.documentElement.style.setProperty('--app-bg', savedBg);
+  const savedAccent = localStorage.getItem('app-accent'); if (savedAccent) document.documentElement.style.setProperty('--app-accent', savedAccent);
 }
 
 // Custom Tauri title bar: a drag region with a centered accent logo + wordmark and Windows-style
@@ -95,10 +98,10 @@ function TauriTitlebar() {
     >
       <div className="flex items-center gap-[8px] pointer-events-none">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
-          <rect x="2.5" y="2.5" width="19" height="19" rx="5.5" fill="#8465ff" />
+          <rect x="2.5" y="2.5" width="19" height="19" rx="5.5" style={{ fill: 'var(--app-accent)' }} />
           <rect x="7.5" y="7.5" width="9" height="9" rx="2.5" fill="none" stroke="#151412" strokeWidth="1.8" />
         </svg>
-        <span className="font-['NB_International:Regular',sans-serif] text-[14.333px]" style={{ color: '#8465ff' }}>Ctrl-Project</span>
+        <span className="font-['NB_International:Regular',sans-serif] text-[14.333px]" style={{ color: 'var(--app-accent)' }}>Ctrl-Project</span>
       </div>
       <div className="absolute right-0 top-0 h-full flex">
         <button type="button" aria-label="Minimize" className={`${ctrl} hover:bg-white/10 hover:text-white`} onClick={() => act('minimize')}>
@@ -111,6 +114,23 @@ function TauriTitlebar() {
           <svg width="10" height="10" viewBox="0 0 10 10"><line x1="0" y1="0" x2="10" y2="10" stroke="currentColor" strokeWidth="1" /><line x1="10" y1="0" x2="0" y2="10" stroke="currentColor" strokeWidth="1" /></svg>
         </button>
       </div>
+    </div>
+  );
+}
+
+// One row of the Settings → Colors module: a native color well + hex readout that writes a CSS
+// custom property live (and persists it). Everything themeable reads var(--app-bg)/var(--app-accent),
+// so moving this well repaints the whole app instantly. Reset clears the override back to default.
+function ThemeColorPicker({ varName, storageKey, label, fallback }: { varName: string; storageKey: string; label: string; fallback: string }) {
+  const [color, setColor] = useState(() => (typeof localStorage !== 'undefined' && localStorage.getItem(storageKey)) || fallback);
+  const apply = (v: string) => { setColor(v); document.documentElement.style.setProperty(varName, v); try { localStorage.setItem(storageKey, v); } catch { /* ignore */ } };
+  const reset = () => { setColor(fallback); document.documentElement.style.setProperty(varName, fallback); try { localStorage.removeItem(storageKey); } catch { /* ignore */ } };
+  return (
+    <div className="flex flex-row items-center gap-3 text-[13px]">
+      <input type="color" value={color} onChange={(e) => apply(e.target.value)} aria-label={label} className="w-[28px] h-[28px] rounded-md cursor-pointer bg-transparent border border-[#333] p-0" />
+      <span className="text-white w-[84px]">{label}</span>
+      <span className="text-[#656464] uppercase">{color}</span>
+      {color.toLowerCase() !== fallback.toLowerCase() && <button type="button" onClick={reset} className="text-[#656464] hover:text-white transition-colors">reset</button>}
     </div>
   );
 }
@@ -649,7 +669,7 @@ function TaskCheckbox({ completed, started = false, onToggle, accent }: { comple
   const doneFill = '#383838';
   // Tick stroke is the page background color so the check reads as a cut-out shape from the
   // muted fill — same look as the original design, just on the dimmer fill.
-  const tickStroke = '#1c1b19';
+  const tickStroke = 'var(--app-bg)';
   const fill = completed ? doneFill : (started ? startedFill : 'transparent');
   const border = completed ? doneFill : (started ? startedFill : idleStroke);
   return (
@@ -699,8 +719,8 @@ function AssigneeBadge({ letter, tone, hollow = false, dim = false, active = fal
   // `dim` matches the muted palette used for completed tasks; `active` swaps the fill to white
   // for the panel's "selected resource" treatment so the badge pops alongside its bold-white name.
   // `faint` (used for expired milestones) drops the scheduled purple to its faint variant.
-  // `dimColor` overrides the dim fill (dim-today cards pass the app bg #1c1b19 so the circle carves).
-  const scheduledColor = faint ? '#4f4290' : '#8465FF';
+  // `dimColor` overrides the dim fill (dim-today cards pass the app bg var(--app-bg) so the circle carves).
+  const scheduledColor = faint ? '#4f4290' : 'var(--app-accent)';
   const color = dim ? dimColor : active ? '#ffffff' : (tone === 'scheduled' ? scheduledColor : '#656464');
   // Multi-character shorts (auto-disambiguated when two people share an initial) render as a
   // pill instead of a circle: same height, expanded width, fully rounded ends. The width grows
@@ -713,7 +733,7 @@ function AssigneeBadge({ letter, tone, hollow = false, dim = false, active = fal
     <div className="relative shrink-0 -mt-[2px] flex items-center justify-center" title={letter} style={{ width: widthPx, height: 12.333, borderRadius: 999, backgroundColor: hollow ? 'transparent' : color, border: hollow ? `1px solid ${color}` : 'none' }}>
       <span
         className="assignee-initial font-['Untitled_Sans:Heavy',sans-serif] font-extrabold leading-none not-italic text-[7.5px] text-center"
-        style={{ color: hollow ? color : '#1c1b19' }}
+        style={{ color: hollow ? color : 'var(--app-bg)' }}
       >{letter}</span>
     </div>
   );
@@ -761,16 +781,16 @@ function taskOrderSlots(order: TaskOrder, hasProject: boolean, hasClient: boolea
 // Sized exactly like the DeadlineArrow's polygon (4×8 in a 12-tall wrapper, with -mt-[2px]
 // to land on the text's baseline band — see DeadlineArrow). Tone:
 //   - 'default'   → #656464 (matches DeadlineArrow's fill)
-//   - 'milestone' → #8465ff (matches milestone purple)
+//   - 'milestone' → var(--app-accent) (matches milestone purple)
 function Arrowhead({ dim = false, tone = 'default', faint = false, color }: { dim?: boolean; tone?: 'default' | 'milestone'; faint?: boolean; color?: string }) {
   // `faint` (used for expired milestones) drops the milestone purple to its faint variant.
-  // `color` hard-overrides everything (dim-today cards pass the app bg #1c1b19 so the arrow carves).
-  const milestoneFill = faint ? '#4f4290' : '#8465ff';
+  // `color` hard-overrides everything (dim-today cards pass the app bg var(--app-bg) so the arrow carves).
+  const milestoneFill = faint ? '#4f4290' : 'var(--app-accent)';
   const fill = color || (dim ? '#383838' : tone === 'milestone' ? milestoneFill : '#656464');
   return (
     <span className="inline-flex items-center shrink-0 mx-[4px] -mt-[2px] align-middle" style={{ height: 12 }}>
       <svg width="4" height="8" viewBox="0 0 4 8" fill="none">
-        <polygon points="0,0 4,4 0,8" fill={fill} />
+        <polygon points="0,0 4,4 0,8" style={{ fill }} />
       </svg>
     </span>
   );
@@ -790,8 +810,8 @@ function DeadlineArrow({ dim = false, small = false, color }: { dim?: boolean; s
   return (
     <div className="h-[12px] relative shrink-0 -mt-[2px]" style={{ width: wrapW }}>
       <svg className="absolute block inset-0" width={wrapW} height={12} viewBox={`${lineStart} 0 ${18 - lineStart} 12`} fill="none">
-        <line x1={lineStart} y1="6" x2="14" y2="6" stroke={fill} strokeWidth="1" />
-        <polygon points="14,2 18,6 14,10" fill={fill} />
+        <line x1={lineStart} y1="6" x2="14" y2="6" style={{ stroke: fill }} strokeWidth="1" />
+        <polygon points="14,2 18,6 14,10" style={{ fill }} />
       </svg>
     </div>
   );
@@ -1049,9 +1069,9 @@ function SortableTaskItem({
   // purple so it's visible (lingering) but visually quieted vs. live milestones.
   const isExpiredMilestone = isScheduled && !!task.deadline && task.deadline < todayISO();
   // Live milestones: vivid purple. Expired milestones (lingering for 24h): faint purple.
-  const milestonePurpleClass = isExpiredMilestone ? 'text-[#4f4290]' : 'text-[#8465ff]';
+  const milestonePurpleClass = isExpiredMilestone ? 'text-[#4f4290]' : 'text-[var(--app-accent)]';
   // Completed tasks fade to a near-background color across ALL their text — no strikethrough,
-  // just visually quieted. #474747 sits a few steps off the #1c1b19 page background, slightly
+  // just visually quieted. #474747 sits a few steps off the var(--app-bg) page background, slightly
   // brighter than the calendar's #383838 so completed rows in list / project / dashboard read
   // at arm's length. (Calendar keeps its own #383838 since its tighter card density already
   // pulls the eye.) Progressively bumped (3d3d3d → 424242 → 474747, ~2% per step) to make
@@ -1622,7 +1642,7 @@ function SectionHeader({ title, onAdd, sticky, tall, accent }: { title: string; 
   return (
     <div {...dataAttrs} className={`w-full box-border ${extension}`}>
       <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px]">
-        <p className={`font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap ${accent ? 'text-[#8465ff]' : 'text-[#656464]'}`}>{title}</p>
+        <p className={`font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap ${accent ? 'text-[var(--app-accent)]' : 'text-[#656464]'}`}>{title}</p>
         {onAdd && <AddPlus onClick={onAdd} />}
       </div>
     </div>
@@ -1730,7 +1750,7 @@ function StickyOverlay({ scrollElRef }: { scrollElRef: React.RefObject<HTMLDivEl
   // below the drag overlay (z-50).
   //
   // LAYERED STRUCTURE (bottom → top):
-  //   1. bg layer    — single always-opaque bg-[#1c1b19] rect covering the full
+  //   1. bg layer    — single always-opaque bg-[var(--app-bg)] rect covering the full
   //                    overlay zone (date height + 37 for category if active).
   //                    NEVER animates opacity, so the backdrop is always 100%
   //                    opaque. Earlier we combined bg + label in one motion.div
@@ -1749,7 +1769,7 @@ function StickyOverlay({ scrollElRef }: { scrollElRef: React.RefObject<HTMLDivEl
           no fade-related alpha gaps appear. */}
       {bgHeight > 0 && (
         <div
-          className="absolute top-0 left-0 right-0 bg-[#1c1b19]"
+          className="absolute top-0 left-0 right-0 bg-[var(--app-bg)]"
           style={{ height: bgHeight }}
         />
       )}
@@ -1767,7 +1787,7 @@ function StickyOverlay({ scrollElRef }: { scrollElRef: React.RefObject<HTMLDivEl
               transition={{ duration: 0.35, ease: [0.16, 1, 0.3, 1] }}
               className="group absolute inset-0 box-border flex flex-row gap-2 items-center px-[31px] pointer-events-auto"
             >
-              <p className={`font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap ${active.dateAccent ? 'text-[#8465ff]' : 'text-[#656464]'}`}>{active.date}</p>
+              <p className={`font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap ${active.dateAccent ? 'text-[var(--app-accent)]' : 'text-[#656464]'}`}>{active.date}</p>
               {active.dateHasAdd && (
                 <button type="button" onClick={clickAdd('date')} className="opacity-0 group-hover:opacity-100 text-[#656464] hover:text-white transition-opacity" aria-label="Add task"><Plus size={14} /></button>
               )}
@@ -1809,7 +1829,7 @@ function EdgeDropRow({ id, children }: { id: string; children: React.ReactNode }
   // isOver → strong purple wash: signals "drop here and the task moves to this project /
   // gets this assignee." Purple matches the app's accent for project/assignment actions.
   return (
-    <div ref={setNodeRef} className={`h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px] transition-colors ${isOver ? 'bg-[#8465ff]/30' : 'hover:bg-white/[0.04]'}`}>
+    <div ref={setNodeRef} className={`h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px] transition-colors ${isOver ? 'bg-[var(--app-accent)]/30' : 'hover:bg-white/[0.04]'}`}>
       {children}
     </div>
   );
@@ -1832,7 +1852,7 @@ function EdgeClientRow({
       onMouseEnter={onMouseEnter}
       onMouseLeave={onMouseLeave}
       onClick={onClick}
-      className={`group h-[37px] w-full text-left box-border flex flex-row gap-2 items-center px-[31px] transition-colors ${isOver ? 'bg-[#8465ff]/30' : 'hover:bg-white/[0.05]'}`}
+      className={`group h-[37px] w-full text-left box-border flex flex-row gap-2 items-center px-[31px] transition-colors ${isOver ? 'bg-[var(--app-accent)]/30' : 'hover:bg-white/[0.05]'}`}
     >
       <ChevronRight size={12} className={`text-[#5e5e5e] transition-transform ${expanded ? 'rotate-90' : ''}`} />
       <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis text-white">{client.name || client.short}</span>
@@ -1851,7 +1871,7 @@ function ProjectsHeaderDropZone({ onClearFilter }: { onClearFilter?: () => void 
     <div
       ref={setNodeRef}
       onClick={onClearFilter}
-      className={`shrink-0 group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] transition-colors ${onClearFilter ? 'cursor-pointer' : ''} ${isOver ? 'bg-[#8465ff]/20' : ''}`}
+      className={`shrink-0 group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] transition-colors ${onClearFilter ? 'cursor-pointer' : ''} ${isOver ? 'bg-[var(--app-accent)]/20' : ''}`}
       style={{ marginBottom: SPACING.dcr }}
     >
       <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white whitespace-nowrap">Clients + Projects{isOver ? ' — drop to un-nest' : ''}</p>
@@ -1890,7 +1910,7 @@ function FocusProjectRow({
       {...attributes}
       {...listeners}
       onClick={onClick}
-      className={`group h-[37px] w-full text-left box-border flex flex-row gap-2 items-center px-[31px] cursor-grab active:cursor-grabbing transition-colors ${isDragging ? 'opacity-40' : ''} ${isOver ? 'bg-[#8465ff]/20' : active ? 'bg-[#8465ff]/15' : 'hover:bg-white/[0.03]'}`}
+      className={`group h-[37px] w-full text-left box-border flex flex-row gap-2 items-center px-[31px] cursor-grab active:cursor-grabbing transition-colors ${isDragging ? 'opacity-40' : ''} ${isOver ? 'bg-[var(--app-accent)]/20' : active ? 'bg-[var(--app-accent)]/15' : 'hover:bg-white/[0.03]'}`}
       style={{ paddingLeft: 31 + depth * 24 }}
     >
       {expandable ? (
@@ -1907,7 +1927,7 @@ function FocusProjectRow({
       {client?.short && depth === 0 && (
         <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap text-[#656464]">{client.short}</span>
       )}
-      <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis ${active ? 'text-[#8465ff]' : 'text-white'}`}>{project.name || 'Untitled'}</span>
+      <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis ${active ? 'text-[var(--app-accent)]' : 'text-white'}`}>{project.name || 'Untitled'}</span>
       {count > 0 && <span className="text-[#474747] text-[12px]">{count}</span>}
       {active && <X size={14} className="ml-auto text-[#a8a8a8]" />}
     </div>
@@ -2022,7 +2042,7 @@ function BottomBar({ mode, onSetMode, onAdd }: { mode: AppMode; onSetMode: (m: A
       {/* Bottom cluster: the user avatar sits just above Settings, both pinned to the bottom. */}
       <div className="mt-auto flex flex-col items-center gap-[22px]">
         {/* Account chip — the user's initial inside a stroked ring, like most apps' avatar. */}
-        <div className="size-[30px] rounded-full border border-[#4a4a4a] flex items-center justify-center text-[#a8a8a8] text-[12px] font-medium select-none" aria-label="Account">B</div>
+        <div className="size-[30px] rounded-full border-[1.75px] border-[#4a4a4a] flex items-center justify-center select-none" aria-label="Account"><span className="font-['Univers_BQ:55_Regular',sans-serif] text-[13px] leading-none text-[#a8a8a8] translate-y-[0.5px]">B</span></div>
         <button title="Settings" aria-label="Settings" onClick={() => onSetMode(mode === 'settings' ? prevModeRef.current : 'settings')} className={iconClass(mode === 'settings')}><SettingsIcon size={22} /></button>
       </div>
     </div>
@@ -2215,7 +2235,7 @@ function AddModal({
               <input autoFocus value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Task title (required)" className="bg-[#1f1f1f] rounded-md px-3 py-2 text-white text-[14px] outline-none focus:ring-1 focus:ring-[#7363FF]" />
               <div className="flex items-center justify-between bg-[#1f1f1f] rounded-md px-3 py-2">
                 <div className="flex flex-col">
-                  <span className={`text-[14px] ${isMilestone ? 'text-[#8465ff]' : 'text-white'}`}>Milestone</span>
+                  <span className={`text-[14px] ${isMilestone ? 'text-[var(--app-accent)]' : 'text-white'}`}>Milestone</span>
                   <span className="text-[#666] text-[12px]">No checkbox Â· pinned to top of its column</span>
                 </div>
                 <MilestoneToggle value={isMilestone} onChange={setIsMilestone} />
@@ -3967,13 +3987,13 @@ function MilestoneCardView({ task, projects, clients, showDate, categoryDimmed =
   const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID || task.list === 'personal';
   // Expired milestones (deadline before today) render in faint purple — a permanent record.
   const isExpired = !!task.deadline && task.deadline < todayISO();
-  const milestonePurpleClass = isExpired ? 'text-[#4f4290]' : 'text-[#8465ff]';
+  const milestonePurpleClass = isExpired ? 'text-[#4f4290]' : 'text-[var(--app-accent)]';
   const DIM = 'text-[#454545]';
   // Active (filter) milestone stays PURPLE — turning it white read as "selected/normal task".
   // The × affordance still marks it as the active filter.
   const titleClass = categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : milestonePurpleClass;
   // Inline style because Tailwind arbitrary opacity on hex colors wasn't reliably generating the CSS.
-  const cardBgStyle: React.CSSProperties = { backgroundColor: 'rgba(132, 101, 255, 0.10)' };
+  const cardBgStyle: React.CSSProperties = { backgroundColor: 'rgb(from var(--app-accent) r g b / 0.1)' };
   return (
     <div onClick={onClick} onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onQuickEdit?.(); }} style={cardBgStyle} className="relative mx-[6px] mb-[4px] group cursor-pointer h-[30px] rounded-[3.333px]">
       {/* One continuous line — title (truncates first), then client › project, assignees, date, +.
@@ -3984,7 +4004,7 @@ function MilestoneCardView({ task, projects, clients, showDate, categoryDimmed =
         {client?.short && !project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap shrink-0 ${titleClass}`}>{client.short}</p>}
         {!client?.short && project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap shrink-0 ${titleClass}`}>{project.name}</p>}
         {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone="scheduled" hollow={isPersonal} dim={task.completed || categoryDimmed} faint={isExpired} />)}
-        {showDate && task.deadline && <DeadlineArrow dim={task.completed || categoryDimmed} color={isExpired ? '#4f4290' : '#8465ff'} />}
+        {showDate && task.deadline && <DeadlineArrow dim={task.completed || categoryDimmed} color={isExpired ? '#4f4290' : 'var(--app-accent)'} />}
         {showDate && task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap shrink-0 ${titleClass}`}>{formatDeadline(task.deadline)}</p>}
         {onAddSibling && (
           <button
@@ -4126,8 +4146,8 @@ function CalendarCardBody({ task, projects, clients, taskOrder = 'ptc', isTodayC
   // from staying white just because its section is still 'today'.
   const isFuture = !!task.deadline && task.deadline > todayISO();
   const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID || task.list === 'personal';
-  const titleColor = task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : isTodayCard ? 'text-white' : (isNext || isFuture) ? 'text-[#a8a8a8]' : 'text-white';
-  const metaColor = (isScheduled || isTodayCard) ? 'text-[#8465ff]' : 'text-[#656464]';
+  const titleColor = task.completed ? 'text-[#383838]' : isScheduled ? 'text-[var(--app-accent)]' : isTodayCard ? 'text-white' : (isNext || isFuture) ? 'text-[#a8a8a8]' : 'text-white';
+  const metaColor = (isScheduled || isTodayCard) ? 'text-[var(--app-accent)]' : 'text-[#656464]';
   // Whether the client lives ON the first row (combined with project per the slot helper) —
   // applies to 'cpt' and 'tcp' modes where client + project sit adjacent. In 'ptc' the client
   // stays on the second row alongside assignees + date (legacy two-row calendar layout).
@@ -4143,7 +4163,7 @@ function CalendarCardBody({ task, projects, clients, taskOrder = 'ptc', isTodayC
       <div className="flex flex-row items-center gap-[10px]">
         {!isScheduled && (
           <div className="shrink-0 flex items-center justify-center">
-            <TaskCheckbox completed={task.completed} started={task.started} onToggle={() => {}} accent={isTodayCard ? '#8465ff' : undefined} />
+            <TaskCheckbox completed={task.completed} started={task.started} onToggle={() => {}} accent={isTodayCard ? 'var(--app-accent)' : undefined} />
           </div>
         )}
         <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleColor}`}>{task.title}</span>
@@ -4153,7 +4173,7 @@ function CalendarCardBody({ task, projects, clients, taskOrder = 'ptc', isTodayC
         {client && !project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${metaColor}`}>{client.short}</p>}
         {!client && project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap text-[#656464]`}>{project.name}</p>}
         {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={(isScheduled || isTodayCard) ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} />)}
-        {task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${(isScheduled || isTodayCard) ? 'text-[#8465ff]' : isLateDeadline(task.deadline) ? 'text-white' : 'text-[#656464]'}`}>{formatDeadline(task.deadline)}</p>}
+        {task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${(isScheduled || isTodayCard) ? 'text-[var(--app-accent)]' : isLateDeadline(task.deadline) ? 'text-white' : 'text-[#656464]'}`}>{formatDeadline(task.deadline)}</p>}
       </div>
     </div>
   );
@@ -4209,7 +4229,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
   const style: React.CSSProperties = {
     transform: CSS.Transform.toString(transform),
     transition: isAnyDragging ? `transform ${MOTION.base}ms ${MOTION.easeOut}` : 'none',
-    ...(cellId.startsWith(`cal:${todayCellIso}:`) ? { backgroundColor: 'rgba(132, 101, 255, 0.10)' } : {}),
+    ...(cellId.startsWith(`cal:${todayCellIso}:`) ? { backgroundColor: 'rgb(from var(--app-accent) r g b / 0.1)' } : {}),
   };
   const isScheduled = task.type === 'scheduled';
   const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID || task.list === 'personal';
@@ -4221,17 +4241,17 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
   // Wins over every other state — when the user is dragging across categories, ALL non-source
   // cards drop to this single muted gray regardless of whether they're scheduled, completed,
   // next, or normal. On a TODAY card (purple wash) the dim text/graphics instead take the APP
-  // background color (#1c1b19, the dark grayish-brown) so they read as a quiet dark-on-purple carve
+  // background color (var(--app-bg), the dark grayish-brown) so they read as a quiet dark-on-purple carve
   // — legible but recessive — rather than an illegible grayish-purple.
-  const DIM = isTodayCard ? 'text-[#1c1b19]' : 'text-[#454545]';
+  const DIM = isTodayCard ? 'text-[var(--app-bg)]' : 'text-[#454545]';
   // Today's column reads loud (white); every other column is a future/other day and reads
   // muted (gray) — a card whose deadline moved out of today no longer renders white just
   // because its section is still 'today'. Scheduled/completed/category-dim still win above.
-  const titleColor = categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : isTodayCard ? 'text-white' : 'text-[#a8a8a8]';
-  const metaColor = categoryDimmed ? DIM : (isScheduled || isTodayCard) ? 'text-[#8465ff]' : 'text-[#656464]';
+  const titleColor = categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : isScheduled ? 'text-[var(--app-accent)]' : isTodayCard ? 'text-white' : 'text-[#a8a8a8]';
+  const metaColor = categoryDimmed ? DIM : (isScheduled || isTodayCard) ? 'text-[var(--app-accent)]' : 'text-[#656464]';
   // Hover controls (+ / trash): on a TODAY card they read purple to match the wash when revealed
   // on card-hover, then flip white when the pointer is directly over the icon. Elsewhere: gray → white.
-  const iconColor = isTodayCard && !categoryDimmed ? 'text-[#8465ff]' : 'text-[#5e5e5e]';
+  const iconColor = isTodayCard && !categoryDimmed ? 'text-[var(--app-accent)]' : 'text-[#5e5e5e]';
   // Task/Client/Project order (Settings) now drives the calendar + focus cards too. The slot helper
   // returns the sequence; slots BEFORE the title render inline ahead of it in the title row, slots
   // AFTER render in the meta row ahead of the deadline. For the default 'tcp' this reproduces the
@@ -4242,7 +4262,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
   const afterTitleSlots = cpSlots.slice(titleSlotIdx + 1);
   const renderMetaSlot = (slot: TaskMetaSlot, key: string) => {
     const cls = `font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : metaColor}`;
-    if (slot === 'cp' && client?.short && project?.name) return <p key={key} className={cls}>{client.short}<Arrowhead dim={task.completed || categoryDimmed} tone={isTodayCard ? 'milestone' : 'default'} color={categoryDimmed && isTodayCard ? '#1c1b19' : undefined} />{project.name}</p>;
+    if (slot === 'cp' && client?.short && project?.name) return <p key={key} className={cls}>{client.short}<Arrowhead dim={task.completed || categoryDimmed} tone={isTodayCard ? 'milestone' : 'default'} color={categoryDimmed && isTodayCard ? 'var(--app-bg)' : undefined} />{project.name}</p>;
     if (slot === 'client' && client?.short) return <p key={key} className={cls}>{client.short}</p>;
     if (slot === 'project' && project?.name) return <p key={key} className={cls}>{project.name}</p>;
     return null;
@@ -4273,7 +4293,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
         <div className={`flex flex-row items-center gap-[10px] ${singleLine ? 'min-w-0 shrink' : 'w-full pr-5'}`}>
           {!isScheduled && (
             <div onPointerDown={(e) => e.stopPropagation()} className="shrink-0 flex items-center justify-center">
-              <TaskCheckbox completed={task.completed} started={task.started} onToggle={onToggle} accent={isTodayCard ? (categoryDimmed ? '#1c1b19' : '#8465ff') : undefined} />
+              <TaskCheckbox completed={task.completed} started={task.started} onToggle={onToggle} accent={isTodayCard ? (categoryDimmed ? 'var(--app-bg)' : 'var(--app-accent)') : undefined} />
             </div>
           )}
           <div className="flex flex-row items-center gap-[4px] min-w-0">
@@ -4318,7 +4338,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
             {afterTitleSlots.map((s, i) => renderMetaSlot(s, `at-${i}`))}
             {/* Deadline arrow — the same glyph list view puts before dates (small variant for
                 the tighter card meta). Milestones get it too, tinted milestone purple. */}
-            {task.deadline && <DeadlineArrow dim={task.completed || (categoryDimmed && !isTodayCard)} color={categoryDimmed && isTodayCard ? '#1c1b19' : (isScheduled || isTodayCard) ? '#8465ff' : undefined} />}
+            {task.deadline && <DeadlineArrow dim={task.completed || (categoryDimmed && !isTodayCard)} color={categoryDimmed && isTodayCard ? 'var(--app-bg)' : (isScheduled || isTodayCard) ? 'var(--app-accent)' : undefined} />}
             {/* Overdue dates render WHITE (red read as alarmist next to the purple wash).
                 The date chip is interactive: dblclick kicks it +1 day; right-click opens the
                 mini date menu. pointer-down stays local so pressing the date never starts a drag. */}
@@ -4327,7 +4347,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
                 onPointerDown={(e) => e.stopPropagation()}
                 onDoubleClick={onRescheduleDate ? (e) => { e.stopPropagation(); onRescheduleDate('shiftForward'); } : undefined}
                 onContextMenu={onRescheduleDate ? (e) => { e.preventDefault(); e.stopPropagation(); setDateMenu({ x: e.clientX, y: e.clientY }); } : undefined}
-                className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${onRescheduleDate ? 'cursor-pointer' : ''} ${categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : isLateDeadline(task.deadline) ? 'text-white' : isTodayCard ? 'text-[#8465ff]' : 'text-[#656464]'}`}
+                className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${onRescheduleDate ? 'cursor-pointer' : ''} ${categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : isScheduled ? 'text-[var(--app-accent)]' : isLateDeadline(task.deadline) ? 'text-white' : isTodayCard ? 'text-[var(--app-accent)]' : 'text-[#656464]'}`}
               >
                 {formatDeadline(task.deadline)}
               </p>
@@ -4337,7 +4357,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
                 roll-off linger ~1s then fade out over 500ms (asymmetric group-hover transition). */}
             {task.assignees.length > 0 && (
               <span className="flex flex-row items-center gap-[6px] linger-reveal">
-                {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={(isScheduled || isTodayCard) ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed || categoryDimmed} dimColor={categoryDimmed && isTodayCard ? '#1c1b19' : '#383838'} />)}
+                {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={(isScheduled || isTodayCard) ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed || categoryDimmed} dimColor={categoryDimmed && isTodayCard ? 'var(--app-bg)' : '#383838'} />)}
               </span>
             )}
             {/* One-line layout: the + is the LAST item in the content lineup — right after the
@@ -4527,7 +4547,7 @@ function WeekCalendarMode({
           const isToday = iso === todayIso;
           return (
             <CalendarColumnDroppable key={iso} date={iso}>
-              <div className={`shrink-0 h-[37px] flex items-center gap-2 px-[16px] mb-[37px] ${isToday ? 'text-[#8465ff]' : (d.getDay() === 0 || d.getDay() === 6 ? 'text-[#656464]' : 'text-white')}`}>
+              <div className={`shrink-0 h-[37px] flex items-center gap-2 px-[16px] mb-[37px] ${isToday ? 'text-[var(--app-accent)]' : (d.getDay() === 0 || d.getDay() === 6 ? 'text-[#656464]' : 'text-white')}`}>
                 <p className="font-['NB_International:Regular',sans-serif]">{dayNameShort(d)}</p>
                 <p className={bodyFont}>{d.getDate()}</p>
                 {isToday && <p className={bodyFont}>(Today)</p>}
@@ -4572,7 +4592,7 @@ function WeekCalendarMode({
                 const categoryDimmed = !!activeTask && activeTask.list !== listId;
                 return (
                   <CalendarDayDroppable key={listId} id={`cal:${iso}:${listId}`} isEmpty={bucket.length === 0 && dayMilestones.length === 0} slotHeight={activeSlotHeight} className="pb-[37px] last:pb-0">
-                    <div className="group/band h-[20px] px-[16px] pb-[6px] flex items-center gap-2 sticky top-0 z-10 bg-[#1c1b19]">
+                    <div className="group/band h-[20px] px-[16px] pb-[6px] flex items-center gap-2 sticky top-0 z-10 bg-[var(--app-bg)]">
                       <p onClick={scrollBandToTop} className={`${bodyFont} text-[#5e5e5e] cursor-pointer`}>{label}</p>
                       <button
                         type="button"
@@ -4703,7 +4723,7 @@ function WeekCalendarMode({
                   const cellId = `cal:${nwToken}:${listId}`;
                   return (
                     <CalendarDayDroppable key={listId} id={cellId} isEmpty={bucket.length === 0 && bandMilestones.length === 0} slotHeight={activeSlotHeight} className="pb-[37px] last:pb-0">
-                      <div className="group/band h-[20px] px-[16px] pb-[6px] flex items-center gap-2 sticky top-0 z-10 bg-[#1c1b19]">
+                      <div className="group/band h-[20px] px-[16px] pb-[6px] flex items-center gap-2 sticky top-0 z-10 bg-[var(--app-bg)]">
                         <p onClick={scrollBandToTop} className={`${bodyFont} text-[#5e5e5e] cursor-pointer`}>{label}</p>
                         <button
                           type="button"
@@ -4874,7 +4894,7 @@ function BackupSection({
           className="hidden"
         />
       </div>
-      {status && <p className="text-[#8465ff] text-[13px]">{status}</p>}
+      {status && <p className="text-[var(--app-accent)] text-[13px]">{status}</p>}
     </div>
   );
 }
@@ -4990,12 +5010,19 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
               </div>
             </div>
             <div>
+              {sectionTitle('Colors')}
+              <div className="px-[35px] pt-[4px] flex flex-col gap-3">
+                <ThemeColorPicker varName="--app-bg" storageKey="app-bg" label="Background" fallback="#1c1b19" />
+                <ThemeColorPicker varName="--app-accent" storageKey="app-accent" label="Accent" fallback="#8465ff" />
+              </div>
+            </div>
+            <div>
               {sectionTitle('Task Order')}
               <div className="px-[31px] pt-[4px] flex flex-col gap-2">
                 {([{ id: 'cpt' as TaskOrder, parts: ['Client - Project', 'Task'] as const }, { id: 'ptc' as TaskOrder, parts: ['Project', 'Task', 'Client'] as const }, { id: 'tcp' as TaskOrder, parts: ['Task', 'Client - Project'] as const }]).map((opt) => {
                   const active = taskOrder === opt.id;
                   return (
-                    <button key={opt.id} type="button" onClick={() => onSetTaskOrder(opt.id)} className={`text-left text-[13px] transition-colors ${active ? 'text-[#8465ff] font-bold' : 'hover:text-white'}`}>
+                    <button key={opt.id} type="button" onClick={() => onSetTaskOrder(opt.id)} className={`text-left text-[13px] transition-colors ${active ? 'text-[var(--app-accent)] font-bold' : 'hover:text-white'}`}>
                       {opt.parts.map((part, i) => (<Fragment key={i}>{i > 0 && <span>{'   '}</span>}<span className={active ? '' : (part === 'Task' ? 'text-white' : 'text-[#656464]')}>{part}</span></Fragment>))}
                     </button>
                   );
@@ -5021,16 +5048,16 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
             <div>
               {sectionTitle('Title Case Auto-Correct')}
               <div className="px-[31px] pt-[4px] flex flex-row gap-4">
-                <button type="button" onClick={() => onSetCaseMode('off')} className={`text-[13px] transition-colors ${caseMode === 'off' ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>Off</button>
-                <button type="button" onClick={() => onSetCaseMode('title')} className={`text-[13px] transition-colors ${caseMode === 'title' ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>On</button>
+                <button type="button" onClick={() => onSetCaseMode('off')} className={`text-[13px] transition-colors ${caseMode === 'off' ? 'text-[var(--app-accent)] font-bold' : 'text-[#656464] hover:text-white'}`}>Off</button>
+                <button type="button" onClick={() => onSetCaseMode('title')} className={`text-[13px] transition-colors ${caseMode === 'title' ? 'text-[var(--app-accent)] font-bold' : 'text-[#656464] hover:text-white'}`}>On</button>
               </div>
             </div>
             <div>
               {sectionTitle('Card Layout')}
               <div className="px-[31px] pt-[4px] flex flex-col gap-1">
                 <div className="flex flex-row gap-4">
-                  <button type="button" onClick={() => onSetCardRows(2)} className={`text-[13px] transition-colors ${cardRows === 2 ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>Two rows</button>
-                  <button type="button" onClick={() => onSetCardRows(1)} className={`text-[13px] transition-colors ${cardRows === 1 ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>One row</button>
+                  <button type="button" onClick={() => onSetCardRows(2)} className={`text-[13px] transition-colors ${cardRows === 2 ? 'text-[var(--app-accent)] font-bold' : 'text-[#656464] hover:text-white'}`}>Two rows</button>
+                  <button type="button" onClick={() => onSetCardRows(1)} className={`text-[13px] transition-colors ${cardRows === 1 ? 'text-[var(--app-accent)] font-bold' : 'text-[#656464] hover:text-white'}`}>One row</button>
                 </div>
                 <p className="text-[11px] text-[#5e5e5e]">One row collapses title + client › project + deadline onto a single line and truncates the title first.</p>
               </div>
@@ -5140,11 +5167,11 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
                     {sectionTitle('Maintenance')}
                     <div className="px-[31px] pt-[4px] flex flex-col gap-2 items-start">
                       <button type="button" onClick={() => { const n = onPurgeEmptyProjects(); setPurgeMsg(n > 0 ? `Removed ${n} empty project${n === 1 ? '' : 's'}.` : 'No empty projects found.'); }} className="text-[13px] text-[#656464] hover:text-white transition-colors">Clean up empty projects</button>
-                      <button type="button" onClick={() => { if (closedOutIds) { const n = onRemoveProjectsByIds(closedOutIds); setPurgeMsg(`Removed ${n} closed-out project${n === 1 ? '' : 's'}.`); setClosedOutIds(null); return; } const list = onListClosedOutProjects(); if (!list.length) { setPurgeMsg('No closed-out projects.'); return; } setClosedOutIds(list.map((p) => p.id)); setPurgeMsg(`${list.length} with no tasks: ${list.map((p) => p.name).join(', ')}. Click again to remove.`); }} className={`text-[13px] transition-colors ${closedOutIds ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>{closedOutIds ? `Confirm — remove ${closedOutIds.length}` : 'Remove closed-out projects'}</button>
+                      <button type="button" onClick={() => { if (closedOutIds) { const n = onRemoveProjectsByIds(closedOutIds); setPurgeMsg(`Removed ${n} closed-out project${n === 1 ? '' : 's'}.`); setClosedOutIds(null); return; } const list = onListClosedOutProjects(); if (!list.length) { setPurgeMsg('No closed-out projects.'); return; } setClosedOutIds(list.map((p) => p.id)); setPurgeMsg(`${list.length} with no tasks: ${list.map((p) => p.name).join(', ')}. Click again to remove.`); }} className={`text-[13px] transition-colors ${closedOutIds ? 'text-[var(--app-accent)] font-bold' : 'text-[#656464] hover:text-white'}`}>{closedOutIds ? `Confirm — remove ${closedOutIds.length}` : 'Remove closed-out projects'}</button>
                       <button type="button" onClick={() => setStragglers((cur) => (cur ? null : onListStragglerProjects()))} className="text-[13px] text-[#656464] hover:text-white transition-colors">{stragglers ? 'Hide straggler projects' : 'Manage straggler projects (no client)'}</button>
                       {stragglers && stragglers.length === 0 && <p className="text-[#656464] text-[12px]">No straggler projects.</p>}
                       {stragglers && stragglers.length > 0 && (<div className="flex flex-col gap-1 w-full max-w-[420px]">{stragglers.map((s) => (<div key={s.id} className="flex flex-row items-center justify-between gap-3 py-[3px] border-b border-white/[0.06]"><span className="text-[13px] text-white truncate">{s.name} <span className="text-[#656464]">· {s.taskCount} task{s.taskCount === 1 ? '' : 's'}</span></span><button type="button" onClick={() => { onDeleteStragglerProject(s.id); setStragglers((prev) => (prev ? prev.filter((x) => x.id !== s.id) : prev)); setPurgeMsg(`Removed "${s.name}".`); }} className="shrink-0 text-[12px] text-[#656464] hover:text-[#ff6b6b] transition-colors">Delete</button></div>))}</div>)}
-                      {purgeMsg && <p className="text-[#8465ff] text-[12px]">{purgeMsg}</p>}
+                      {purgeMsg && <p className="text-[var(--app-accent)] text-[12px]">{purgeMsg}</p>}
                     </div>
                   </div>
                   <div>
@@ -5233,8 +5260,8 @@ function ProjectTaskRow({ task, listId, onToggle, onRename, onDelete, onEdit, on
   const bodyFont = "font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap";
   const isScheduled = task.type === 'scheduled';
   const isNext = task.section === 'next' || task.section === 'tomorrow';
-  const titleColor = isScheduled ? 'text-[#8465ff]' : task.completed ? 'text-[#474747]' : isNext ? 'text-[#a8a8a8]' : 'text-white';
-  const metaColor = task.completed ? 'text-[#474747]' : isScheduled ? 'text-[#8465ff]' : 'text-[#656464]';
+  const titleColor = isScheduled ? 'text-[var(--app-accent)]' : task.completed ? 'text-[#474747]' : isNext ? 'text-[#a8a8a8]' : 'text-white';
+  const metaColor = task.completed ? 'text-[#474747]' : isScheduled ? 'text-[var(--app-accent)]' : 'text-[#656464]';
   const project = showContext && task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
   // Prefer the task's explicit clientId, fall back to the project's owning client.
   const resolvedClientId = showContext ? (task.clientId ?? project?.clientId) : undefined;
@@ -5299,7 +5326,7 @@ function ProjectTaskRow({ task, listId, onToggle, onRename, onDelete, onEdit, on
         {task.deadline && (
           <>
             {!isScheduled && <DeadlineArrow dim={task.completed} small={density >= 3} />}
-            <p className={`font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] whitespace-nowrap ${task.completed ? 'text-[#474747]' : isScheduled ? 'text-[#8465ff]' : isLateDeadline(task.deadline) ? 'text-[#FF7171]' : isNext ? 'text-[#a8a8a8]' : 'text-white'}`}>
+            <p className={`font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] whitespace-nowrap ${task.completed ? 'text-[#474747]' : isScheduled ? 'text-[var(--app-accent)]' : isLateDeadline(task.deadline) ? 'text-[#FF7171]' : isNext ? 'text-[#a8a8a8]' : 'text-white'}`}>
               {density >= 2 ? formatDeadlineShort(task.deadline) : formatDeadline(task.deadline)}
             </p>
           </>
@@ -5492,7 +5519,7 @@ function TaskQuickEdit({
   // PillType: same shape, but uses purple when active. Reserved for the Task / Milestone toggle —
   // singling out the type as the most "categorical" decision visually.
   const PillType = ({ active, onClick, children }: { active?: boolean; onClick: () => void; children: React.ReactNode }) => (
-    <button onClick={onClick} className={`text-[14px] font-['Untitled_Sans',sans-serif] whitespace-nowrap transition-colors ${active ? 'text-[#8465ff] font-bold' : 'text-[#656464] hover:text-white'}`}>{children}</button>
+    <button onClick={onClick} className={`text-[14px] font-['Untitled_Sans',sans-serif] whitespace-nowrap transition-colors ${active ? 'text-[var(--app-accent)] font-bold' : 'text-[#656464] hover:text-white'}`}>{children}</button>
   );
   const PlusBtn = ({ onClick }: { onClick: () => void }) => (
     <button onClick={onClick} className="text-[#656464] hover:text-white transition-colors p-0" aria-label="Add"><Plus size={14} /></button>
@@ -5710,7 +5737,7 @@ function TaskQuickEdit({
                   )}
                   <button
                     onClick={onPick}
-                    className={`relative z-10 h-7 w-7 rounded-full flex items-center justify-center transition-colors text-[13px] font-bold ${isSelected ? 'bg-[#7363FF] text-[#1f1f1f]' : isInRange ? 'text-[#1f1f1f]' : isToday ? 'text-[#8465ff]' : c.inMonth ? 'text-white hover:bg-white/10 font-normal' : 'text-[#454545] hover:bg-white/[0.03] font-normal'}`}
+                    className={`relative z-10 h-7 w-7 rounded-full flex items-center justify-center transition-colors text-[13px] font-bold ${isSelected ? 'bg-[#7363FF] text-[#1f1f1f]' : isInRange ? 'text-[#1f1f1f]' : isToday ? 'text-[var(--app-accent)]' : c.inMonth ? 'text-white hover:bg-white/10 font-normal' : 'text-[#454545] hover:bg-white/[0.03] font-normal'}`}
                   >
                     {c.date?.getDate()}
                   </button>
@@ -8960,8 +8987,8 @@ export default function App() {
         // When a milestone filter is active, the SELECTED milestone keeps full purple; the rest
         // dim to a faint purple (the today-column wash tone) so the active one clearly stands out.
         const milestoneDim = isScheduled && !!activeRowId && !isActiveRow;
-        const titleColor = isScheduled ? (milestoneDim ? 'text-[#8465ff]/40' : 'text-[#8465ff]') : isActiveRow ? 'text-white' : task.completed ? 'text-[#474747]' : isNext ? 'text-[#a8a8a8]' : 'text-white';
-        const metaColor = task.completed ? 'text-[#474747]' : isScheduled ? 'text-[#8465ff]' : 'text-[#656464]';
+        const titleColor = isScheduled ? (milestoneDim ? 'text-[var(--app-accent)]/40' : 'text-[var(--app-accent)]') : isActiveRow ? 'text-white' : task.completed ? 'text-[#474747]' : isNext ? 'text-[#a8a8a8]' : 'text-white';
+        const metaColor = task.completed ? 'text-[#474747]' : isScheduled ? 'text-[var(--app-accent)]' : 'text-[#656464]';
         return (
           <div key={`dash-${task.id}`} onClick={onRowClick ? () => onRowClick(task) : undefined} onDoubleClick={() => openEdit(task)} onContextMenu={(e) => { e.preventDefault(); openQuick(task); }} className={`h-[37px] box-border flex flex-row gap-2 items-center px-[31px] w-full group hover:bg-white/[0.03] ${onRowClick ? 'cursor-pointer' : ''}`}>
             {!isScheduled && <TaskCheckbox completed={task.completed} started={task.started} onToggle={() => toggleTask(task.id)} />}
@@ -8986,8 +9013,8 @@ export default function App() {
             {!titleOnly && task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} />)}
             {task.deadline && task.deadline !== omitDeadlineIso && (
               <>
-                <DeadlineArrow dim={task.completed} color={isScheduled ? (milestoneDim ? 'rgba(132,101,255,0.4)' : '#8465ff') : undefined} />
-                <p className={`font-['NB_International:Regular',sans-serif] text-[14.333px] whitespace-nowrap ${task.completed ? 'text-[#474747]' : isScheduled ? (milestoneDim ? 'text-[#8465ff]/40' : 'text-[#8465ff]') : isLateDeadline(task.deadline) ? 'text-[#FF7171]' : isNext ? 'text-[#a8a8a8]' : 'text-white'}`}>{formatDeadline(task.deadline)}</p>
+                <DeadlineArrow dim={task.completed} color={isScheduled ? (milestoneDim ? 'rgba(132,101,255,0.4)' : 'var(--app-accent)') : undefined} />
+                <p className={`font-['NB_International:Regular',sans-serif] text-[14.333px] whitespace-nowrap ${task.completed ? 'text-[#474747]' : isScheduled ? (milestoneDim ? 'text-[var(--app-accent)]/40' : 'text-[var(--app-accent)]') : isLateDeadline(task.deadline) ? 'text-[#FF7171]' : isNext ? 'text-[#a8a8a8]' : 'text-white'}`}>{formatDeadline(task.deadline)}</p>
               </>
             )}
             {isActiveRow && <X size={13} className="ml-auto text-[#a8a8a8] shrink-0" />}
@@ -9577,14 +9604,14 @@ export default function App() {
           Dismiss (mutes for THIS specific buildTime — banner re-opens the
           next time a newer build is detected). */}
       {newBuildTime && newBuildTime !== dismissedBuildTime && (
-        <div className="fixed top-0 left-0 right-0 z-[1000] bg-[#8465ff] text-white px-[35px] py-2 flex flex-row items-center gap-3 text-[13px] shadow-lg">
+        <div className="fixed top-0 left-0 right-0 z-[1000] bg-[var(--app-accent)] text-white px-[35px] py-2 flex flex-row items-center gap-3 text-[13px] shadow-lg">
           <span className="font-bold">New version available</span>
           <span className="text-white/80">deployed {new Date(newBuildTime).toLocaleString()}</span>
           <div className="ml-auto flex flex-row gap-2 items-center">
             <button
               type="button"
               onClick={() => window.location.reload()}
-              className="px-3 py-1 rounded-md bg-white text-[#8465ff] hover:bg-white/90 transition-colors font-bold"
+              className="px-3 py-1 rounded-md bg-white text-[var(--app-accent)] hover:bg-white/90 transition-colors font-bold"
             >
               Reload
             </button>
@@ -9604,7 +9631,7 @@ export default function App() {
           both. Fixed overlays (nav, assign rail, tray, modals) are position:fixed → unaffected by
           this padding. PIP has neither nav nor rail, so no gutter there. */}
       {SHOW_TITLEBAR && <TauriTitlebar />}
-      <div className={`relative h-screen bg-[#1c1b19] overflow-hidden pt-[var(--titlebar-h)] ${PIP_MODE ? '' : 'pl-[74px] pr-[42px]'}`}>
+      <div className={`relative h-screen bg-[var(--app-bg)] overflow-hidden pt-[var(--titlebar-h)] ${PIP_MODE ? '' : 'pl-[74px] pr-[42px]'}`}>
         {/* PIP quick-view: an always-on-top mini-window (?pip=1, opened by the Tauri shell's
             global shortcut) that renders the FOCUS view below with NO BottomBar / tray chrome.
             Edits sync live via Liveblocks, so changes here land in the main window instantly.
@@ -10076,7 +10103,7 @@ export default function App() {
                       <div key={`${colKey}-${listId}`} className={cellTasks.length > 0 ? 'pb-[24px] last:pb-0' : 'pb-[12px] last:pb-0'}>
                         {/* Band label — same treatment as the calendar's in-column
                             category labels (grey, 20px row, 16px inset) + hover +. */}
-                        <div className="group/band h-[20px] px-[16px] pb-[6px] flex items-center gap-2 sticky top-0 z-10 bg-[#1c1b19]">
+                        <div className="group/band h-[20px] px-[16px] pb-[6px] flex items-center gap-2 sticky top-0 z-10 bg-[var(--app-bg)]">
                           <p onClick={scrollBandToTop} className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap text-[#5e5e5e] cursor-pointer">{bandLabel}</p>
                           <button
                             type="button"
@@ -10132,7 +10159,7 @@ export default function App() {
                   // Day headers replicate the calendar view's: NB-font weekday + Univers
                   // date number, purple for today with the "(Today)" suffix.
                   const dayHeader = (d: Date, isToday: boolean) => (
-                    <div className={`shrink-0 h-[37px] flex items-center gap-2 px-[16px] ${isToday ? 'text-[#8465ff]' : 'text-white'}`} style={{ marginBottom: SPACING.dcr }}>
+                    <div className={`shrink-0 h-[37px] flex items-center gap-2 px-[16px] ${isToday ? 'text-[var(--app-accent)]' : 'text-white'}`} style={{ marginBottom: SPACING.dcr }}>
                       <p className="font-['NB_International:Regular',sans-serif]">{d.toLocaleDateString('en-US', { weekday: 'short' })}</p>
                       <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap">{d.getDate()}</p>
                       {isToday && <p className="font-['NB_International:Regular',sans-serif]">(Today)</p>}
@@ -10213,7 +10240,7 @@ export default function App() {
                       scroll body is replaced by a single full-fill rectangle:
                       bg = the row hover-tint (rgba(255,255,255,0.03)), so it
                       reads as a soft "drop a task here" surface; centered text
-                      "Select a Task" in the page background color (#1c1b19) so
+                      "Select a Task" in the page background color (var(--app-bg)) so
                       it's a quiet emboss rather than a foreground label. The
                       rectangle takes the full remaining flex space below the
                       column title — no gap, no extra padding chrome — so the
@@ -10904,7 +10931,7 @@ export default function App() {
                       </div>
                     );
                   })()}
-                  {/* Drag-over overlay: covers the column fully (solid #1c1b19) when
+                  {/* Drag-over overlay: covers the column fully (solid var(--app-bg)) when
                       the user drags an external file over the column AND there are
                       already images visible (the empty-state path doesn't need
                       this — its drop zones are always on screen). The same three
@@ -10912,7 +10939,7 @@ export default function App() {
                       one ingests the file. pointer-events:none on the wrapper text
                       so only the FocusDropZones are draggable targets. */}
                   {refsDragActive && allImages.length > 0 && (projectKey || taskKey) && (
-                    <div className="absolute inset-0 z-50 bg-[#1c1b19] flex flex-col items-center justify-center gap-3 p-6">
+                    <div className="absolute inset-0 z-50 bg-[var(--app-bg)] flex flex-col items-center justify-center gap-3 p-6">
                       <span className="text-[#656464] text-[18px] font-bold pointer-events-none">Add Images</span>
                       <p className="text-[#656464] text-[13px] text-center max-w-[480px] pointer-events-none">
                         Drop Into One of the Zones Below
@@ -11347,7 +11374,7 @@ export default function App() {
                 // Translucent so you can see the category underneath while dragging to
                 // recategorize: purple wash for a TODAY card, gray for everything else.
                 className="overflow-hidden rounded-[3.333px]"
-                style={{ width: activeRectWidth ?? 220, height: activeRectHeight ?? 55, willChange: 'transform', backgroundColor: activeCalendarCellId && activeCalendarCellId.startsWith(`cal:${dateToISO(new Date())}:`) ? 'rgba(132, 101, 255, 0.10)' : 'rgba(58, 58, 58, 0.6)' }}
+                style={{ width: activeRectWidth ?? 220, height: activeRectHeight ?? 55, willChange: 'transform', backgroundColor: activeCalendarCellId && activeCalendarCellId.startsWith(`cal:${dateToISO(new Date())}:`) ? 'rgb(from var(--app-accent) r g b / 0.1)' : 'rgba(58, 58, 58, 0.6)' }}
               >
                 <CalendarCardBody task={activeTask} projects={projects} clients={clients} taskOrder={taskOrder} isTodayCard={!!activeCalendarCellId && activeCalendarCellId.startsWith(`cal:${dateToISO(new Date())}:`)} stacked={mode === 'calendar'} />
               </motion.div>

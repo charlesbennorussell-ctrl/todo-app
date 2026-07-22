@@ -30,6 +30,12 @@
 html, body, #root { height: 100%; margin: 0; }
 body { background: #282828; color: white; }
 
+/* Themeable palette — the Settings → Colors module overrides these at runtime (persisted to
+   localStorage, re-applied on load). Defaults reproduce the original palette exactly, so the app
+   looks identical until a color is picked. --app-bg = the page/card ground; --app-accent = the
+   purple used for today/milestones/checkboxes/etc. */
+:root { --app-bg: #1c1b19; --app-accent: #8465ff; }
+
 /* iPhone-first column carousel.
    On viewports ≤ 767px (Tailwind `md` breakpoint), the existing
    horizontally-scrolling column rows (List view's Dashboard/Work/Projects/
