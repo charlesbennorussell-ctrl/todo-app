@@ -561,8 +561,9 @@ function TopHeader({ viewName }: { viewName: string }) {
   return (
     // PIP: the quick window's columns inset their text 16px, so the header matches (35px
     // reads indented there — "nudge it over to the left").
-    <div className={`${PIP_MODE ? 'px-[16px] justify-start' : 'px-[35px] justify-center'} h-[37px] flex items-center`} style={{ marginBottom: SPACING.cr }}>
-      {/* Header line centered in the top bar (left-aligned only in the narrow PIP window). */}
+    <div className={`${PIP_MODE ? 'px-[16px]' : (viewName === 'Focus' ? 'px-[31px]' : 'px-[35px]')} h-[37px] flex items-center`} style={{ marginBottom: SPACING.cr }}>
+      {/* Left-aligned. Focus uses px-31 so the header lines up with that view's Milestones column
+          header (also px-31); other views keep px-35 to match their own column headers. */}
       <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">
         {viewName} — {day}, {month} {n}{ord} — {time}
       </p>
