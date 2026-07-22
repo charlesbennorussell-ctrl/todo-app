@@ -3901,32 +3901,29 @@ function MilestoneCardView({ task, projects, clients, showDate, categoryDimmed =
   // Inline style because Tailwind arbitrary opacity on hex colors wasn't reliably generating the CSS.
   const cardBgStyle: React.CSSProperties = { backgroundColor: 'rgba(132, 101, 255, 0.10)' };
   return (
-    <div onClick={onClick} onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onQuickEdit?.(); }} style={cardBgStyle} className="relative mx-[6px] mb-[4px] group cursor-pointer h-[55px]">
-      <div className="px-[10px] py-[6px] flex flex-col justify-center gap-[2px] h-full">
-        <div className="flex flex-row items-center gap-[4px]">
-          <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleClass}`}>{task.title}</span>
-          {active && <X size={13} className="ml-auto shrink-0 text-[#a8a8a8]" />}
-        </div>
-        {/* Line 2 always reserves height so meta-less milestones don't render shorter. */}
-        <div className="flex flex-row items-center gap-[6px] min-h-[15px]">
-          {client?.short && project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${titleClass}`}>{client.short}<Arrowhead dim={task.completed || categoryDimmed} tone="milestone" faint={isExpired} />{project.name}</p>}
-          {client?.short && !project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${titleClass}`}>{client.short}</p>}
-          {!client?.short && project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${titleClass}`}>{project.name}</p>}
-          {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone="scheduled" hollow={isPersonal} dim={task.completed || categoryDimmed} faint={isExpired} />)}
-          {showDate && task.deadline && <DeadlineArrow dim={task.completed || categoryDimmed} color={isExpired ? '#4f4290' : '#8465ff'} />}
-          {showDate && task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${titleClass}`}>{formatDeadline(task.deadline)}</p>}
-          {onAddSibling && (
-            <button
-              type="button"
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={(e) => { e.stopPropagation(); onAddSibling(); }}
-              className="p-[2px] opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity"
-              aria-label="Add task in same project"
-            >
-              <Plus size={12} />
-            </button>
-          )}
-        </div>
+    <div onClick={onClick} onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onQuickEdit?.(); }} style={cardBgStyle} className="relative mx-[6px] mb-[4px] group cursor-pointer h-[30px]">
+      {/* One continuous line — title (truncates first), then client › project, assignees, date, +.
+          Coming-Up cards stay ONE line in BOTH the calendar and focus views. */}
+      <div className="px-[10px] flex flex-row items-center gap-[6px] h-full">
+        <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis min-w-0 shrink ${titleClass}`}>{task.title}</span>
+        {client?.short && project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap shrink-0 ${titleClass}`}>{client.short}<Arrowhead dim={task.completed || categoryDimmed} tone="milestone" faint={isExpired} />{project.name}</p>}
+        {client?.short && !project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap shrink-0 ${titleClass}`}>{client.short}</p>}
+        {!client?.short && project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap shrink-0 ${titleClass}`}>{project.name}</p>}
+        {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone="scheduled" hollow={isPersonal} dim={task.completed || categoryDimmed} faint={isExpired} />)}
+        {showDate && task.deadline && <DeadlineArrow dim={task.completed || categoryDimmed} color={isExpired ? '#4f4290' : '#8465ff'} />}
+        {showDate && task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap shrink-0 ${titleClass}`}>{formatDeadline(task.deadline)}</p>}
+        {onAddSibling && (
+          <button
+            type="button"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => { e.stopPropagation(); onAddSibling(); }}
+            className="shrink-0 p-[2px] opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity"
+            aria-label="Add task in same project"
+          >
+            <Plus size={12} />
+          </button>
+        )}
+        {active && <X size={13} className="ml-auto shrink-0 text-[#a8a8a8]" />}
       </div>
     </div>
   );
@@ -4044,7 +4041,7 @@ function computeCalendarDistribution(tasks: Task[], todayAnchor: Date, horizonDa
 
 // Presentational body of a calendar card ï¿½ no drag wiring, no callbacks. Shared between the
 // live CalendarCard and the DragOverlay so the floating ghost matches the source pixel-for-pixel.
-function CalendarCardBody({ task, projects, clients, taskOrder = 'ptc', isTodayCard = false }: { task: Task; projects: Project[]; clients: Client[]; taskOrder?: TaskOrder; isTodayCard?: boolean }) {
+function CalendarCardBody({ task, projects, clients, taskOrder = 'ptc', isTodayCard = false, stacked = false }: { task: Task; projects: Project[]; clients: Client[]; taskOrder?: TaskOrder; isTodayCard?: boolean; stacked?: boolean }) {
   const project = task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
   const resolvedClientId = task.clientId ?? project?.clientId;
   const client = resolvedClientId ? clients.find((c) => c.id === resolvedClientId) : undefined;
@@ -4064,8 +4061,11 @@ function CalendarCardBody({ task, projects, clients, taskOrder = 'ptc', isTodayC
   // Match the live card exactly so the floating drag copy never reshapes / drops meta: two-row
   // stack by default, one continuous row when the 1-row setting is on.
   const oneRow = useContext(CardRowsContext) === 1;
+  // Calendar-view ghosts force two lines (stacked) to match the always-two-line calendar cards;
+  // focus ghosts follow the 1-row setting like the live focus cards.
+  const singleLine = oneRow && !stacked;
   return (
-    <div className={`px-[10px] py-[7px] overflow-hidden h-full flex ${oneRow ? 'flex-row items-center gap-[4px]' : 'flex-col justify-center gap-[2px]'}`}>
+    <div className={`px-[10px] py-[7px] overflow-hidden h-full flex ${singleLine ? 'flex-row items-center gap-[4px]' : 'flex-col justify-center gap-[2px]'}`}>
       <div className="flex flex-row items-center gap-[10px]">
         {!isScheduled && (
           <div className="shrink-0 flex items-center justify-center">
@@ -4116,6 +4116,9 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
   const [dateMenu, setDateMenu] = useState<{ x: number; y: number } | null>(null);
   // 1-row mode (Settings): collapse to a single continuous line, title truncates first.
   const oneRow = useContext(CardRowsContext) === 1;
+  // But the one-line layout only applies to FOCUS cards. Calendar day cards pass `stacked` to
+  // force the two-line layout ALWAYS (ignoring the setting) — the week grid must stay two lines.
+  const singleLine = oneRow && !stacked;
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: task.id,
     data: { type: 'task', task, calendarCellId: cellId },
@@ -4150,6 +4153,9 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
   // because its section is still 'today'. Scheduled/completed/category-dim still win above.
   const titleColor = categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : isTodayCard ? 'text-white' : 'text-[#a8a8a8]';
   const metaColor = categoryDimmed ? DIM : (isScheduled || isTodayCard) ? 'text-[#8465ff]' : 'text-[#656464]';
+  // Hover controls (+ / trash): on a TODAY card they read purple to match the wash when revealed
+  // on card-hover, then flip white when the pointer is directly over the icon. Elsewhere: gray → white.
+  const iconColor = isTodayCard && !categoryDimmed ? 'text-[#8465ff]' : 'text-[#5e5e5e]';
   // Source-collapse: outer wrapper uses max-height (CSS can't transition from auto, but it CAN
   // transition from a fixed max-height to 0) + marginBottom so the column reflows when this card
   // becomes the active drag.
@@ -4164,16 +4170,16 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
       ref={setNodeRef}
       style={style}
       data-cal-card={task.id}
-      className={`relative mx-[6px] mb-[4px] group ${oneRow ? 'min-h-[30px]' : 'min-h-[45px]'} flex ${isTodayCard ? '' : 'bg-white/[0.03]'} ${dimmed ? 'opacity-60' : ''}`}
+      className={`relative mx-[6px] mb-[4px] group ${singleLine ? 'min-h-[30px]' : 'min-h-[45px]'} flex ${isTodayCard ? '' : 'bg-white/[0.03]'} ${dimmed ? 'opacity-60' : ''}`}
       animate={{ opacity: isDragging ? 0 : 1 }}
       transition={{ opacity: { duration: 0.12, ease: 'easeOut' } }}
     >
-      <div onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} onContextMenu={(e) => { if (onQuickEdit) { e.preventDefault(); e.stopPropagation(); onQuickEdit(); } }} {...attributes} {...listeners} className={`cursor-grab active:cursor-grabbing px-[10px] py-[7px] overflow-hidden flex-1 ${oneRow ? 'flex flex-row items-center gap-[4px]' : stacked ? 'flex flex-col justify-center gap-[2px]' : 'flex flex-row flex-wrap items-center content-center gap-x-[10px] gap-y-[1px]'}`}>
+      <div onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} onContextMenu={(e) => { if (onQuickEdit) { e.preventDefault(); e.stopPropagation(); onQuickEdit(); } }} {...attributes} {...listeners} className={`cursor-grab active:cursor-grabbing px-[10px] py-[7px] overflow-hidden flex-1 ${singleLine ? 'flex flex-row items-center gap-[4px] pr-[26px]' : 'flex flex-col justify-center gap-[2px]'}`}>
         {/* Calendar cards always render Title on line 1, all other meta on line 2 — taskOrder
             setting doesn't apply here. Line 1: checkbox + title. Line 2: client › project,
             assignees, deadline, + button. Checkbox is INLINE with the title so it stays aligned
             with the title cap-height when the whole content block is vertically centered. */}
-        <div className={`flex flex-row items-center gap-[10px] pr-5 ${oneRow ? 'min-w-0 shrink' : 'w-full'}`}>
+        <div className={`flex flex-row items-center gap-[10px] ${singleLine ? 'min-w-0 shrink' : 'w-full pr-5'}`}>
           {!isScheduled && (
             <div onPointerDown={(e) => e.stopPropagation()} className="shrink-0 flex items-center justify-center">
               <TaskCheckbox completed={task.completed} started={task.started} onToggle={onToggle} accent={isTodayCard && !categoryDimmed ? '#8465ff' : undefined} />
@@ -4196,12 +4202,12 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
               next to the trash it read as unrelated). Hover-reveal; the title wrapper is
               content-sized (no flex-1) so the + sits right after the name, and the row's
               pr-5 keeps everything clear of the absolute trash button. */}
-          {onAddSibling && (
+          {!singleLine && onAddSibling && (
             <button
               type="button"
               onPointerDown={(e) => e.stopPropagation()}
               onClick={(e) => { e.stopPropagation(); onAddSibling(); }}
-              className="shrink-0 p-[2px] opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity"
+              className={`shrink-0 p-[2px] opacity-0 group-hover:opacity-100 ${iconColor} hover:text-white transition-opacity`}
               aria-label="Add task in same project"
             >
               <Plus size={12} />
@@ -4212,7 +4218,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
             the checkbox. 22px = checkbox width (12) + title-row gap (10). When there's no checkbox
             (isScheduled milestones in this branch), the indent collapses to 0. In stacked mode the
             row reserves a min-height so even a meta-less task still reads as two lines (no mix). */}
-          <div className={`flex flex-row items-center gap-[6px] shrink-0 ${oneRow ? '' : stacked ? 'min-h-[15px]' : ''}`}>
+          <div className={`flex flex-row items-center gap-[6px] shrink-0 ${singleLine ? '' : 'min-h-[15px]'}`}>
             {/* When completed, all line-2 meta drops to the same faint #383838 — visually quieted to match the title.
                 Only render the client/project paragraph when there's actual non-empty text to show; otherwise an
                 empty <p> sits at the start of the row and the gap-[6px] pushes the next item (e.g. an assignee
@@ -4244,13 +4250,26 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
                 {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={(isScheduled || isTodayCard) ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed || categoryDimmed} />)}
               </span>
             )}
+            {/* One-line layout: the + is the LAST item in the content lineup — right after the
+                assignee circles. (Two-line layout keeps it up on line 1 next to the title.) */}
+            {singleLine && onAddSibling && (
+              <button
+                type="button"
+                onPointerDown={(e) => e.stopPropagation()}
+                onClick={(e) => { e.stopPropagation(); onAddSibling(); }}
+                className={`shrink-0 p-[2px] opacity-0 group-hover:opacity-100 ${iconColor} hover:text-white transition-opacity`}
+                aria-label="Add task in same project"
+              >
+                <Plus size={12} />
+              </button>
+            )}
           </div>
       </div>
       <button
         type="button"
         onPointerDown={(e) => e.stopPropagation()}
         onClick={(e) => { e.stopPropagation(); onDelete(); }}
-        className="absolute top-2 right-1 p-1 opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity"
+        className={`absolute top-2 right-1 p-1 opacity-0 group-hover:opacity-100 ${iconColor} hover:text-white transition-opacity`}
         aria-label="Delete task"
       >
         <Trash2 size={12} />
@@ -9434,10 +9453,11 @@ export default function App() {
         // state key, kept as-is; the tray itself now lives on the right.)
         if (activeType === 'task' || activeType === 'projTask') {
           if (x > window.innerWidth - 110 && mode !== 'settings') setEdgeDrawer('left');
-          // Once open, LOCK it: only tuck away when the cursor leaves the drawer to the LEFT
-          // (past its 320px left edge). Dropping on a row closes it via onDragEnd. This stops the
-          // random mid-drag close when the pointer jitters just inside the panel.
-          else if (x < window.innerWidth - 320) setEdgeDrawer(null);
+          // Once open, LOCK it: only tuck away when the cursor travels LEFT clear off the panel —
+          // past the 320px drawer AND its 22px chevron tab (342 total). Anywhere over the tray keeps
+          // it open. Dropping on a row closes it via onDragEnd. Combined with the drag-inert hover
+          // handlers above, this kills the random mid-drag retract.
+          else if (x < window.innerWidth - 342) setEdgeDrawer(null);
         }
       }}
       onDragEnd={(ev) => { setEdgeDrawer(null); handleDragEnd(ev); }}
@@ -9995,7 +10015,6 @@ export default function App() {
                                 insertionGap={insertionGap}
                                 taskOrder={taskOrder}
                                 autoFocusEdit={t.id === newId}
-                                stacked
                               />
                               );
                             })}
@@ -11035,8 +11054,13 @@ export default function App() {
                drag the transform is pinned to 0 and only opacity animates, so dnd-kit keeps every
                drop row measured on-screen. One flat #151412 material, 300ms ease-in-out. */
             <div
-              onMouseEnter={() => setEdgeDrawer('left')}
-              onMouseLeave={() => { setEdgeDrawer((d) => (d === 'left' ? null : d)); cancelHoverExpand(); setEdgeExpandedClient(null); }}
+              // Hover open/close applies ONLY when NOT dragging. During a task drag the tray is
+              // governed SOLELY by pointer-X in onDragMove (open near the right edge, retract only
+              // once the cursor travels left off the panel). Leaving these live during a drag was
+              // the "random cut-out": a stray native mouseleave (hover-expand reflow, overlay, a
+              // pointer dip) fired and slammed the tray shut mid-assign.
+              onMouseEnter={trayDrag ? undefined : () => setEdgeDrawer('left')}
+              onMouseLeave={trayDrag ? undefined : () => { setEdgeDrawer((d) => (d === 'left' ? null : d)); cancelHoverExpand(); setEdgeExpandedClient(null); }}
               className={`fixed right-0 top-0 bottom-0 w-[320px] pt-[104px] z-40 bg-[#151412] flex flex-col duration-300 ease-in-out ${trayDrag ? 'transition-opacity' : 'transition-[transform,opacity]'}`}
               style={{
                 transform: (trayOpen || trayDrag) ? 'translateX(0)' : 'translateX(320px)',
@@ -11216,7 +11240,7 @@ export default function App() {
                 className="overflow-hidden"
                 style={{ width: activeRectWidth ?? 220, height: activeRectHeight ?? 55, willChange: 'transform', backgroundColor: activeCalendarCellId && activeCalendarCellId.startsWith(`cal:${dateToISO(new Date())}:`) ? 'rgba(132, 101, 255, 0.10)' : 'rgba(58, 58, 58, 0.6)' }}
               >
-                <CalendarCardBody task={activeTask} projects={projects} clients={clients} taskOrder={taskOrder} isTodayCard={!!activeCalendarCellId && activeCalendarCellId.startsWith(`cal:${dateToISO(new Date())}:`)} />
+                <CalendarCardBody task={activeTask} projects={projects} clients={clients} taskOrder={taskOrder} isTodayCard={!!activeCalendarCellId && activeCalendarCellId.startsWith(`cal:${dateToISO(new Date())}:`)} stacked={mode === 'calendar'} />
               </motion.div>
             ) : (
               <motion.div
