@@ -1926,7 +1926,7 @@ function BottomBar({ mode, onSetMode, onAdd }: { mode: AppMode; onSetMode: (m: A
     // Vertical nav rail hugging the far-left edge. Top cluster: the four view icons + the
     // add-task button. Settings is pinned to the bottom (mt-auto). Tooltips fly out to the
     // RIGHT of each icon (the bar is only 52px wide). The Assign rail lives just to its right.
-    <div className="fixed left-0 top-0 bottom-0 w-[66px] bg-[#232323] flex flex-col items-center py-[22px] z-40">
+    <div className="fixed left-0 top-0 bottom-0 w-[66px] bg-[#151412] flex flex-col items-center py-[22px] z-40">
       <div className="flex flex-col gap-[26px] items-center">
         {/* Order: Focus, Calendar, List, Project. Each icon carries a styled hover tooltip
             (the native title= delay/skin read as missing). */}
@@ -1942,7 +1942,7 @@ function BottomBar({ mode, onSetMode, onAdd }: { mode: AppMode; onSetMode: (m: A
           </div>
         ))}
         <motion.button title="Add task" aria-label="Add task" onClick={onAdd} whileHover={{ scale: 1.06 }} whileTap={{ scale: 0.94 }} className="size-[27px] rounded-full bg-[#7363FF] flex items-center justify-center shadow-lg">
-          <Plus size={16} color="#232323" strokeWidth={2.5} />
+          <Plus size={16} color="#151412" strokeWidth={2.5} />
         </motion.button>
       </div>
       {/* Settings — pinned to the bottom of the rail. */}
