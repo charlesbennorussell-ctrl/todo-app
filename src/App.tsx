@@ -55,6 +55,56 @@ const TOUCH_DEVICE = typeof window !== 'undefined' && (
 // other views — sized for a tall narrow window floating over other apps.
 const PIP_MODE = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('pip');
 
+// Desktop app (Tauri) runs with native window chrome OFF (decorations:false) so we draw our own
+// title bar. The browser build has no window to decorate, so the bar is skipped and --titlebar-h
+// stays 0 → zero layout shift (and the browser stays fully testable). Every fixed top-0 rail and
+// the root read var(--titlebar-h) to sit below the bar when it's present.
+const IS_TAURI = typeof window !== 'undefined' && !!(window as { __TAURI__?: unknown }).__TAURI__;
+const SHOW_TITLEBAR = IS_TAURI && !PIP_MODE;
+if (typeof document !== 'undefined') {
+  document.documentElement.style.setProperty('--titlebar-h', SHOW_TITLEBAR ? '40px' : '0px');
+}
+
+// Custom Tauri title bar: a drag region with a centered accent logo + wordmark and Windows-style
+// minimize / maximize / close buttons wired to the global Tauri window API. Font matches the app
+// header (14.333px); the mark + text pull the accent purple so they recolor with a future theme.
+function TauriTitlebar() {
+  const act = (m: 'minimize' | 'toggleMaximize' | 'close' | 'startDragging') => {
+    try {
+      const w = (window as unknown as { __TAURI__?: { window?: { getCurrentWindow?: () => Record<string, () => Promise<unknown>> } } }).__TAURI__;
+      w?.window?.getCurrentWindow?.()?.[m]?.()?.catch?.(() => {});
+    } catch { /* not in Tauri */ }
+  };
+  const isBtn = (e: React.MouseEvent) => !!(e.target as HTMLElement).closest('button');
+  const ctrl = 'h-full w-[46px] flex items-center justify-center text-[#a8a8a8] transition-colors';
+  return (
+    <div
+      onMouseDown={(e) => { if (!isBtn(e)) act('startDragging'); }}
+      onDoubleClick={(e) => { if (!isBtn(e)) act('toggleMaximize'); }}
+      className="fixed top-0 inset-x-0 h-[40px] z-[120] bg-[#151412] flex items-center justify-center select-none"
+    >
+      <div className="flex items-center gap-[8px] pointer-events-none">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
+          <rect x="2.5" y="2.5" width="19" height="19" rx="5.5" fill="#8465ff" />
+          <rect x="7.5" y="7.5" width="9" height="9" rx="2.5" fill="none" stroke="#ffffff" strokeWidth="1.8" />
+        </svg>
+        <span className="font-['NB_International:Regular',sans-serif] text-[14.333px]" style={{ color: '#8465ff' }}>Ctrl-Project</span>
+      </div>
+      <div className="absolute right-0 top-0 h-full flex">
+        <button type="button" aria-label="Minimize" className={`${ctrl} hover:bg-white/10 hover:text-white`} onClick={() => act('minimize')}>
+          <svg width="10" height="10" viewBox="0 0 10 10"><line x1="0" y1="5" x2="10" y2="5" stroke="currentColor" strokeWidth="1" /></svg>
+        </button>
+        <button type="button" aria-label="Maximize" className={`${ctrl} hover:bg-white/10 hover:text-white`} onClick={() => act('toggleMaximize')}>
+          <svg width="10" height="10" viewBox="0 0 10 10"><rect x="0.5" y="0.5" width="9" height="9" fill="none" stroke="currentColor" strokeWidth="1" /></svg>
+        </button>
+        <button type="button" aria-label="Close" className={`${ctrl} hover:bg-[#e81123] hover:text-white`} onClick={() => act('close')}>
+          <svg width="10" height="10" viewBox="0 0 10 10"><line x1="0" y1="0" x2="10" y2="10" stroke="currentColor" strokeWidth="1" /><line x1="10" y1="0" x2="0" y2="10" stroke="currentColor" strokeWidth="1" /></svg>
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // Card density (Settings → 1 or 2 rows). Provided once at the app root and read by CalendarCard
 // so the setting reaches every calendar/focus card without threading through every component.
 const CardRowsContext = createContext<1 | 2>(2);
@@ -1940,7 +1990,7 @@ function BottomBar({ mode, onSetMode, onAdd }: { mode: AppMode; onSetMode: (m: A
     // Vertical nav rail hugging the far-left edge. Top cluster: the four view icons + the
     // add-task button. Settings is pinned to the bottom (mt-auto). Tooltips fly out to the
     // RIGHT of each icon (the bar is only 52px wide). The Assign rail lives just to its right.
-    <div className="fixed left-0 top-0 bottom-0 w-[66px] bg-[#151412] flex flex-col items-center py-[22px] z-40">
+    <div className="fixed left-0 top-[var(--titlebar-h)] bottom-0 w-[66px] bg-[#151412] flex flex-col items-center py-[22px] z-40">
       <div className="flex flex-col gap-[26px] items-center">
         {/* Order: Focus, Calendar, List, Project. Each icon carries a styled hover tooltip
             (the native title= delay/skin read as missing). */}
@@ -9543,7 +9593,8 @@ export default function App() {
           beside it, so pl-[74px] carves the combined space and the flowing views start clear of
           both. Fixed overlays (nav, assign rail, tray, modals) are position:fixed → unaffected by
           this padding. PIP has neither nav nor rail, so no gutter there. */}
-      <div className={`relative h-screen bg-[#1c1b19] overflow-hidden ${PIP_MODE ? '' : 'pl-[74px] pr-[42px]'}`}>
+      {SHOW_TITLEBAR && <TauriTitlebar />}
+      <div className={`relative h-screen bg-[#1c1b19] overflow-hidden pt-[var(--titlebar-h)] ${PIP_MODE ? '' : 'pl-[74px] pr-[42px]'}`}>
         {/* PIP quick-view: an always-on-top mini-window (?pip=1, opened by the Tauri shell's
             global shortcut) that renders the FOCUS view below with NO BottomBar / tray chrome.
             Edits sync live via Liveblocks, so changes here land in the main window instantly.
@@ -11068,7 +11119,7 @@ export default function App() {
         {/* Persistent right-edge tray bar — ALWAYS visible, even mid-drag (when the drawer itself
             is pinned open + invisible so its drop rows stay measured on-screen). Sits behind the
             drawer (z-30 < z-40), so the tray never vanishes the moment you grab a card. */}
-        {!PIP_MODE && mode !== 'settings' && <div className="fixed right-0 top-0 bottom-0 w-[22px] bg-[#151412] z-30 flex items-center justify-center" aria-hidden><ChevronRight size={12} className="text-[#a8a8a8] rotate-180" /></div>}
+        {!PIP_MODE && mode !== 'settings' && <div className="fixed right-0 top-[var(--titlebar-h)] bottom-0 w-[22px] bg-[#151412] z-30 flex items-center justify-center" aria-hidden><ChevronRight size={12} className="text-[#a8a8a8] rotate-180" /></div>}
         {!PIP_MODE && mode !== 'settings' && (() => {
           // Assign rail + tray. The rail is a FULL-HEIGHT lighter bar living in the far-left
           // gutter (the pl-[22px] on the wrapper reserves the space) — ONLY the bar is the
@@ -11103,7 +11154,7 @@ export default function App() {
               // pointer dip) fired and slammed the tray shut mid-assign.
               onMouseEnter={trayDrag ? undefined : () => setEdgeDrawer('left')}
               onMouseLeave={trayDrag ? undefined : () => { setEdgeDrawer((d) => (d === 'left' ? null : d)); cancelHoverExpand(); setEdgeExpandedClient(null); }}
-              className={`fixed right-0 top-0 bottom-0 w-[320px] pt-[104px] z-40 bg-[#151412] flex flex-col duration-300 ease-in-out ${trayDrag ? 'transition-opacity' : 'transition-[transform,opacity]'}`}
+              className={`fixed right-0 top-[var(--titlebar-h)] bottom-0 w-[320px] pt-[104px] z-40 bg-[#151412] flex flex-col duration-300 ease-in-out ${trayDrag ? 'transition-opacity' : 'transition-[transform,opacity]'}`}
               style={{
                 transform: (trayOpen || trayDrag) ? 'translateX(0)' : 'translateX(320px)',
                 // Opacity is tied to OPEN alone (not "resting"). During a drag the tray sits at
