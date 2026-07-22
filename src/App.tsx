@@ -1877,7 +1877,7 @@ function PipShortcutSetting() {
     setStatus(null);
   };
   const apply = async () => {
-    if (!tauri?.core?.invoke) { setStatus('Global shortcuts only work in the desktop app — open Ctrl-Project (Tauri) and set it there.'); return; }
+    if (!tauri?.core?.invoke) { setStatus('Global shortcuts only work in the desktop app — open Ctrl Focus (Tauri) and set it there.'); return; }
     try {
       const res = await tauri.core.invoke('set_pip_shortcut', { combo });
       try { localStorage.setItem('pip-shortcut-display', combo); } catch { /* private mode */ }
@@ -4863,7 +4863,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
                     <>
                       <div className="flex flex-row items-center gap-3">
                         <span className="inline-block w-[8px] h-[8px] rounded-full" style={{ backgroundColor: dotColor }} />
-                        <span className="text-white">Ctrl-Project v{__APP_VERSION__}</span>
+                        <span className="text-white">Ctrl Focus v{__APP_VERSION__}</span>
                         <span className="text-[#656464]">built {ageLabel}</span>
                       </div>
                       <button type="button" onClick={() => window.location.reload()} className="self-start px-3 py-1 rounded-md bg-[#1f1f1f] hover:bg-[#262626] text-white transition-colors">Reload to latest</button>
@@ -9610,7 +9610,7 @@ export default function App() {
             // The milestones roster stays PUT while a client/project filter is active (only the day
             // columns narrow) — so selecting a filter never reshuffles this list under your cursor.
             // Search + the milestone filter still apply.
-            .filter((t) => t.type === 'scheduled' && taskMatchesQuery(t, focusSearch, projects, clients) && passesMilestoneFilter(t))
+            .filter((t) => t.type === 'scheduled' && taskMatchesQuery(t, focusSearch, projects, clients))
             .sort((a, b) => { if (msRank(a) !== msRank(b)) return msRank(a) - msRank(b); const ad = a.deadline || '￿'; const bd = b.deadline || '￿'; if (ad !== bd) return ad < bd ? -1 : 1; return a.title.localeCompare(b.title); });
           // 62px = the milestone→search gap that lands Search exactly on the Work band's line.
           // (The day column's date→Work spacer is 74px, but Search sits in a 37px row whose text
@@ -9848,7 +9848,7 @@ export default function App() {
                   const msRank = (t: Task) => { const idx = listSequence.indexOf(effectiveListFor(t)); return idx < 0 ? 99 : idx; };
                   const milestones = visibleTasks
                     // Milestones roster stays PUT while filtering (see the stacked flow's note).
-                    .filter((t) => t.type === 'scheduled' && taskMatchesQuery(t, focusSearch, projects, clients) && passesMilestoneFilter(t))
+                    .filter((t) => t.type === 'scheduled' && taskMatchesQuery(t, focusSearch, projects, clients))
                     .sort((a, b) => {
                       if (msRank(a) !== msRank(b)) return msRank(a) - msRank(b);
                       const ad = a.deadline || '￿'; const bd = b.deadline || '￿';
@@ -11197,8 +11197,10 @@ export default function App() {
                   boxShadow: "0 1.875px 7.5px -0.625px rgba(0, 0, 0, 0.35), 0 1.25px 3.125px -0.3125px rgba(0, 0, 0, 0.25)",
                 }}
                 transition={{ scale: { type: "spring", stiffness: 600, damping: 30, mass: 0.4 } }}
-                className="bg-[#3a3a3a] overflow-hidden"
-                style={{ width: activeRectWidth ?? 220, height: activeRectHeight ?? 55, willChange: 'transform' }}
+                // Translucent so you can see the category underneath while dragging to
+                // recategorize: purple wash for a TODAY card, gray for everything else.
+                className="overflow-hidden"
+                style={{ width: activeRectWidth ?? 220, height: activeRectHeight ?? 55, willChange: 'transform', backgroundColor: activeCalendarCellId && activeCalendarCellId.startsWith(`cal:${dateToISO(new Date())}:`) ? 'rgba(132, 101, 255, 0.6)' : 'rgba(58, 58, 58, 0.6)' }}
               >
                 <CalendarCardBody task={activeTask} projects={projects} clients={clients} taskOrder={taskOrder} />
               </motion.div>
