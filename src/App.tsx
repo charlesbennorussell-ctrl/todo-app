@@ -4036,7 +4036,7 @@ function computeCalendarDistribution(tasks: Task[], todayAnchor: Date, horizonDa
 
 // Presentational body of a calendar card ï¿½ no drag wiring, no callbacks. Shared between the
 // live CalendarCard and the DragOverlay so the floating ghost matches the source pixel-for-pixel.
-function CalendarCardBody({ task, projects, clients, taskOrder = 'ptc' }: { task: Task; projects: Project[]; clients: Client[]; taskOrder?: TaskOrder }) {
+function CalendarCardBody({ task, projects, clients, taskOrder = 'ptc', isTodayCard = false }: { task: Task; projects: Project[]; clients: Client[]; taskOrder?: TaskOrder; isTodayCard?: boolean }) {
   const project = task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
   const resolvedClientId = task.clientId ?? project?.clientId;
   const client = resolvedClientId ? clients.find((c) => c.id === resolvedClientId) : undefined;
@@ -4047,8 +4047,8 @@ function CalendarCardBody({ task, projects, clients, taskOrder = 'ptc' }: { task
   // from staying white just because its section is still 'today'.
   const isFuture = !!task.deadline && task.deadline > todayISO();
   const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID || task.list === 'personal';
-  const titleColor = task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : (isNext || isFuture) ? 'text-[#a8a8a8]' : 'text-white';
-  const metaColor = isScheduled ? 'text-[#8465ff]' : 'text-[#656464]';
+  const titleColor = task.completed ? 'text-[#383838]' : isScheduled ? 'text-[#8465ff]' : isTodayCard ? 'text-white' : (isNext || isFuture) ? 'text-[#a8a8a8]' : 'text-white';
+  const metaColor = (isScheduled || isTodayCard) ? 'text-[#8465ff]' : 'text-[#656464]';
   // Whether the client lives ON the first row (combined with project per the slot helper) —
   // applies to 'cpt' and 'tcp' modes where client + project sit adjacent. In 'ptc' the client
   // stays on the second row alongside assignees + date (legacy two-row calendar layout).
@@ -10993,7 +10993,7 @@ export default function App() {
         {/* Persistent right-edge tray bar — ALWAYS visible, even mid-drag (when the drawer itself
             is pinned open + invisible so its drop rows stay measured on-screen). Sits behind the
             drawer (z-30 < z-40), so the tray never vanishes the moment you grab a card. */}
-        {!PIP_MODE && mode !== 'settings' && <div className="fixed right-0 top-0 bottom-0 w-[22px] bg-[#151412] z-30" aria-hidden />}
+        {!PIP_MODE && mode !== 'settings' && <div className="fixed right-0 top-0 bottom-0 w-[22px] bg-[#151412] z-30 flex items-center justify-center" aria-hidden><ChevronRight size={12} className="text-[#a8a8a8] rotate-180" /></div>}
         {!PIP_MODE && mode !== 'settings' && (() => {
           // Assign rail + tray. The rail is a FULL-HEIGHT lighter bar living in the far-left
           // gutter (the pl-[22px] on the wrapper reserves the space) — ONLY the bar is the
@@ -11200,9 +11200,9 @@ export default function App() {
                 // Translucent so you can see the category underneath while dragging to
                 // recategorize: purple wash for a TODAY card, gray for everything else.
                 className="overflow-hidden"
-                style={{ width: activeRectWidth ?? 220, height: activeRectHeight ?? 55, willChange: 'transform', backgroundColor: activeCalendarCellId && activeCalendarCellId.startsWith(`cal:${dateToISO(new Date())}:`) ? 'rgba(132, 101, 255, 0.6)' : 'rgba(58, 58, 58, 0.6)' }}
+                style={{ width: activeRectWidth ?? 220, height: activeRectHeight ?? 55, willChange: 'transform', backgroundColor: activeCalendarCellId && activeCalendarCellId.startsWith(`cal:${dateToISO(new Date())}:`) ? 'rgba(132, 101, 255, 0.10)' : 'rgba(58, 58, 58, 0.6)' }}
               >
-                <CalendarCardBody task={activeTask} projects={projects} clients={clients} taskOrder={taskOrder} />
+                <CalendarCardBody task={activeTask} projects={projects} clients={clients} taskOrder={taskOrder} isTodayCard={!!activeCalendarCellId && activeCalendarCellId.startsWith(`cal:${dateToISO(new Date())}:`)} />
               </motion.div>
             ) : (
               <motion.div
