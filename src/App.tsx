@@ -75,18 +75,26 @@ function TauriTitlebar() {
       w?.window?.getCurrentWindow?.()?.[m]?.()?.catch?.(() => {});
     } catch { /* not in Tauri */ }
   };
+  // Belt-and-suspenders: also strip native decorations at runtime, so the native bar goes even if
+  // the config value didn't fully apply. ACL-guarded → silent no-op on binaries without the perm.
+  useEffect(() => {
+    try {
+      const w = (window as unknown as { __TAURI__?: { window?: { getCurrentWindow?: () => { setDecorations?: (b: boolean) => Promise<unknown> } } } }).__TAURI__;
+      w?.window?.getCurrentWindow?.()?.setDecorations?.(false)?.catch?.(() => {});
+    } catch { /* not in Tauri */ }
+  }, []);
   const isBtn = (e: React.MouseEvent) => !!(e.target as HTMLElement).closest('button');
   const ctrl = 'h-full w-[46px] flex items-center justify-center text-[#a8a8a8] transition-colors';
   return (
     <div
       onMouseDown={(e) => { if (!isBtn(e)) act('startDragging'); }}
       onDoubleClick={(e) => { if (!isBtn(e)) act('toggleMaximize'); }}
-      className="fixed top-0 inset-x-0 h-[40px] z-[120] bg-[#151412] flex items-center justify-center select-none"
+      className="fixed top-0 inset-x-0 h-[40px] z-[120] bg-[#151412] flex items-center pl-[105px] select-none"
     >
       <div className="flex items-center gap-[8px] pointer-events-none">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
           <rect x="2.5" y="2.5" width="19" height="19" rx="5.5" fill="#8465ff" />
-          <rect x="7.5" y="7.5" width="9" height="9" rx="2.5" fill="none" stroke="#ffffff" strokeWidth="1.8" />
+          <rect x="7.5" y="7.5" width="9" height="9" rx="2.5" fill="#151412" />
         </svg>
         <span className="font-['NB_International:Regular',sans-serif] text-[14.333px]" style={{ color: '#8465ff' }}>Ctrl-Project</span>
       </div>

@@ -17,6 +17,7 @@
     "core:window:allow-toggle-maximize",
     "core:window:allow-close",
     "core:window:allow-start-dragging",
+    "core:window:allow-set-decorations",
     "allow-set-pip-shortcut",
     "allow-show-main-window",
     "allow-hide-pip"
