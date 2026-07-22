@@ -9452,12 +9452,14 @@ export default function App() {
         // pulls out; drift back toward the middle → it tucks away. ('left' is just the tray's
         // state key, kept as-is; the tray itself now lives on the right.)
         if (activeType === 'task' || activeType === 'projTask') {
-          // Activation must clear the LAST column entirely. The columns end at the root's
-          // pr-[42px] edge (window.innerWidth - 42); the tray bar lives in that 42px band. Opening
-          // only once the cursor crosses PAST the last column's scrollbar means dragging a card
-          // INTO the rightmost column (Next) no longer pops the tray over the top of it — which
-          // was hiding the column and eating the drop so the task never made it to Next.
-          if (x > window.innerWidth - 42 && mode !== 'settings') setEdgeDrawer('left');
+          // Activation needs BOTH: (1) the cursor in the far-right edge band — past the last
+          // column's scrollbar (columns end at the root's pr-[42px] edge, innerWidth - 42), so
+          // dragging INTO the rightmost column (Next) never pops the tray over the top of it; AND
+          // (2) a ≥40px rightward COMMITMENT from where the card was grabbed (ev.delta.x is exactly
+          // that travel). The commitment is what stops the tray flicking open while you just shuffle
+          // cards around inside the Next column — a little horizontal drift no longer counts; you
+          // have to deliberately push the card out toward the edge.
+          if (x > window.innerWidth - 42 && ev.delta.x > 40 && mode !== 'settings') setEdgeDrawer('left');
           // Once open, LOCK it: only tuck away when the cursor travels LEFT clear off the panel —
           // past the 320px drawer AND its 22px chevron tab (342 total). Anywhere over the tray keeps
           // it open. Dropping on a row closes it via onDragEnd. Combined with the drag-inert hover
