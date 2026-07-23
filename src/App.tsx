@@ -4094,12 +4094,12 @@ function computeCalendarDistribution(tasks: Task[], todayAnchor: Date, horizonDa
       if (iso === todayIso) {
         m.push(...tasks.filter((t) =>
           t.list === listId && t.section === 'today' && !t.deadline && t.type !== 'scheduled' && !t.completed
-        ).sort((a, b) => a.order - b.order));
+        ).sort((a, b) => (b.started ? 1 : 0) - (a.started ? 1 : 0) || a.order - b.order));
       }
       if (iso === tomorrowIso) {
         m.push(...tasks.filter((t) =>
           t.list === listId && t.section === 'tomorrow' && !t.deadline && t.type !== 'scheduled' && !t.completed
-        ).sort((a, b) => a.order - b.order));
+        ).sort((a, b) => (b.started ? 1 : 0) - (a.started ? 1 : 0) || a.order - b.order));
       }
       mandatoryByList[listId] = m;
       totalMandatory += m.length;

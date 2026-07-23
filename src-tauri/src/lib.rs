@@ -14,7 +14,7 @@ use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 
 const PIP_URL: &str = "https://charlesbennorussell-ctrl.github.io/todo-app/?pip=1";
 const PIP_LABEL: &str = "pip";
-const PIP_WIDTH: f64 = 1080.0;
+const PIP_WIDTH: f64 = 1296.0;
 // Fallback chain when no saved combo. Ctrl+Space IS the user's chosen default — simple,
 // user-confirmed free on their setup (no CJK IME toggling it). Whatever combo the user
 // sets is the ONLY one registered; no forced extras.
