@@ -3891,13 +3891,15 @@ function CalendarDayDroppable({ id, children, isEmpty, className = '', slotHeigh
   );
 }
 
-function CalendarColumnDroppable({ date, children }: { date: string; children: React.ReactNode }) {
+function CalendarColumnDroppable({ date, children, className = 'min-w-[200px] flex flex-col h-full min-h-0 overflow-hidden' }: { date: string; children: React.ReactNode; className?: string }) {
   const { setNodeRef } = useDroppable({ id: `col:${date}`, data: { type: 'column', date } });
   // h-full + flex-col + min-h-0 + overflow-hidden so each column can host its own
   // independently-scrolling content area (the caller provides the inner structure:
-  // a shrink-0 day-name row plus a flex-1 overflow-y-auto wrapper for the bands).
+  // a shrink-0 day-name row plus a flex-1 overflow-y-auto wrapper for the bands). The whole
+  // column is the drop target, so releasing in the empty space BELOW the cards still lands
+  // in this column (calendarCollision's col: fallback) — callers pass their own className.
   return (
-    <div ref={setNodeRef} className="min-w-[200px] flex flex-col h-full min-h-0 overflow-hidden">
+    <div ref={setNodeRef} className={className}>
       {children}
     </div>
   );
@@ -10190,7 +10192,7 @@ export default function App() {
                     .filter((t) => t.type === 'scheduled' && !!t.deadline && t.deadline > focusLastVisibleIso && cuPasses(t) && taskMatchesQuery(t, focusSearch, projects, clients))
                     .sort((a, b) => (a.deadline! < b.deadline! ? -1 : a.deadline! > b.deadline! ? 1 : a.title.localeCompare(b.title)));
                   return cols.map((col) => (
-                    <div key={col.key} className="min-w-[240px] flex flex-col min-h-0 overflow-hidden">
+                    <CalendarColumnDroppable key={col.key} date={col.isos[0]} className="min-w-[240px] flex flex-col min-h-0 overflow-hidden">
                       {col.header}
                       <CustomScroll>
                         {/* Next column only: upcoming milestones beyond the window, featured up top. */}
@@ -10219,7 +10221,7 @@ export default function App() {
                         )}
                         {dayBands(col.isos, col.key, col.section)}
                       </CustomScroll>
-                    </div>
+                    </CalendarColumnDroppable>
                   ));
                 })()}
                 {/* Column 2 — Project / Task Information (Brief + Integrations).
