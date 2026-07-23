@@ -4029,8 +4029,8 @@ function MilestoneCardView({ task, projects, clients, showDate, categoryDimmed =
 //   CAL_TASKS_PER_DAY (9)              — global cap on total slots (mandatory + queue)
 //   CAL_QUEUE_CAP_PER_LIST_PER_DAY (3) — per-list cap on queue auto-fill per day
 // Mandatory tasks (deadlined / today / tomorrow placed) are exempt from both caps.
-const CAL_TASKS_PER_DAY = 9;
-const CAL_QUEUE_CAP_PER_LIST_PER_DAY = 3;
+const CAL_TASKS_PER_DAY = 60;
+const CAL_QUEUE_CAP_PER_LIST_PER_DAY = 30;
 
 // The calendar's day-distribution, extracted from WeekCalendarMode so the focus page's
 // mini-calendar strip renders EXACTLY what the week calendar's day columns show. Returns a
