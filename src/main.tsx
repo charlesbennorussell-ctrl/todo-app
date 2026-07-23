@@ -44,30 +44,54 @@ async function clearLocalCache(): Promise<void> {
 const RECOVER_MS = 10000;
 const ATTEMPT_KEY = 'lb-recover-attempts';
 
+// Liveblocks logs "Max number of concurrent connections per room exceeded" to console.error when the
+// room's live-connection cap is hit (too many windows/tabs on the same room at once). Detect it so
+// the recovery screen can tell the user to CLOSE other windows — NOT reload, because every reload
+// opens another connection and keeps the cap saturated (the auto-recovery was making it worse).
+let concurrencyLimited = false;
+if (typeof console !== 'undefined') {
+  const origError = console.error.bind(console);
+  console.error = (...args: unknown[]) => {
+    try { if (args.some((a) => typeof a === 'string' && /concurrent connections/i.test(a))) concurrencyLimited = true; } catch { /* ignore */ }
+    origError(...args);
+  };
+}
+
 const Loading = () => {
-  const [stuck, setStuck] = useState(false);
+  const [phase, setPhase] = useState<'connecting' | 'stuck' | 'concurrency'>('connecting');
   useEffect(() => {
-    const t = setTimeout(async () => {
+    // Watch for the concurrency-limit error the moment it appears → switch to the "close windows"
+    // message and STOP (never reload — that just opens another connection).
+    const poll = window.setInterval(() => { if (concurrencyLimited) setPhase('concurrency'); }, 1200);
+    const t = window.setTimeout(async () => {
+      if (concurrencyLimited) { setPhase('concurrency'); return; }
       const attempts = Number(sessionStorage.getItem(ATTEMPT_KEY) || '0');
-      if (attempts >= 1) { setStuck(true); return; } // already auto-reset once → hand off to manual
+      if (attempts >= 1) { setPhase('stuck'); return; } // already auto-reset once → hand off to manual
       sessionStorage.setItem(ATTEMPT_KEY, '1');
       await clearLocalCache();
       window.location.reload();
     }, RECOVER_MS);
-    return () => clearTimeout(t);
+    return () => { window.clearInterval(poll); window.clearTimeout(t); };
   }, []);
   const manualReset = async () => { await clearLocalCache(); window.location.reload(); };
+  const btn: React.CSSProperties = { marginTop: 2, padding: '8px 16px', background: '#7363FF', color: 'white', border: 'none', borderRadius: 6, fontSize: 13, cursor: 'pointer' };
   return (
     <div style={{ minHeight: '100vh', background: '#282828', color: '#666', display: 'flex', flexDirection: 'column', gap: 14, alignItems: 'center', justifyContent: 'center', fontFamily: 'sans-serif', padding: 40, textAlign: 'center' }}>
-      {stuck ? (
+      {phase === 'concurrency' ? (
+        <>
+          <div style={{ fontSize: 15, color: '#ccc' }}>Too many windows connected</div>
+          <div style={{ fontSize: 13, color: '#7a7a7a', maxWidth: 360, lineHeight: 1.5 }}>
+            This room hit its live-connection limit. Close your other Ctrl-Project windows — the main app, the PIP quick-view, and any browser tabs — wait about a minute, then Retry. Your tasks are safe on the server; reloading won't help (it just opens another connection).
+          </div>
+          <button onClick={() => window.location.reload()} style={btn}>Retry</button>
+        </>
+      ) : phase === 'stuck' ? (
         <>
           <div style={{ fontSize: 15, color: '#ccc' }}>Still can't connect</div>
           <div style={{ fontSize: 13, color: '#7a7a7a', maxWidth: 340, lineHeight: 1.5 }}>
             Usually a dropped network or low disk space. Resetting the local cache is safe — your tasks live on the server.
           </div>
-          <button onClick={manualReset} style={{ marginTop: 2, padding: '8px 16px', background: '#7363FF', color: 'white', border: 'none', borderRadius: 6, fontSize: 13, cursor: 'pointer' }}>
-            Reset local data &amp; reload
-          </button>
+          <button onClick={manualReset} style={btn}>Reset local data &amp; reload</button>
         </>
       ) : (
         'Connecting…'
