@@ -4045,8 +4045,23 @@ const CAL_QUEUE_CAP_PER_LIST_PER_DAY = 3;
 // listOrder: the universal section sequence (Settings → Section sequence). It drives BOTH
 // band display order and the queue-filler allocation order — earlier lists in the sequence
 // get first crack at each day's remaining budget.
-function computeCalendarDistribution(tasks: Task[], todayAnchor: Date, horizonDays: number, listOrder: ListId[]): Record<string, Task[]> {
+function computeCalendarDistribution(tasks: Task[], todayAnchor: Date, horizonDays: number, listOrder: ListId[], projects: Project[] = [], sortByCP = false): Record<string, Task[]> {
   const map: Record<string, Task[]> = {};
+  // Sort-by-Client/Project: reorder a cell so it groups by client → project, then deadline
+  // (dated before undated), then started-first, then manual order. `projById` resolves a task's
+  // client via its project when it has no direct clientId.
+  const projById = new Map(projects.map((p) => [p.id, p]));
+  const clientOf = (t: Task) => t.clientId ?? (t.projectId ? projById.get(t.projectId)?.clientId : undefined) ?? '';
+  const cpCompare = (a: Task, b: Task) => {
+    const ca = clientOf(a), cb = clientOf(b);
+    if (ca !== cb) return ca < cb ? -1 : 1;
+    const pa = a.projectId ?? '', pb = b.projectId ?? '';
+    if (pa !== pb) return pa < pb ? -1 : 1;
+    if (!!a.deadline !== !!b.deadline) return a.deadline ? -1 : 1;
+    if (a.deadline && b.deadline && a.deadline !== b.deadline) return a.deadline < b.deadline ? -1 : 1;
+    if (!!a.started !== !!b.started) return a.started ? -1 : 1;
+    return a.order - b.order;
+  };
   const todayIso = `${todayAnchor.getFullYear()}-${String(todayAnchor.getMonth() + 1).padStart(2, '0')}-${String(todayAnchor.getDate()).padStart(2, '0')}`;
   const tomorrowAnchor = addDaysToDate(todayAnchor, 1);
   const tomorrowIso = `${tomorrowAnchor.getFullYear()}-${String(tomorrowAnchor.getMonth() + 1).padStart(2, '0')}-${String(tomorrowAnchor.getDate()).padStart(2, '0')}`;
@@ -4129,7 +4144,7 @@ function computeCalendarDistribution(tasks: Task[], todayAnchor: Date, horizonDa
         t.list === listId && t.completed && t.type !== 'scheduled' &&
         t.completedDay === iso && iso !== todayIso
       ).sort((a, b) => a.order - b.order);
-      map[`${iso}:${listId}`] = [...m, ...fillers, ...residue];
+      map[`${iso}:${listId}`] = sortByCP ? [...[...m, ...fillers].sort(cpCompare), ...residue] : [...m, ...fillers, ...residue];
     }
   }
   return map;
@@ -4901,7 +4916,7 @@ function BackupSection({
   );
 }
 
-function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePersonShort, onDeletePerson, currentUserShort, onSetCurrentUser, taskOrder, onSetTaskOrder, listSequence, onSetListSequence, caseMode, onSetCaseMode, cardRows, onSetCardRows, trashedTasks, completedTasks, projects, clients, onUntrashTask, onPurgeTask, onToggleTask, onPurgeEmptyProjects, onListClosedOutProjects, onRemoveProjectsByIds, onListStragglerProjects, onDeleteStragglerProject, liveBackupAt, dailyBackupAt, onDownloadBackup, onRestoreFromFile, onRestoreFromSlot, onAddClient, onRenameClient, onRenameClientShort, onDeleteClient }: {
+function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePersonShort, onDeletePerson, currentUserShort, onSetCurrentUser, taskOrder, onSetTaskOrder, listSequence, onSetListSequence, caseMode, onSetCaseMode, cardRows, onSetCardRows, sortByCP, onSetSortByCP, trashedTasks, completedTasks, projects, clients, onUntrashTask, onPurgeTask, onToggleTask, onPurgeEmptyProjects, onListClosedOutProjects, onRemoveProjectsByIds, onListStragglerProjects, onDeleteStragglerProject, liveBackupAt, dailyBackupAt, onDownloadBackup, onRestoreFromFile, onRestoreFromSlot, onAddClient, onRenameClient, onRenameClientShort, onDeleteClient }: {
   people: Person[]; newId: string | null;
   onAddPerson: () => void;
   onRenamePerson: (id: string, name: string) => void;
@@ -4922,6 +4937,8 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
   onSetCaseMode: (v: 'off' | 'title') => void;
   cardRows: 1 | 2;
   onSetCardRows: (v: 1 | 2) => void;
+  sortByCP: boolean;
+  onSetSortByCP: (v: boolean) => void;
   trashedTasks: Task[];
   completedTasks: Task[];
   projects: Project[];
@@ -5062,6 +5079,16 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
                   <button type="button" onClick={() => onSetCardRows(1)} className={`text-[13px] transition-colors ${cardRows === 1 ? 'text-[var(--app-accent)] font-bold' : 'text-[#656464] hover:text-white'}`}>One row</button>
                 </div>
                 <p className="text-[11px] text-[#5e5e5e]">One row collapses title + client › project + deadline onto a single line and truncates the title first.</p>
+              </div>
+            </div>
+            <div>
+              {sectionTitle('Sort by Client / Project')}
+              <div className="px-[31px] pt-[4px] flex flex-col gap-1">
+                <div className="flex flex-row gap-4">
+                  <button type="button" onClick={() => onSetSortByCP(false)} className={`text-[13px] transition-colors ${!sortByCP ? 'text-[var(--app-accent)] font-bold' : 'text-[#656464] hover:text-white'}`}>Off</button>
+                  <button type="button" onClick={() => onSetSortByCP(true)} className={`text-[13px] transition-colors ${sortByCP ? 'text-[var(--app-accent)] font-bold' : 'text-[#656464] hover:text-white'}`}>On</button>
+                </div>
+                <p className="text-[11px] text-[#5e5e5e]">Groups the Focus day columns by client › project, then by deadline and started-first within each group.</p>
               </div>
             </div>
           </div>
@@ -5943,6 +5970,13 @@ export default function App() {
   const setCardRows = useCallback((v: 1 | 2) => {
     setCardRowsState(v);
     try { window.localStorage.setItem('todo-app-card-rows', String(v)); } catch {}
+  }, []);
+  // Sort-by-Client/Project (Settings): when on, day columns group by client → project, with
+  // deadline then started sorting WITHIN each client-project group (project-view style).
+  const [sortByCP, setSortByCPState] = useState<boolean>(() => typeof window !== 'undefined' && window.localStorage.getItem('todo-app-sort-cp') === '1');
+  const setSortByCP = useCallback((v: boolean) => {
+    setSortByCPState(v);
+    try { window.localStorage.setItem('todo-app-sort-cp', v ? '1' : '0'); } catch {}
   }, []);
   // Convenience boolean for the schedule callbacks below.
   const sentenceCaseEnabled = caseMode !== 'off';
@@ -8690,8 +8724,8 @@ export default function App() {
     const anchor = new Date();
     anchor.setHours(0, 0, 0, 0);
     // 9-day horizon: Today (0) + Tomorrow (1) + the "Next" column's week (2..8).
-    return computeCalendarDistribution(calendarTasks, anchor, 9, listSequence);
-  }, [calendarTasks, listSequence]);
+    return computeCalendarDistribution(calendarTasks, anchor, 9, listSequence, projects, sortByCP);
+  }, [calendarTasks, listSequence, projects, sortByCP]);
 
   // Settings → Trash column: every soft-deleted task (newest first by trashedAt). Personal
   // scoping still applies — other users don't see your trashed Personal items.
@@ -11126,6 +11160,8 @@ export default function App() {
             onSetCaseMode={setCaseMode}
             cardRows={cardRows}
             onSetCardRows={setCardRows}
+            sortByCP={sortByCP}
+            onSetSortByCP={setSortByCP}
             trashedTasks={trashedTasks}
             completedTasks={completedTasksForSettings}
             projects={projects}
