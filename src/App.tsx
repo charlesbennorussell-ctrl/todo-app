@@ -4036,14 +4036,30 @@ const CAL_QUEUE_CAP_PER_LIST_PER_DAY = 3;
 // deadline date → started-first → manual order. Extracted to module scope so the calendar
 // distribution AND the focus Next column sort by the SAME rule (previously the focus Next column
 // only got a per-day-cell sort, so its aggregate wasn't globally client/project grouped).
-function makeCpCompare(projects: Project[]) {
+function makeCpCompare(projects: Project[], clients: Client[] = []) {
   const projById = new Map(projects.map((p) => [p.id, p]));
-  const clientOf = (t: Task) => t.clientId ?? (t.projectId ? projById.get(t.projectId)?.clientId : undefined) ?? '';
+  const cliById = new Map(clients.map((c) => [c.id, c]));
+  const clientIdOf = (t: Task) => t.clientId ?? (t.projectId ? projById.get(t.projectId)?.clientId : undefined) ?? '';
+  // Client order mirrors the client-list convention (Personal pinned first, everyone else
+  // alphabetical BY NAME, no-client last) — previously this grouped by raw clientId, whose values
+  // are creation order, so the groups came out in an arbitrary sequence.
+  const cmpClient = (ida: string, idb: string) => {
+    if (ida === idb) return 0;
+    if (ida === PERSONAL_CLIENT_ID) return -1;
+    if (idb === PERSONAL_CLIENT_ID) return 1;
+    const na = cliById.get(ida)?.name ?? '', nb = cliById.get(idb)?.name ?? '';
+    if (!na !== !nb) return na ? -1 : 1;
+    return na.localeCompare(nb, undefined, { sensitivity: 'base' });
+  };
   return (a: Task, b: Task) => {
-    const ca = clientOf(a), cb = clientOf(b);
-    if (ca !== cb) return ca < cb ? -1 : 1;
-    const pa = a.projectId ?? '', pb = b.projectId ?? '';
-    if (pa !== pb) return pa < pb ? -1 : 1;
+    const rc = cmpClient(clientIdOf(a), clientIdOf(b));
+    if (rc !== 0) return rc;
+    // Projects group alphabetically BY NAME within a client (no-project last).
+    const pa = a.projectId ? projById.get(a.projectId)?.name ?? '' : '';
+    const pb = b.projectId ? projById.get(b.projectId)?.name ?? '' : '';
+    if (!pa !== !pb) return pa ? -1 : 1;
+    const rp = pa.localeCompare(pb, undefined, { sensitivity: 'base' });
+    if (rp !== 0) return rp;
     if (!!a.deadline !== !!b.deadline) return a.deadline ? -1 : 1;
     if (a.deadline && b.deadline && a.deadline !== b.deadline) return a.deadline < b.deadline ? -1 : 1;
     if (!!a.started !== !!b.started) return a.started ? -1 : 1;
@@ -4100,11 +4116,11 @@ function queueOrder(tasks: Task[]): Task[] {
 // listOrder: the universal section sequence (Settings → Section sequence). It drives BOTH
 // band display order and the queue-filler allocation order — earlier lists in the sequence
 // get first crack at each day's remaining budget.
-function computeCalendarDistribution(tasks: Task[], todayAnchor: Date, horizonDays: number, listOrder: ListId[], projects: Project[] = [], sortByCP = false, tasksPerDay = CAL_TASKS_PER_DAY, queueCap = CAL_QUEUE_CAP_PER_LIST_PER_DAY): Record<string, Task[]> {
+function computeCalendarDistribution(tasks: Task[], todayAnchor: Date, horizonDays: number, listOrder: ListId[], projects: Project[] = [], clients: Client[] = [], sortByCP = false, tasksPerDay = CAL_TASKS_PER_DAY, queueCap = CAL_QUEUE_CAP_PER_LIST_PER_DAY): Record<string, Task[]> {
   const map: Record<string, Task[]> = {};
   // Sort-by-Client/Project: reorder a cell so it groups by client → project, then deadline
   // (dated before undated), then started-first, then manual order.
-  const cpCompare = makeCpCompare(projects);
+  const cpCompare = makeCpCompare(projects, clients);
   const todayIso = `${todayAnchor.getFullYear()}-${String(todayAnchor.getMonth() + 1).padStart(2, '0')}-${String(todayAnchor.getDate()).padStart(2, '0')}`;
   const tomorrowAnchor = addDaysToDate(todayAnchor, 1);
   const tomorrowIso = `${tomorrowAnchor.getFullYear()}-${String(tomorrowAnchor.getMonth() + 1).padStart(2, '0')}-${String(tomorrowAnchor.getDate()).padStart(2, '0')}`;
@@ -4515,7 +4531,7 @@ function WeekCalendarMode({
   // global day budget (CAL_TASKS_PER_DAY = 9) was sized for 3 lists — with 4 lists (…, personal)
   // the first three eat all 9 slots in listOrder and personal starves to zero. Pass a non-binding
   // global cap so the per-list queueCap (3) is the sole control: every band fills up to 3.
-  const distributionByCell = useMemo(() => computeCalendarDistribution(tasks, todayAnchor, 84, listSequence, [], false, Number.MAX_SAFE_INTEGER), [tasks, todayAnchor, listSequence]);
+  const distributionByCell = useMemo(() => computeCalendarDistribution(tasks, todayAnchor, 84, listSequence, [], [], false, Number.MAX_SAFE_INTEGER), [tasks, todayAnchor, listSequence]);
 
   // (Auto-promotion of queue tasks into today/tomorrow happens ONCE per day inside the 4 AM
   //  refill effect in App. During the day today + tomorrow stay stable; only Wed+ continues to
@@ -8771,8 +8787,8 @@ export default function App() {
     const anchor = new Date();
     anchor.setHours(0, 0, 0, 0);
     // 9-day horizon: Today (0) + Tomorrow (1) + the "Next" column's week (2..8).
-    return computeCalendarDistribution(calendarTasks, anchor, 9, listSequence, projects, sortByCP, 60, 30);
-  }, [calendarTasks, listSequence, projects, sortByCP]);
+    return computeCalendarDistribution(calendarTasks, anchor, 9, listSequence, projects, clients, sortByCP, 60, 30);
+  }, [calendarTasks, listSequence, projects, clients, sortByCP]);
 
   // Settings → Trash column: every soft-deleted task (newest first by trashedAt). Personal
   // scoping still applies — other users don't see your trashed Personal items.
@@ -10154,7 +10170,7 @@ export default function App() {
                     // undated queue below (which arrives project-round-robined for a daily mix).
                     const bucketAll = section === 'next'
                       ? (sortByCP
-                          ? [...bucketAllRaw].sort(makeCpCompare(projects))
+                          ? [...bucketAllRaw].sort(makeCpCompare(projects, clients))
                           : [...bucketAllRaw.filter((t) => t.deadline), ...bucketAllRaw.filter((t) => !t.deadline)])
                       : bucketAllRaw;
                     const bucket = bucketAll.filter(passesFilter);
