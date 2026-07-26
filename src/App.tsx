@@ -4029,8 +4029,8 @@ function MilestoneCardView({ task, projects, clients, showDate, categoryDimmed =
 //   CAL_TASKS_PER_DAY (9)              — global cap on total slots (mandatory + queue)
 //   CAL_QUEUE_CAP_PER_LIST_PER_DAY (3) — per-list cap on queue auto-fill per day
 // Mandatory tasks (deadlined / today / tomorrow placed) are exempt from both caps.
-const CAL_TASKS_PER_DAY = 60;
-const CAL_QUEUE_CAP_PER_LIST_PER_DAY = 30;
+const CAL_TASKS_PER_DAY = 9;
+const CAL_QUEUE_CAP_PER_LIST_PER_DAY = 3;
 
 // The calendar's day-distribution, extracted from WeekCalendarMode so the focus page's
 // mini-calendar strip renders EXACTLY what the week calendar's day columns show. Returns a
@@ -4045,7 +4045,7 @@ const CAL_QUEUE_CAP_PER_LIST_PER_DAY = 30;
 // listOrder: the universal section sequence (Settings → Section sequence). It drives BOTH
 // band display order and the queue-filler allocation order — earlier lists in the sequence
 // get first crack at each day's remaining budget.
-function computeCalendarDistribution(tasks: Task[], todayAnchor: Date, horizonDays: number, listOrder: ListId[], projects: Project[] = [], sortByCP = false): Record<string, Task[]> {
+function computeCalendarDistribution(tasks: Task[], todayAnchor: Date, horizonDays: number, listOrder: ListId[], projects: Project[] = [], sortByCP = false, tasksPerDay = CAL_TASKS_PER_DAY, queueCap = CAL_QUEUE_CAP_PER_LIST_PER_DAY): Record<string, Task[]> {
   const map: Record<string, Task[]> = {};
   // Sort-by-Client/Project: reorder a cell so it groups by client → project, then deadline
   // (dated before undated), then started-first, then manual order. `projById` resolves a task's
@@ -4122,13 +4122,13 @@ function computeCalendarDistribution(tasks: Task[], todayAnchor: Date, horizonDa
       totalMandatory += m.length;
     }
     // Pass 2 — assign queue fillers per list (today/tomorrow sealed; Wed+ real-time).
-    let dayBudget = Math.max(0, CAL_TASKS_PER_DAY - totalMandatory);
+    let dayBudget = Math.max(0, tasksPerDay - totalMandatory);
     for (const listId of listOrder) {
       const m = mandatoryByList[listId];
       // Personal joins Projects as a weekend-active list: it keeps auto-filling up to 3/day on
       // Sat/Sun so personal tasks flow across the whole week. Work/Admin still rest on weekends.
       const skipQueueForWeekend = listId !== 'projects' && listId !== 'personal' && (d.getDay() === 0 || d.getDay() === 6);
-      const listFillerCap = Math.max(0, CAL_QUEUE_CAP_PER_LIST_PER_DAY - m.length);
+      const listFillerCap = Math.max(0, queueCap - m.length);
       let slotsLeft = Math.min(dayBudget, listFillerCap);
       if (skipQueueForWeekend) slotsLeft = 0;
       if (isTodayOrTomorrow) slotsLeft = 0;
@@ -8724,7 +8724,7 @@ export default function App() {
     const anchor = new Date();
     anchor.setHours(0, 0, 0, 0);
     // 9-day horizon: Today (0) + Tomorrow (1) + the "Next" column's week (2..8).
-    return computeCalendarDistribution(calendarTasks, anchor, 9, listSequence, projects, sortByCP);
+    return computeCalendarDistribution(calendarTasks, anchor, 9, listSequence, projects, sortByCP, 60, 30);
   }, [calendarTasks, listSequence, projects, sortByCP]);
 
   // Settings → Trash column: every soft-deleted task (newest first by trashedAt). Personal
