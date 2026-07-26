@@ -4468,7 +4468,11 @@ function WeekCalendarMode({
   // Distribution lives in computeCalendarDistribution (module scope — shared verbatim with
   // the focus page's mini-calendar strip). 84-day horizon ≈ 12 weeks; each cell render is an
   // O(1) map lookup. Recomputes only when the task list changes.
-  const distributionByCell = useMemo(() => computeCalendarDistribution(tasks, todayAnchor, 84, listSequence), [tasks, todayAnchor, listSequence]);
+  // Calendar future days want "3 per section" applied to EACH list-band independently. The shared
+  // global day budget (CAL_TASKS_PER_DAY = 9) was sized for 3 lists — with 4 lists (…, personal)
+  // the first three eat all 9 slots in listOrder and personal starves to zero. Pass a non-binding
+  // global cap so the per-list queueCap (3) is the sole control: every band fills up to 3.
+  const distributionByCell = useMemo(() => computeCalendarDistribution(tasks, todayAnchor, 84, listSequence, [], false, Number.MAX_SAFE_INTEGER), [tasks, todayAnchor, listSequence]);
 
   // (Auto-promotion of queue tasks into today/tomorrow happens ONCE per day inside the 4 AM
   //  refill effect in App. During the day today + tomorrow stay stable; only Wed+ continues to
