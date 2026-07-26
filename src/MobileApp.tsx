@@ -102,23 +102,63 @@ function MobileCardBody({ task, projects, clients, isTodayCard }: {
   const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID || task.list === 'personal';
   const titleColor = task.completed ? 'text-[#383838]' : isScheduled ? 'text-[var(--app-accent)]' : isTodayCard ? 'text-white' : 'text-[#a8a8a8]';
   const metaColor = (isScheduled || isTodayCard) ? 'text-[var(--app-accent)]' : 'text-[#656464]';
+
+  // ONE line by default; drop to two ONLY when the content genuinely doesn't fit. An invisible
+  // single-line probe with the exact same content measures overflow (scrollWidth > clientWidth);
+  // a ResizeObserver re-checks on width changes (rotation, pane resize). No guesswork with
+  // character counts — the probe uses the real fonts and real components.
+  const probeRef = useRef<HTMLDivElement | null>(null);
+  const [stacked, setStacked] = useState(false);
+  useEffect(() => {
+    const el = probeRef.current;
+    if (!el) return;
+    const check = () => setStacked(el.scrollWidth > el.clientWidth + 1);
+    check();
+    const ro = new ResizeObserver(check);
+    ro.observe(el);
+    return () => ro.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [task.title, task.deadline, task.completed, task.assignees.length, client?.short, project?.name]);
+
+  const meta = (
+    <>
+      {client && project && <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap shrink-0 text-[#656464]">{client.short}<Arrowhead dim={task.completed} />{project.name}</p>}
+      {client && !project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap shrink-0 ${metaColor}`}>{client.short}</p>}
+      {!client && project && <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap shrink-0 text-[#656464]">{project.name}</p>}
+      {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={(isScheduled || isTodayCard) ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} />)}
+      {task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap shrink-0 ${(isScheduled || isTodayCard) ? 'text-[var(--app-accent)]' : isLateDeadline(task.deadline) ? 'text-white' : 'text-[#656464]'}`}>{formatDeadline(task.deadline)}</p>}
+    </>
+  );
+  const checkbox = !isScheduled && (
+    <div className="shrink-0 flex items-center justify-center">
+      <TaskCheckbox completed={task.completed} started={task.started} onToggle={() => {}} accent={isTodayCard ? 'var(--app-accent)' : undefined} />
+    </div>
+  );
+  const title = <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleColor}`}>{task.title || 'New Task'}</span>;
+
   return (
-    <div className="px-[12px] py-[8px] overflow-hidden h-full flex flex-col justify-center gap-[2px]">
-      <div className="flex flex-row items-center gap-[10px]">
-        {!isScheduled && (
-          <div className="shrink-0 flex items-center justify-center">
-            <TaskCheckbox completed={task.completed} started={task.started} onToggle={() => {}} accent={isTodayCard ? 'var(--app-accent)' : undefined} />
+    <div className="relative px-[12px] py-[8px] overflow-hidden h-full flex flex-col justify-center gap-[2px]">
+      {/* Measuring probe — invisible, single-line, identical content */}
+      <div ref={probeRef} aria-hidden className="absolute inset-x-0 top-0 px-[12px] invisible overflow-hidden flex flex-row items-center gap-[10px] whitespace-nowrap pointer-events-none">
+        {checkbox}
+        <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap">{task.title || 'New Task'}</span>
+        <span className="flex flex-row items-center gap-[6px] shrink-0">{meta}</span>
+      </div>
+      {stacked ? (
+        <>
+          <div className="flex flex-row items-center gap-[10px]">
+            {checkbox}
+            {title}
           </div>
-        )}
-        <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleColor}`}>{task.title || 'New Task'}</span>
-      </div>
-      <div className="flex flex-row items-center gap-[6px] pl-[22px] min-h-[15px]">
-        {client && project && <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap text-[#656464]">{client.short}<Arrowhead dim={task.completed} />{project.name}</p>}
-        {client && !project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${metaColor}`}>{client.short}</p>}
-        {!client && project && <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap text-[#656464]">{project.name}</p>}
-        {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={(isScheduled || isTodayCard) ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} />)}
-        {task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${(isScheduled || isTodayCard) ? 'text-[var(--app-accent)]' : isLateDeadline(task.deadline) ? 'text-white' : 'text-[#656464]'}`}>{formatDeadline(task.deadline)}</p>}
-      </div>
+          <div className="flex flex-row items-center gap-[6px] pl-[22px] min-h-[15px]">{meta}</div>
+        </>
+      ) : (
+        <div className="flex flex-row items-center gap-[10px]">
+          {checkbox}
+          {title}
+          <span className="flex flex-row items-center gap-[6px] shrink-0 ml-auto">{meta}</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -158,7 +198,7 @@ function MobileCard({ task, cellId, projects, clients, isTodayCard, onToggle, on
       ref={setNodeRef}
       data-mcard="1"
       style={style}
-      className={`relative mx-[10px] mb-[5px] rounded-[3.333px] min-h-[52px] flex flex-col justify-center ${isTodayCard ? '' : 'bg-white/[0.03]'}`}
+      className={`relative mx-[10px] mb-[5px] rounded-[3.333px] min-h-[44px] flex flex-col justify-center ${isTodayCard ? '' : 'bg-white/[0.03]'}`}
       {...attributes}
       {...restListeners}
       onTouchStart={(e) => {
