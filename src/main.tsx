@@ -2,9 +2,31 @@ import React, { useEffect, useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import { LiveblocksProvider, RoomProvider, ClientSideSuspense } from '@liveblocks/react/suspense';
 import App from './App';
+import MobileApp from './MobileApp';
 import './index.css';
 import './liveblocks.config';
 import { initialTasks, initialProjects, initialClients, initialPeople } from './data';
+
+// Mobile-vs-desktop router. matchMedia is reactive — rotating an iPad or resizing a
+// desktop browser across 768px hot-swaps mid-session. Overrides for testing:
+//   ?mobile=1  → force the phone shell at any width
+//   ?desktop=1 → force the desktop app at any width
+// The PIP quick-view window is always the desktop App (its own reduced layout).
+const MOBILE_BREAKPOINT = '(max-width: 767px)';
+const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+const FORCE_MOBILE = !!urlParams?.has('mobile');
+const FORCE_DESKTOP = !!urlParams?.has('desktop') || !!urlParams?.has('pip');
+const Shell = () => {
+  const [isMobile, setIsMobile] = useState<boolean>(() => typeof window !== 'undefined' && window.matchMedia(MOBILE_BREAKPOINT).matches);
+  useEffect(() => {
+    const mq = window.matchMedia(MOBILE_BREAKPOINT);
+    const onChange = (e: MediaQueryListEvent) => setIsMobile(e.matches);
+    mq.addEventListener('change', onChange);
+    return () => mq.removeEventListener('change', onChange);
+  }, []);
+  if (FORCE_DESKTOP) return <App />;
+  return (FORCE_MOBILE || isMobile) ? <MobileApp /> : <App />;
+};
 
 const publicApiKey = import.meta.env.VITE_LIVEBLOCKS_PUBLIC_KEY as string | undefined;
 const roomId = (import.meta.env.VITE_ROOM_ID as string | undefined) || 'todo-app-v3';
@@ -104,7 +126,7 @@ const Loading = () => {
 // the same session still earns the full auto-reset treatment.
 const Connected = () => {
   useEffect(() => { try { sessionStorage.removeItem(ATTEMPT_KEY); } catch { /* ignore */ } }, []);
-  return <App />;
+  return <Shell />;
 };
 
 const Missing = () => (

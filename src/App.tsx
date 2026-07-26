@@ -653,7 +653,7 @@ function TopHeader({ viewName }: { viewName: string }) {
   );
 }
 
-function TaskCheckbox({ completed, started = false, onToggle, accent }: { completed: boolean; started?: boolean; onToggle: () => void; accent?: string }) {
+export function TaskCheckbox({ completed, started = false, onToggle, accent }: { completed: boolean; started?: boolean; onToggle: () => void; accent?: string }) {
   // Three visual states (cycled by repeated clicks — see toggleTask):
   //   pending   → empty box with grey 1.5px stroke
   //   started   → solid mid-grey fill (no tick), reading as "in progress" / "I've begun this"
@@ -715,7 +715,7 @@ function MilestoneToggle({ value, onChange }: { value: boolean; onChange: (v: bo
   );
 }
 
-function AssigneeBadge({ letter, tone, hollow = false, dim = false, active = false, faint = false, dimColor = '#383838' }: { letter: Assignee; tone: 'scheduled' | 'todo'; hollow?: boolean; dim?: boolean; active?: boolean; faint?: boolean; dimColor?: string }) {
+export function AssigneeBadge({ letter, tone, hollow = false, dim = false, active = false, faint = false, dimColor = '#383838' }: { letter: Assignee; tone: 'scheduled' | 'todo'; hollow?: boolean; dim?: boolean; active?: boolean; faint?: boolean; dimColor?: string }) {
   // `dim` matches the muted palette used for completed tasks; `active` swaps the fill to white
   // for the panel's "selected resource" treatment so the badge pops alongside its bold-white name.
   // `faint` (used for expired milestones) drops the scheduled purple to its faint variant.
@@ -782,7 +782,7 @@ function taskOrderSlots(order: TaskOrder, hasProject: boolean, hasClient: boolea
 // to land on the text's baseline band — see DeadlineArrow). Tone:
 //   - 'default'   → #656464 (matches DeadlineArrow's fill)
 //   - 'milestone' → var(--app-accent) (matches milestone purple)
-function Arrowhead({ dim = false, tone = 'default', faint = false, color }: { dim?: boolean; tone?: 'default' | 'milestone'; faint?: boolean; color?: string }) {
+export function Arrowhead({ dim = false, tone = 'default', faint = false, color }: { dim?: boolean; tone?: 'default' | 'milestone'; faint?: boolean; color?: string }) {
   // `faint` (used for expired milestones) drops the milestone purple to its faint variant.
   // `color` hard-overrides everything (dim-today cards pass the app bg var(--app-bg) so the arrow carves).
   const milestoneFill = faint ? '#4f4290' : 'var(--app-accent)';
@@ -3823,8 +3823,8 @@ function startOfWeek(d: Date): Date {
   nd.setDate(nd.getDate() - nd.getDay());
   return nd;
 }
-function addDaysToDate(d: Date, n: number): Date { const x = new Date(d); x.setDate(x.getDate() + n); return x; }
-function dateToISO(d: Date): string {
+export function addDaysToDate(d: Date, n: number): Date { const x = new Date(d); x.setDate(x.getDate() + n); return x; }
+export function dateToISO(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
@@ -4036,7 +4036,7 @@ const CAL_QUEUE_CAP_PER_LIST_PER_DAY = 3;
 // deadline date → started-first → manual order. Extracted to module scope so the calendar
 // distribution AND the focus Next column sort by the SAME rule (previously the focus Next column
 // only got a per-day-cell sort, so its aggregate wasn't globally client/project grouped).
-function makeCpCompare(projects: Project[], clients: Client[] = []) {
+export function makeCpCompare(projects: Project[], clients: Client[] = []) {
   const projById = new Map(projects.map((p) => [p.id, p]));
   const cliById = new Map(clients.map((c) => [c.id, c]));
   const clientIdOf = (t: Task) => t.clientId ?? (t.projectId ? projById.get(t.projectId)?.clientId : undefined) ?? '';
@@ -4116,7 +4116,7 @@ function queueOrder(tasks: Task[]): Task[] {
 // listOrder: the universal section sequence (Settings → Section sequence). It drives BOTH
 // band display order and the queue-filler allocation order — earlier lists in the sequence
 // get first crack at each day's remaining budget.
-function computeCalendarDistribution(tasks: Task[], todayAnchor: Date, horizonDays: number, listOrder: ListId[], projects: Project[] = [], clients: Client[] = [], sortByCP = false, tasksPerDay = CAL_TASKS_PER_DAY, queueCap = CAL_QUEUE_CAP_PER_LIST_PER_DAY): Record<string, Task[]> {
+export function computeCalendarDistribution(tasks: Task[], todayAnchor: Date, horizonDays: number, listOrder: ListId[], projects: Project[] = [], clients: Client[] = [], sortByCP = false, tasksPerDay = CAL_TASKS_PER_DAY, queueCap = CAL_QUEUE_CAP_PER_LIST_PER_DAY): Record<string, Task[]> {
   const map: Record<string, Task[]> = {};
   // Sort-by-Client/Project: reorder a cell so it groups by client → project, then deadline
   // (dated before undated), then started-first, then manual order.
