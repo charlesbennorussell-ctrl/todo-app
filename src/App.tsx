@@ -4032,6 +4032,61 @@ function MilestoneCardView({ task, projects, clients, showDate, categoryDimmed =
 const CAL_TASKS_PER_DAY = 9;
 const CAL_QUEUE_CAP_PER_LIST_PER_DAY = 3;
 
+// Shared "Sort by Client / Project" comparator: client → project → deadline (dated first) →
+// deadline date → started-first → manual order. Extracted to module scope so the calendar
+// distribution AND the focus Next column sort by the SAME rule (previously the focus Next column
+// only got a per-day-cell sort, so its aggregate wasn't globally client/project grouped).
+function makeCpCompare(projects: Project[]) {
+  const projById = new Map(projects.map((p) => [p.id, p]));
+  const clientOf = (t: Task) => t.clientId ?? (t.projectId ? projById.get(t.projectId)?.clientId : undefined) ?? '';
+  return (a: Task, b: Task) => {
+    const ca = clientOf(a), cb = clientOf(b);
+    if (ca !== cb) return ca < cb ? -1 : 1;
+    const pa = a.projectId ?? '', pb = b.projectId ?? '';
+    if (pa !== pb) return pa < pb ? -1 : 1;
+    if (!!a.deadline !== !!b.deadline) return a.deadline ? -1 : 1;
+    if (a.deadline && b.deadline && a.deadline !== b.deadline) return a.deadline < b.deadline ? -1 : 1;
+    if (!!a.started !== !!b.started) return a.started ? -1 : 1;
+    return a.order - b.order;
+  };
+}
+
+// Round-robin a list's undated queue ACROSS its projects so the calendar auto-dispatch feeds each
+// day a MIX (one from each project, cycling) instead of a run of a single project — e.g. house,
+// car, finance, then house, car, finance again — rather than every car task in a row. Within a
+// project, manual `order` is preserved (drag-sortable). The queue is consumed in this order and
+// sliced per-day, so day N gets each project's Nth item → consecutive days walk down every project
+// in lockstep. Dated tasks never reach the queue (they place as mandatory on their date).
+function roundRobinByProject(tasks: Task[]): Task[] {
+  const groups = new Map<string, Task[]>();
+  for (const t of tasks) {
+    const k = t.projectId ?? '';
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k)!.push(t);
+  }
+  for (const g of groups.values()) g.sort((a, b) => a.order - b.order);
+  // Project cycle order: the project whose lowest-order task sorts first leads (stable, honors a
+  // manual "which project first" intent rather than Map-insertion order).
+  const projOrder = [...groups.keys()].sort((k1, k2) => groups.get(k1)![0].order - groups.get(k2)![0].order);
+  const out: Task[] = [];
+  for (let round = 0; ; round++) {
+    let any = false;
+    for (const k of projOrder) {
+      const g = groups.get(k)!;
+      if (round < g.length) { out.push(g[round]); any = true; }
+    }
+    if (!any) break;
+  }
+  return out;
+}
+
+// Queue order for calendar auto-dispatch: in-progress (started) tasks lead as a block — they're
+// what you're actively on, so they get priority to the nearest open days — then everything else,
+// each tier round-robined across projects for the daily mix.
+function queueOrder(tasks: Task[]): Task[] {
+  return [...roundRobinByProject(tasks.filter((t) => t.started)), ...roundRobinByProject(tasks.filter((t) => !t.started))];
+}
+
 // The calendar's day-distribution, extracted from WeekCalendarMode so the focus page's
 // mini-calendar strip renders EXACTLY what the week calendar's day columns show. Returns a
 // map keyed '<iso>:<listId>' → tasks for `horizonDays` days starting at todayAnchor
@@ -4048,20 +4103,8 @@ const CAL_QUEUE_CAP_PER_LIST_PER_DAY = 3;
 function computeCalendarDistribution(tasks: Task[], todayAnchor: Date, horizonDays: number, listOrder: ListId[], projects: Project[] = [], sortByCP = false, tasksPerDay = CAL_TASKS_PER_DAY, queueCap = CAL_QUEUE_CAP_PER_LIST_PER_DAY): Record<string, Task[]> {
   const map: Record<string, Task[]> = {};
   // Sort-by-Client/Project: reorder a cell so it groups by client → project, then deadline
-  // (dated before undated), then started-first, then manual order. `projById` resolves a task's
-  // client via its project when it has no direct clientId.
-  const projById = new Map(projects.map((p) => [p.id, p]));
-  const clientOf = (t: Task) => t.clientId ?? (t.projectId ? projById.get(t.projectId)?.clientId : undefined) ?? '';
-  const cpCompare = (a: Task, b: Task) => {
-    const ca = clientOf(a), cb = clientOf(b);
-    if (ca !== cb) return ca < cb ? -1 : 1;
-    const pa = a.projectId ?? '', pb = b.projectId ?? '';
-    if (pa !== pb) return pa < pb ? -1 : 1;
-    if (!!a.deadline !== !!b.deadline) return a.deadline ? -1 : 1;
-    if (a.deadline && b.deadline && a.deadline !== b.deadline) return a.deadline < b.deadline ? -1 : 1;
-    if (!!a.started !== !!b.started) return a.started ? -1 : 1;
-    return a.order - b.order;
-  };
+  // (dated before undated), then started-first, then manual order.
+  const cpCompare = makeCpCompare(projects);
   const todayIso = `${todayAnchor.getFullYear()}-${String(todayAnchor.getMonth() + 1).padStart(2, '0')}-${String(todayAnchor.getDate()).padStart(2, '0')}`;
   const tomorrowAnchor = addDaysToDate(todayAnchor, 1);
   const tomorrowIso = `${tomorrowAnchor.getFullYear()}-${String(tomorrowAnchor.getMonth() + 1).padStart(2, '0')}-${String(tomorrowAnchor.getDate()).padStart(2, '0')}`;
@@ -4069,13 +4112,13 @@ function computeCalendarDistribution(tasks: Task[], todayAnchor: Date, horizonDa
   const queues: Record<string, Task[]> = {};
   const queueIdxs: Record<string, number> = {};
   for (const listId of listOrder) {
-    queues[listId] = tasks.filter((t) =>
+    queues[listId] = queueOrder(tasks.filter((t) =>
       t.list === listId &&
       (t.section === 'next' || t.section === 'inbox') &&
       !t.deadline &&
       t.type !== 'scheduled' &&
       !t.completed
-    ).sort((a, b) => a.order - b.order);
+    ));
     queueIdxs[listId] = 0;
   }
   // A task with a DATE RANGE (both startDate + deadline set) tracks the START of its range on the
@@ -10104,11 +10147,15 @@ export default function App() {
                     const clientOfT = (t: Task) => t.clientId ?? (t.projectId ? projects.find((p) => p.id === t.projectId)?.clientId : undefined);
                     const passesFilter = (t: Task) => taskMatchesQuery(t, focusSearch, projects, clients) && passesMilestoneFilter(t) && (focusProjectId ? t.projectId === focusProjectId : focusClientId ? clientOfT(t) === focusClientId : true);
                     const bucketAllRaw = isos.flatMap((iso) => focusStripCells[`${iso}:${listId}`] || []);
-                    // NEXT column: anything with a deadline piles at the TOP of its band
-                    // (day-cell flattening already yields them deadline-ascending), undated
-                    // queue tasks below — matching list view's dated-above-undated rule.
+                    // NEXT column ordering. With Sort-by-Client/Project ON, the whole band sorts by
+                    // client → project → date → started → order GLOBALLY (this is the setting's
+                    // primary home — the day-cells only ever got a per-day sort, so the aggregate
+                    // wasn't client/project grouped across days). OFF: deadlines pile at the top,
+                    // undated queue below (which arrives project-round-robined for a daily mix).
                     const bucketAll = section === 'next'
-                      ? [...bucketAllRaw.filter((t) => t.deadline), ...bucketAllRaw.filter((t) => !t.deadline)]
+                      ? (sortByCP
+                          ? [...bucketAllRaw].sort(makeCpCompare(projects))
+                          : [...bucketAllRaw.filter((t) => t.deadline), ...bucketAllRaw.filter((t) => !t.deadline)])
                       : bucketAllRaw;
                     const bucket = bucketAll.filter(passesFilter);
                     // Milestones dated inside this column's window, band-matched by
