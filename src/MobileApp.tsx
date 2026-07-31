@@ -356,6 +356,11 @@ export default function MobileApp() {
   const listSequence = useMemo(readListSequence, []);
   const sortByCP = useMemo(readSortByCP, []);
 
+  // Re-render pulse. The 60s interval (wired below) keeps day boundaries honest; toggleTask
+  // also fires one at 15.1s so a task that just went "started" re-sorts the moment its hold
+  // expires instead of waiting up to a minute for the next tick. Desktop does the same.
+  const [clockTick, setClockTick] = useState(0);
+
   // ── Mutations (desktop semantics, verbatim) ────────────────────────────────
   const toggleTask = useCallback((id: string) => {
     setTasks((prev) => prev.map((t) => {
@@ -364,6 +369,7 @@ export default function MobileApp() {
       if (t.started) return { ...t, completed: true, completedDay: todayISO(), completedAt: Date.now(), revivedAt: undefined };
       return { ...t, started: true, startedAt: Date.now() };
     }));
+    window.setTimeout(() => setClockTick((n) => n + 1), 15100);
   }, [setTasks]);
 
   const renameTask = useCallback((id: string, title: string) => {
@@ -424,7 +430,6 @@ export default function MobileApp() {
     [tasks, currentUserShort]
   );
   // Re-render each minute so "today" boundaries and completion-hiding stay honest overnight.
-  const [, setClockTick] = useState(0);
   useEffect(() => { const h = window.setInterval(() => setClockTick((n) => n + 1), 60000); return () => window.clearInterval(h); }, []);
 
   // Anchored to the REAL calendar day (midnight, matching the desktop's focus strip). The
@@ -438,7 +443,9 @@ export default function MobileApp() {
   isosRef.current = isos;
   const cells = useMemo(
     () => computeCalendarDistribution(calendarTasks, anchor, 9, listSequence, projects, clients, sortByCP, 60, 30),
-    [calendarTasks, anchor, listSequence, projects, clients, sortByCP]
+    // clockTick is REQUIRED: the started-hold is time-based, so the distribution must be
+    // recomputed when the clock crosses it (toggleTask pulses at 15.1s, the interval at 60s).
+    [calendarTasks, anchor, listSequence, projects, clients, sortByCP, clockTick]
   );
 
   // Assemble one pane's bands. Today=iso[0], Tomorrow=iso[1], Next=isos[2..8] flattened

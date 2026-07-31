@@ -4063,7 +4063,10 @@ export function makeCpCompare(projects: Project[], clients: Client[] = []) {
     if (rp !== 0) return rp;
     if (!!a.deadline !== !!b.deadline) return a.deadline ? -1 : 1;
     if (a.deadline && b.deadline && a.deadline !== b.deadline) return a.deadline < b.deadline ? -1 : 1;
-    if (!!a.started !== !!b.started) return a.started ? -1 : 1;
+    // Started-first within a project group, but only once the 15s hold has elapsed — otherwise
+    // the row jumps the moment you tick it. (Same rule as the Today/Tomorrow band sorts.)
+    const sa = startedSettled(a), sb = startedSettled(b);
+    if (sa !== sb) return sa ? -1 : 1;
     return a.order - b.order;
   };
 }
@@ -4100,8 +4103,19 @@ function roundRobinByProject(tasks: Task[]): Task[] {
 // Queue order for calendar auto-dispatch: in-progress (started) tasks lead as a block — they're
 // what you're actively on, so they get priority to the nearest open days — then everything else,
 // each tier round-robined across projects for the daily mix.
+// A task you just ticked to "started" HOLDS ITS POSITION for this long before the started-sort
+// applies, so the row you just clicked doesn't leap out from under the cursor. toggleTask
+// schedules a re-render at 15.1s (and the 60s tick backstops it), at which point the task moves.
+// Legacy tasks with `started` but no `startedAt` count as long-settled.
+const STARTED_GRACE_MS = 15000;
+function startedSettled(t: Task): boolean {
+  if (!t.started) return false;
+  if (!t.startedAt) return true;
+  return Date.now() - t.startedAt > STARTED_GRACE_MS;
+}
+
 function queueOrder(tasks: Task[]): Task[] {
-  return [...roundRobinByProject(tasks.filter((t) => t.started)), ...roundRobinByProject(tasks.filter((t) => !t.started))];
+  return [...roundRobinByProject(tasks.filter(startedSettled)), ...roundRobinByProject(tasks.filter((t) => !startedSettled(t)))];
 }
 
 // The calendar's day-distribution, extracted from WeekCalendarMode so the focus page's
@@ -4169,14 +4183,21 @@ export function computeCalendarDistribution(tasks: Task[], todayAnchor: Date, ho
         t.list === listId && datedHere(t) && t.type !== 'scheduled' && !t.completed
       ).sort((a, b) => { const aa = anchorOf(a), bb = anchorOf(b); return aa !== bb ? (aa! < bb! ? -1 : 1) : a.order - b.order; }));
       if (iso === todayIso) {
+        // TODAY sinks started tasks to the BOTTOM of the category. You've picked it up, so it
+        // stops competing for attention with what you haven't touched yet — the top of Today is
+        // "what's left". Dated tasks were pushed above, so this only reorders the undated group.
+        // The sink waits out STARTED_GRACE_MS so the row doesn't jump the instant you click it.
         m.push(...tasks.filter((t) =>
           t.list === listId && t.section === 'today' && !t.deadline && t.type !== 'scheduled' && !t.completed
-        ).sort((a, b) => (b.started ? 1 : 0) - (a.started ? 1 : 0) || a.order - b.order));
+        ).sort((a, b) => (startedSettled(a) ? 1 : 0) - (startedSettled(b) ? 1 : 0) || a.order - b.order));
       }
       if (iso === tomorrowIso) {
+        // TOMORROW (and Next, via queueOrder) does the opposite: started work floats to the top
+        // as the thing already in flight — but still UNDER the dated tasks pushed above, which
+        // keep priority. Same 15s hold before it moves.
         m.push(...tasks.filter((t) =>
           t.list === listId && t.section === 'tomorrow' && !t.deadline && t.type !== 'scheduled' && !t.completed
-        ).sort((a, b) => (b.started ? 1 : 0) - (a.started ? 1 : 0) || a.order - b.order));
+        ).sort((a, b) => (startedSettled(b) ? 1 : 0) - (startedSettled(a) ? 1 : 0) || a.order - b.order));
       }
       mandatoryByList[listId] = m;
       totalMandatory += m.length;
@@ -8839,7 +8860,12 @@ export default function App() {
     anchor.setHours(0, 0, 0, 0);
     // 9-day horizon: Today (0) + Tomorrow (1) + the "Next" column's week (2..8).
     return computeCalendarDistribution(calendarTasks, anchor, 9, listSequence, projects, clients, sortByCP, 60, 30);
-  }, [calendarTasks, listSequence, projects, clients, sortByCP]);
+    // sortTick is a REQUIRED dep, not noise: the started-hold (STARTED_GRACE_MS) is time-based,
+    // so the distribution has to be recomputed when the clock crosses it. toggleTask pulses
+    // sortTick at 15.1s and the 60s interval backstops it. Without this the memo only ever
+    // re-ran when `tasks` changed, so a started task sat still until some unrelated edit.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [calendarTasks, listSequence, projects, clients, sortByCP, sortTick]);
 
   // Settings → Trash column: every soft-deleted task (newest first by trashedAt). Personal
   // scoping still applies — other users don't see your trashed Personal items.
