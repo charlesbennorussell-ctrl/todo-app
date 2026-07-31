@@ -8,6 +8,7 @@ import { createPortal } from 'react-dom';
 import {
   DndContext,
   KeyboardSensor,
+  KeyboardCode,
   MouseSensor,
   TouchSensor,
   useSensor,
@@ -6316,12 +6317,25 @@ export default function App() {
   // movement crosses 500ms → drag activates and the tile lifts. This is
   // the same pattern Apple's reorderable lists, Trello, and Todoist use.
   //
-  // KeyboardSensor is unchanged — Tab to focus a card, Space to pick up,
-  // arrows to move, Space to drop.
+  // KeyboardSensor — Tab to focus a card, SPACE to pick up, arrows to move, Space/Enter to drop.
+  //
+  // `start` is narrowed to Space only. dnd-kit's default is [Space, Enter], which meant that
+  // pressing Enter while a card had focus picked the card up for a keyboard drag: the card
+  // lifted and shifted right, and every other category dimmed to the drag-feedback gray while
+  // the source category stayed lit. Enter is our "create a sibling task" key, so the two
+  // collided and you got a new task AND a stuck half-drag. Enter is kept as an END key so a
+  // keyboard drag that IS in progress can still be dropped with it.
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 8 } }),
     useSensor(TouchSensor, { activationConstraint: { delay: 250, tolerance: 10 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates })
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+      keyboardCodes: {
+        start: [KeyboardCode.Space],
+        cancel: [KeyboardCode.Esc],
+        end: [KeyboardCode.Space, KeyboardCode.Enter],
+      },
+    })
   );
   // BeforeDragging (vs Always): measure droppable rects ONCE at drag start, not on every render.
   // Why: our Displaced primitive moves cards via CSS transform to make room for the dragged item.
@@ -8606,9 +8620,18 @@ export default function App() {
       const t = e.target as HTMLElement | null;
       if (isTypingTarget(t)) return;
       if (e.key === 'Enter') {
+        // Real <button>s (Add, Delete, nav, settings) keep their native "Enter activates me".
         if (t?.tagName === 'BUTTON') return;
+        // Clicking a card focuses it: dnd-kit's useSortable attributes put role="button" and
+        // tabIndex=0 on the card's inner CONTENT div, while data-cal-card lives on the card
+        // ROOT — so resolve the card by walking up from whatever holds focus. (This focused
+        // case is what the keyboard-drag collision made visible: the card lifted and every
+        // other category dimmed, because Enter was ALSO dnd-kit's pick-up key.)
+        const focusedCardEl = t?.closest?.('[data-cal-card],[data-task-row]') as HTMLElement | null;
+        const focusedCardId = focusedCardEl?.getAttribute('data-cal-card') || focusedCardEl?.getAttribute('data-task-row') || null;
         // Enter === clicking the "+" on the task you're on. Resolve that task the same way
-        // the user perceives "on": the row under the cursor, else the selected row.
+        // the user perceives "on": the focused card, else the row under the cursor, else the
+        // selected row.
         //
         // Two bugs this fixes:
         //   1. Only `[data-task-row]` was queried — that attribute is on LIST rows only.
@@ -8620,7 +8643,7 @@ export default function App() {
         // from the source task, which is exactly what the "+" button does.
         const hoveredEl = document.querySelector('[data-task-row]:hover, [data-cal-card]:hover') as HTMLElement | null;
         const hoveredId = hoveredEl?.getAttribute('data-task-row') || hoveredEl?.getAttribute('data-cal-card');
-        const targetId = hoveredId || selectedTaskId;
+        const targetId = focusedCardId || hoveredId || selectedTaskId;
         const targetTask = targetId ? tasks.find((x) => x.id === targetId) : undefined;
         e.preventDefault();
         if (targetTask) addSiblingTask(targetTask);
