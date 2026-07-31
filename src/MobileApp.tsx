@@ -747,7 +747,7 @@ export default function MobileApp() {
           <ComposeSheet
             listSequence={listSequence}
             defaultSection={PANES[pane].section}
-            onCreate={(title, listId, section) => { addTask(title, listId, section); setComposing(false); }}
+            onCreate={(title, listId, section, keepOpen) => { addTask(title, listId, section); if (!keepOpen) setComposing(false); }}
             onClose={() => setComposing(false)}
           />
         )}
@@ -833,33 +833,52 @@ function TaskSheet({ task, projects, clients, isos, anchor, onRename, onMove, on
 
 function ComposeSheet({ listSequence, defaultSection, onCreate, onClose }: {
   listSequence: ListId[]; defaultSection: SectionId;
-  onCreate: (title: string, listId: ListId, section: SectionId) => void; onClose: () => void;
+  onCreate: (title: string, listId: ListId, section: SectionId, keepOpen: boolean) => void; onClose: () => void;
 }) {
   const [title, setTitle] = useState('');
   const [listId, setListId] = useState<ListId>(() => {
     try { const v = window.localStorage.getItem('todo-app-mobile-last-list') as ListId | null; return v && LISTS.includes(v) ? v : listSequence[0]; } catch { return listSequence[0]; }
   });
   const [section, setSection] = useState<SectionId>(defaultSection);
+  // How many tasks this composer run has added — drives the "Added N" hint so a rapid burst
+  // gives feedback even though the sheet never closes.
+  const [addedCount, setAddedCount] = useState(0);
   const inputRef = useRef<HTMLInputElement | null>(null);
   useEffect(() => { const h = window.setTimeout(() => inputRef.current?.focus(), 120); return () => window.clearTimeout(h); }, []);
-  const save = () => {
+  // RAPID ENTRY (desktop parity — Enter on a title spawns the next blank one):
+  // the keyboard's return key saves and immediately clears the field WITHOUT closing the sheet
+  // or dismissing the keyboard, keeping the same category + day selected. Type, return, type,
+  // return. The "Add Task" button is the explicit finish — it saves and closes.
+  // Blur is never called on the input, so iOS keeps the keyboard up between entries.
+  const save = (keepOpen: boolean) => {
     const t = title.trim();
-    if (!t) { onClose(); return; }
+    if (!t) { if (!keepOpen) onClose(); return; }
     try { window.localStorage.setItem('todo-app-mobile-last-list', listId); } catch { /* ignore */ }
-    onCreate(t, listId, section);
+    onCreate(t, listId, section, keepOpen);
+    if (keepOpen) {
+      setTitle('');
+      setAddedCount((n) => n + 1);
+      inputRef.current?.focus();
+    }
   };
   return (
     <SheetShell onClose={onClose}>
       <div className="flex flex-row items-center justify-between pb-[10px]">
-        <p className="text-[#5e5e5e] text-[13px]">New Task</p>
+        <p className="text-[#5e5e5e] text-[13px]">{addedCount > 0 ? `Added ${addedCount} — keep going` : 'New Task'}</p>
         <button type="button" aria-label="Close" onClick={onClose} className="text-[#656464] p-2 -m-2"><X size={16} /></button>
       </div>
       <input
         ref={inputRef}
         value={title}
         onChange={(e) => setTitle(e.target.value)}
-        onKeyDown={(e) => { if (e.key === 'Enter') save(); }}
+        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); save(true); } }}
         placeholder="What needs doing?"
+        // iOS: label the return key "next" (rapid entry), start each task capitalized, and skip
+        // autocorrect/spellcheck noise on short task titles.
+        enterKeyHint="next"
+        autoCapitalize="sentences"
+        autoCorrect="off"
+        spellCheck={false}
         className="w-full bg-transparent outline-none border-none text-white font-['Univers_BQ:55_Regular',sans-serif] text-[14px] placeholder:text-[#474747] pb-[14px]"
       />
       <div className="flex flex-row flex-wrap gap-[8px] pb-[10px]">
@@ -874,11 +893,11 @@ function ComposeSheet({ listSequence, defaultSection, onCreate, onClose }: {
       </div>
       <button
         type="button"
-        onClick={save}
-        disabled={!title.trim()}
-        className={`w-full py-[12px] rounded-[8px] text-[14px] font-['Univers_BQ:55_Regular',sans-serif] transition-colors ${title.trim() ? 'bg-[var(--app-accent)] text-[#151412]' : 'bg-[#2b2a27] text-[#5e5e5e]'}`}
+        onClick={() => save(false)}
+        disabled={!title.trim() && addedCount === 0}
+        className={`w-full py-[12px] rounded-[8px] text-[14px] font-['Univers_BQ:55_Regular',sans-serif] transition-colors ${(title.trim() || addedCount > 0) ? 'bg-[var(--app-accent)] text-[#151412]' : 'bg-[#2b2a27] text-[#5e5e5e]'}`}
       >
-        Add Task
+        {title.trim() ? 'Add Task' : addedCount > 0 ? 'Done' : 'Add Task'}
       </button>
     </SheetShell>
   );
