@@ -4383,6 +4383,11 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
               onChange={onRename}
               autoFocus={autoFocusEdit}
               placeholder="New Task"
+              // Enter while typing a title commits it and spawns the next blank sibling, so you
+              // can rattle off a run of tasks without touching the mouse — same as the list view
+              // (which has always passed onEnter). Without this, Enter here just blurred and the
+              // rapid-entry chain died after one task.
+              onEnter={onAddSibling}
               className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleColor}`}
             />
           </div>
