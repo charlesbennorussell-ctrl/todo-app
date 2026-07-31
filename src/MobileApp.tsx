@@ -33,7 +33,7 @@
 //   - tap detection never trusts click timing; the checkbox handles its own pointerdown
 //   - text inputs commit on blur AND on input (predictive text fires no keydown)
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useStorage, useMutation } from '@liveblocks/react/suspense';
 import {
   DndContext, DragOverlay, MeasuringStrategy, MouseSensor, TouchSensor,
@@ -196,7 +196,7 @@ function MobileCard({ task, cellId, projects, clients, isTodayCard, onToggle, on
   return (
     <div
       ref={setNodeRef}
-      data-mcard="1"
+      data-mcard={task.id}
       style={style}
       className={`relative mx-[10px] mb-[5px] rounded-[3.333px] min-h-[44px] flex flex-col justify-center ${isTodayCard ? '' : 'bg-white/[0.03]'}`}
       {...attributes}
@@ -213,6 +213,10 @@ function MobileCard({ task, cellId, projects, clients, isTodayCard, onToggle, on
         const dx = Math.abs(t.clientX - s.x), dy = Math.abs(t.clientY - s.y);
         if (dx <= 10 && dy <= 10 && Date.now() - s.t <= 230) {
           // Checkbox handles its own tap (stopPropagation) — reaching here means card body.
+          // Milestones are read-only here: the sheet's When chips and Delete are written for
+          // todos, and applying them to a scheduled milestone would silently reschedule or
+          // trash a project marker. Editing milestones stays on the desktop.
+          if (isScheduled) { dbg(`tap milestone ${task.id} (read-only)`); return; }
           dbg(`tap card ${task.id}`);
           onOpen();
         }
@@ -223,6 +227,7 @@ function MobileCard({ task, cellId, projects, clients, isTodayCard, onToggle, on
         // unreliable — instead suppress clicks that follow a recent touch tap.
         if ((e as React.MouseEvent).detail === 0) return;
         if (lastTouchAt.current && Date.now() - lastTouchAt.current < 700) return;
+        if (isScheduled) return; // milestones are read-only on the phone (see onTouchEnd)
         onOpen();
       }}
     >
@@ -293,12 +298,36 @@ function SheetShell({ onClose, children }: { onClose: () => void; children: Reac
   // stray click lands on the fresh backdrop and would close it instantly. Ignore backdrop
   // clicks for the first 500ms of the sheet's life.
   const openedAtRef = useRef(Date.now());
+  // KEYBOARD AVOIDANCE. iOS does not shrink the LAYOUT viewport when the software keyboard
+  // opens — only the visual viewport — so a bottom-anchored fixed panel stays pinned to the
+  // screen bottom and the keyboard covers it (chips and the Add button become untappable).
+  // visualViewport tells us how much is actually covered; lift the sheet by exactly that.
+  const [kbInset, setKbInset] = useState(0);
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const update = () => {
+      // How much of the layout viewport is hidden below the visual viewport = keyboard height.
+      const covered = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
+      setKbInset(covered);
+    };
+    update();
+    vv.addEventListener('resize', update);
+    vv.addEventListener('scroll', update);
+    return () => { vv.removeEventListener('resize', update); vv.removeEventListener('scroll', update); };
+  }, []);
   return (
     <div className="fixed inset-0 z-50">
       <div className="absolute inset-0 bg-black/50" onClick={() => { if (Date.now() - openedAtRef.current > 500) onClose(); }} />
       <div
         className="absolute left-0 right-0 bottom-0 bg-[#232220] rounded-t-[14px] px-[18px] pt-[16px]"
-        style={{ paddingBottom: 'calc(env(safe-area-inset-bottom) + 18px)', animation: 'msheet-up 240ms cubic-bezier(0.16, 1, 0.3, 1)' }}
+        style={{
+          transform: kbInset > 0 ? `translateY(-${kbInset}px)` : undefined,
+          // The safe-area pad is only meaningful when the sheet is resting on the home
+          // indicator; once lifted by the keyboard it would just add dead space.
+          paddingBottom: kbInset > 0 ? 18 : 'calc(env(safe-area-inset-bottom) + 18px)',
+          animation: 'msheet-up 240ms cubic-bezier(0.16, 1, 0.3, 1)',
+        }}
       >
         {children}
       </div>
@@ -570,11 +599,25 @@ export default function MobileApp() {
     const overId = e.over ? String(e.over.id) : null;
     dbg(`drag end over=${overId}`);
     if (!overId) return;
+    // NO-OP GUARD (desktop has the equivalent at App.tsx handleDragEnd). TouchSensor activates
+    // on TIME alone — 250ms with 10px tolerance — so a stationary press-and-hold IS a drag, and
+    // dnd-kit reports `over === active`. Without this, an accidental long-press that never moved
+    // would fall through and both reorder the task to the top of its band and re-date it.
+    if (e.over && e.active && e.over.id === e.active.id) return;
+    // Which day does this task ALREADY display on? Deadlines up to isos[8] place on their own
+    // day; a date-RANGE task places on its startDate (computeCalendarDistribution's anchorOf),
+    // so the anchor — not the deadline — is what decides where it currently sits.
+    const anchorIso = (t.startDate && t.deadline) ? t.startDate : t.deadline;
     if (overId.startsWith('mtab:')) {
       // Dropped on a day tab — move to that day, top of the band.
       const idx = Number(overId.split(':')[1]);
       const targetSection = PANES[idx].section;
-      if (targetSection === t.section && !t.deadline) return; // no-op
+      if (targetSection === t.section && !t.deadline) return; // no-op (undated)
+      // Same no-op for a DATED task already shown on that tab: dropping a task due in 3 days
+      // onto "Next" used to stamp it to anchor+7, silently pushing the deadline out. Mirrors the
+      // TaskSheet chips, which already no-op when you tap the day the task is on.
+      const shownIdx = anchorIso ? (anchorIso <= isos[0] ? 0 : anchorIso === isos[1] ? 1 : 2) : null;
+      if (shownIdx === idx) return;
       const targetDate = idx === 0 ? isos[0] : idx === 1 ? isos[1] : dateToISO(addDaysToDate(anchor, 7));
       dropTask(t, targetDate, targetSection, null, false);
       return;
@@ -585,7 +628,13 @@ export default function MobileApp() {
     const [, date] = cellId.split(':');
     const paneIdx = date === isos[0] ? 0 : date === isos[1] ? 1 : 2;
     const targetSection = PANES[paneIdx].section;
-    const targetDate = paneIdx === 2 && !t.deadline ? date : (paneIdx === 2 ? date : isos[paneIdx]);
+    // The NEXT pane collapses seven days (isos[2..8]) into ONE droppable id, so `date` is
+    // isos[2] for every band in it — NOT where the card visually sits. Stamping the deadline
+    // from that id silently pulled a task due next Friday back to Sunday just for reordering it.
+    // Inside the Next pane, keep the existing deadline for any task already anchored in that
+    // window; Today/Tomorrow are unambiguous single days and still reschedule as before.
+    const inNextWindow = !!anchorIso && isos.slice(2).includes(anchorIso);
+    const targetDate = paneIdx === 2 && t.deadline && inNextWindow ? t.deadline : (paneIdx === 2 ? date : isos[paneIdx]);
     const overTaskId = overId.startsWith('cal:') ? null : overId;
     const droppedInOwnBand = (lastOverCellIdRef.current || cellId).split(':')[2] === t.list;
     dropTask(t, targetDate, targetSection, overTaskId ?? lastOverTaskIdRef.current, droppedInOwnBand);
@@ -641,6 +690,11 @@ export default function MobileApp() {
           onTouchStart={(e) => { const t = e.touches[0]; onPanStart(t.clientX, t.clientY); }}
           onTouchMove={(e) => { const t = e.touches[0]; onPanMove(t.clientX, t.clientY); }}
           onTouchEnd={(e) => { const t = e.changedTouches[0]; onPanEnd(t.clientX); }}
+          // iOS fires touchcancel WITHOUT a matching touchend whenever the system seizes the
+          // gesture (Control Centre / Notification Centre pull, home-indicator swipe, incoming
+          // call). Without this the pan never resolves and the pane stays frozen part-swiped
+          // between two days. Settle it back to the current pane.
+          onTouchCancel={() => { panRef.current = null; setDragX(null); }}
           onPointerDown={(e) => { if (e.pointerType === 'mouse' && !(e.target as HTMLElement).closest('[data-mcard]')) onPanStart(e.clientX, e.clientY); }}
           onPointerMove={(e) => { if (e.pointerType === 'mouse') onPanMove(e.clientX, e.clientY); }}
           onPointerUp={(e) => { if (e.pointerType === 'mouse') onPanEnd(e.clientX); }}
@@ -684,11 +738,20 @@ export default function MobileApp() {
         </div>
         {/* Bottom bar — the four icons + plus, desktop rail palette */}
         <div className="shrink-0 bg-[#151412] flex flex-row items-center justify-around px-[10px]" style={{ paddingBottom: 'env(safe-area-inset-bottom)', height: 'calc(58px + env(safe-area-inset-bottom))' }}>
+          {/* Focus is the only view the phone implements. The other three are marked
+              aria-disabled and dimmed further so they read as "not here yet" rather than as
+              normal inactive tabs you tapped and nothing happened. */}
           {[
             { label: 'Focus', Icon: SquareKanban, active: true },
             { label: 'Calendar', Icon: MdOutlineCalendarMonth, active: false },
           ].map(({ label, Icon, active }) => (
-            <button key={label} aria-label={label} className={`p-3 ${active ? 'text-white' : 'text-[#454545]'}`}><Icon size={22} /></button>
+            <button
+              key={label}
+              aria-label={active ? label : `${label} — desktop only`}
+              aria-disabled={!active}
+              disabled={!active}
+              className={`p-3 ${active ? 'text-white' : 'text-[#2f2e2c]'}`}
+            ><Icon size={22} /></button>
           ))}
           <button
             aria-label="Add task"
@@ -701,7 +764,7 @@ export default function MobileApp() {
             { label: 'List', Icon: List },
             { label: 'Project', Icon: FolderTree },
           ].map(({ label, Icon }) => (
-            <button key={label} aria-label={label} className="p-3 text-[#454545]"><Icon size={22} /></button>
+            <button key={label} aria-label={`${label} — desktop only`} aria-disabled disabled className="p-3 text-[#2f2e2c]"><Icon size={22} /></button>
           ))}
         </div>
 
@@ -791,6 +854,7 @@ function TaskSheet({ task, projects, clients, isos, anchor, onRename, onMove, on
   onRename: (title: string) => void; onMove: (paneIdx: number) => void; onDelete: () => void; onClose: () => void;
 }) {
   const [title, setTitle] = useState(task.title);
+  const [confirmDelete, setConfirmDelete] = useState(false);
   const commit = () => { if (title.trim() !== task.title) onRename(title.trim()); };
   const project = task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
   const client = (task.clientId ?? project?.clientId) ? clients.find((c) => c.id === (task.clientId ?? project?.clientId)) : undefined;
@@ -821,11 +885,23 @@ function TaskSheet({ task, projects, clients, isos, anchor, onRename, onMove, on
           </button>
         ))}
       </div>
+      {/* Delete is two taps. Tapping a card is the most common gesture here (it opens this
+          sheet), so a single-tap Delete sitting under your thumb was one mis-tap away from
+          trashing a task — and the phone has no Trash view to recover it from. The second tap
+          is explicitly labelled and red; tapping anything else cancels it. */}
       <div className="flex flex-row items-center justify-between border-t border-[#33312e] pt-[14px]">
-        <button type="button" aria-label="Delete task" onClick={onDelete} className="flex flex-row items-center gap-[8px] text-[#656464] p-2 -m-2">
-          <Trash2 size={16} /><span className="text-[13px]">Delete</span>
+        {confirmDelete ? (
+          <button type="button" aria-label="Confirm delete task" onClick={onDelete} className="flex flex-row items-center gap-[8px] text-[#FF7171] p-2 -m-2">
+            <Trash2 size={16} /><span className="text-[13px]">Tap again to delete</span>
+          </button>
+        ) : (
+          <button type="button" aria-label="Delete task" onClick={() => setConfirmDelete(true)} className="flex flex-row items-center gap-[8px] text-[#656464] p-2 -m-2">
+            <Trash2 size={16} /><span className="text-[13px]">Delete</span>
+          </button>
+        )}
+        <button type="button" onClick={() => { if (confirmDelete) { setConfirmDelete(false); return; } commit(); onClose(); }} className="text-[var(--app-accent)] text-[13px] p-2 -m-2">
+          {confirmDelete ? 'Cancel' : 'Done'}
         </button>
-        <button type="button" onClick={() => { commit(); onClose(); }} className="text-[var(--app-accent)] text-[13px] p-2 -m-2">Done</button>
       </div>
     </SheetShell>
   );
@@ -844,7 +920,11 @@ function ComposeSheet({ listSequence, defaultSection, onCreate, onClose }: {
   // gives feedback even though the sheet never closes.
   const [addedCount, setAddedCount] = useState(0);
   const inputRef = useRef<HTMLInputElement | null>(null);
-  useEffect(() => { const h = window.setTimeout(() => inputRef.current?.focus(), 120); return () => window.clearTimeout(h); }, []);
+  // WebKit only raises the software keyboard when focus() runs synchronously inside the user
+  // gesture's own task. The old setTimeout(…, 120) broke that chain, so the composer opened
+  // focused but with NO keyboard — you had to tap the field a second time, which also defeats
+  // the return-key rapid entry. Focus in a layout effect, before paint, still inside the tap.
+  useLayoutEffect(() => { inputRef.current?.focus(); }, []);
   // RAPID ENTRY (desktop parity — Enter on a title spawns the next blank one):
   // the keyboard's return key saves and immediately clears the field WITHOUT closing the sheet
   // or dismissing the keyboard, keeping the same category + day selected. Type, return, type,

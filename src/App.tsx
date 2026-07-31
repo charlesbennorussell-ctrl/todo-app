@@ -8377,6 +8377,17 @@ export default function App() {
         //      section to 'today' / 'tomorrow' (explicit placement); future-day drops keep
         //      section='next' so the task stays in the auto-distributed queue.
         const isQueueTask = !srcTask.deadline && !isNextWeekDrop;
+        // EXCEPTION to rule A. The FOCUS view's "Next" column aggregates seven days
+        // (nextIsos = day+2 … day+8) behind a SINGLE droppable id, so targetDate is day+2 for
+        // every card in it — not the day the card actually sits on. Rewriting the deadline from
+        // that id silently re-dated a task (drag one due next Friday down a slot to reorder it
+        // and it jumped to Sunday). Inside that column, keep the existing deadline; reordering
+        // is not rescheduling. The CALENDAR view's cells are real single days and must keep
+        // rescheduling, hence the mode check. `anchorOf`: a date-RANGE task is placed by its
+        // startDate, so that — not the deadline — says where it currently sits.
+        const dropAnchorIso = (srcTask.startDate && srcTask.deadline) ? srcTask.startDate : srcTask.deadline;
+        const isFocusNextAggregate = mode === 'focus' && !isNextWeekDrop && targetSection === 'next';
+        const keepExistingDeadline = isFocusNextAggregate && !!dropAnchorIso && dropAnchorIso > tomorrowIso;
         // Which band did the user actually release in? Only a drop within the task's OWN
         // band gives positional control; anything else defaults to the top of its stack.
         const droppedListId = droppedCellId ? (droppedCellId.split(':')[2] as ListId) : null;
@@ -8387,7 +8398,7 @@ export default function App() {
           // keep their (undefined) deadline so they stay in the auto-distributed queue.
           const moved: Task = isQueueTask
             ? { ...srcTask, list: targetList, section: targetSection }
-            : { ...srcTask, list: targetList, section: targetSection, deadline: targetDate };
+            : { ...srcTask, list: targetList, section: targetSection, deadline: keepExistingDeadline ? srcTask.deadline : targetDate };
           // Build the destination bucket without the source.
           const toBucket = without.filter((t) => t.list === targetList && t.section === targetSection).sort((a, b) => a.order - b.order);
           // Insert position (per user spec): positional control ONLY when the card is
@@ -8522,7 +8533,7 @@ export default function App() {
       handleCrossSectionMove(a, o);
     }
     setActiveId(null); setActiveTaskIdState(null); setActiveType(null); setActiveCalendarCellId(null); setColumnOffset(0); pendingOffsetRef.current = 0; if (dwellTimerRef.current) { clearTimeout(dwellTimerRef.current); dwellTimerRef.current = null; } if (collapseTimerRef.current) { clearTimeout(collapseTimerRef.current); collapseTimerRef.current = null; } setSourceCollapsed(false);
-  }, [tasks, reorderFocusSubtask, reorderFocusFolder, moveFocusImagesToFolder, moveFocusImagesToBucket, setFocusImages]);
+  }, [tasks, mode, reorderFocusSubtask, reorderFocusFolder, moveFocusImagesToFolder, moveFocusImagesToBucket, setFocusImages]);
 
   // Default to first person if unset
   useEffect(() => {
