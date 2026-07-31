@@ -8602,11 +8602,23 @@ export default function App() {
       if (isTypingTarget(t)) return;
       if (e.key === 'Enter') {
         if (t?.tagName === 'BUTTON') return;
-        const hoveredRow = document.querySelector('[data-task-row]:hover') as HTMLElement | null;
-        const hoveredId = hoveredRow?.getAttribute('data-task-row');
-        const hoveredTask = hoveredId ? tasks.find((x) => x.id === hoveredId) : undefined;
+        // Enter === clicking the "+" on the task you're on. Resolve that task the same way
+        // the user perceives "on": the row under the cursor, else the selected row.
+        //
+        // Two bugs this fixes:
+        //   1. Only `[data-task-row]` was queried — that attribute is on LIST rows only.
+        //      Focus and Calendar cards carry `data-cal-card`, so in those views nothing ever
+        //      matched and every Enter fell through to the Work/Today fallback below.
+        //   2. Hover alone is not "on a task" — clicking a card to select it and then moving
+        //      the mouse off left Enter with no target. selectedTaskId covers that.
+        // addSiblingTask inherits list (category), section, projectId, clientId and deadline
+        // from the source task, which is exactly what the "+" button does.
+        const hoveredEl = document.querySelector('[data-task-row]:hover, [data-cal-card]:hover') as HTMLElement | null;
+        const hoveredId = hoveredEl?.getAttribute('data-task-row') || hoveredEl?.getAttribute('data-cal-card');
+        const targetId = hoveredId || selectedTaskId;
+        const targetTask = targetId ? tasks.find((x) => x.id === targetId) : undefined;
         e.preventDefault();
-        if (hoveredTask) addSiblingTask(hoveredTask);
+        if (targetTask) addSiblingTask(targetTask);
         else addBlankTaskInSection('work', 'today');
         return;
       }
@@ -8629,7 +8641,7 @@ export default function App() {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [addBlankTaskInSection, addSiblingTask, tasks, setMode, addAndEditTask]);
+  }, [addBlankTaskInSection, addSiblingTask, tasks, setMode, addAndEditTask, selectedTaskId]);
 
   // One-time migration: Russell â†’ Benno
   const migratedRef = useRef(false);
