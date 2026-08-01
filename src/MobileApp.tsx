@@ -133,7 +133,13 @@ function MobileCardBody({ task, projects, clients, isTodayCard }: {
           data; it still drives personal-task privacy and shows on the desktop. */}
       {/* A real deadline gets the desktop's arrow ahead of the date. `small` is the narrower
           11px variant (vs 18px) so it reads on a phone row without eating the title's space. */}
-      {task.deadline && <DeadlineArrow small dim={task.completed} color={(isScheduled || isTodayCard) ? 'var(--app-accent)' : undefined} />}
+      {/* The shared arrow carries a -2px optical lift tuned for the desktop's larger rows; on a
+          phone row it reads high, so nudge it back down to sit on the date's baseline. */}
+      {task.deadline && (
+        <span className="inline-flex shrink-0" style={{ transform: 'translateY(5px)' }}>
+          <DeadlineArrow small dim={task.completed} color={(isScheduled || isTodayCard) ? 'var(--app-accent)' : undefined} />
+        </span>
+      )}
       {task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap shrink-0 ${(isScheduled || isTodayCard) ? 'text-[var(--app-accent)]' : isLateDeadline(task.deadline) ? 'text-white' : 'text-[#656464]'}`}>{formatDeadline(task.deadline)}</p>}
     </>
   );
@@ -393,6 +399,24 @@ export default function MobileApp() {
   const setTasks = useMutation(({ storage }, updater: (prev: Task[]) => Task[]) => {
     const current = (storage.get('tasks' as never) as Task[] | undefined) || [];
     storage.set('tasks' as never, updater(current) as never);
+  }, []);
+
+  /** Create a client from the task panel. `short` is the badge text the cards render. */
+  const addClient = useMutation(({ storage }, name: string) => {
+    const id = `client-${Date.now()}`;
+    const current = (storage.get('clients' as never) as Client[] | undefined) || [];
+    // Short code: first word, capped at 6 chars — matches the compact badges on cards.
+    const short = name.trim().split(/\s+/)[0].slice(0, 6);
+    storage.set('clients' as never, [...current, { id, name: name.trim(), short }] as never);
+    return id;
+  }, []);
+
+  /** Create a project, optionally owned by a client and pinned to a category. */
+  const addProject = useMutation(({ storage }, p: { name: string; clientId?: string; list?: ListId }) => {
+    const id = `project-${Date.now()}`;
+    const current = (storage.get('projects' as never) as Project[] | undefined) || [];
+    storage.set('projects' as never, [...current, { id, name: p.name.trim(), clientId: p.clientId, list: p.list }] as never);
+    return id;
   }, []);
 
   // Same room theme the desktop paints with — this is what keeps the two surfaces identical.
@@ -808,7 +832,7 @@ export default function MobileApp() {
             the gap from the brand line and the gap down to the first band label match, and the
             control sits centred in that band of space. Each segment is still a drop target, so
             dragging a card onto "Tomorrow" moves it there. */}
-        <div className="shrink-0 flex items-center justify-center pt-[45px] pb-[18px]">
+        <div className="shrink-0 flex items-center justify-center pt-[45px] pb-[24px]">
           {/* Track is the same near-black as the bottom bar (#151412) so the switcher reads as
               chrome rather than as content. */}
           <div className="relative inline-flex items-center rounded-full bg-[#151412] p-[3px] w-[calc(100%-36px)] max-w-[340px]">
@@ -873,7 +897,7 @@ export default function MobileApp() {
                             setSheetTaskId(createTask({ title: '', list: listId, section: p.section }));
                             setOpenBand(null);
                           }}
-                          className="text-[var(--app-accent)] p-1 -m-1"
+                          className="text-[#5e5e5e] p-1 -m-1"
                         ><Plus size={15} /></button>
                       )}
                     </div>
@@ -988,6 +1012,8 @@ export default function MobileApp() {
             editingTask={editingTask}
             onCreate={(payload, keepOpen) => { createTask(payload); if (!keepOpen) setComposing(false); }}
             onUpdate={updateTask}
+            onAddClient={addClient}
+            onAddProject={addProject}
             onClose={() => { setComposing(false); setEditingId(null); }}
           />
         )}
@@ -1205,17 +1231,81 @@ function TaskSheet({ task, projects, clients, isos, anchor, onRename, onMove, on
   );
 }
 
+// One section of the task panel: a quiet label, then a row of identical capsules, with the SAME
+// buffer above and below every time. Declared at module scope (not inside ComposeSheet) so React
+// keeps its identity across renders — otherwise the inline "new item" field would remount and
+// lose focus on every keystroke.
+//
+// `onCreate` opts the section into the label-tap paradigm used elsewhere in the app: tap the
+// label, a "+" appears in the same grey, tap that and an inline field lets you name a new one.
+function PanelSection({ label, open, onToggle, onCreate, createPlaceholder, children }: {
+  label: string;
+  open?: boolean;
+  onToggle?: () => void;
+  onCreate?: (name: string) => void;
+  createPlaceholder?: string;
+  children: React.ReactNode;
+}) {
+  const [name, setName] = useState('');
+  const canAdd = !!onCreate;
+  const commit = () => {
+    const n = name.trim();
+    if (!n) return;
+    onCreate?.(n);
+    setName('');
+    onToggle?.();
+  };
+  return (
+    <div className="pb-[22px]">
+      <div className="flex flex-row items-center gap-[8px] pb-[9px]">
+        {canAdd ? (
+          <button type="button" onClick={onToggle} className="text-[#5e5e5e]" style={{ fontSize: 11 }}>{label}</button>
+        ) : (
+          <p className="text-[#5e5e5e]" style={{ fontSize: 11 }}>{label}</p>
+        )}
+        {canAdd && open && (
+          <button type="button" aria-label={`New ${label}`} onClick={() => { /* field is already shown */ }} className="text-[#5e5e5e]">
+            <Plus size={12} />
+          </button>
+        )}
+      </div>
+      {canAdd && open && (
+        <div className="flex flex-row items-center gap-[8px] pb-[10px]">
+          <input
+            autoFocus
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commit(); } }}
+            placeholder={createPlaceholder || `New ${label.toLowerCase()}`}
+            autoCapitalize="words"
+            autoCorrect="off"
+            spellCheck={false}
+            className="flex-1 bg-[#2b2a27] rounded-full px-[12px] py-[7px] text-[13px] text-white outline-none border border-[#3a3a3a] placeholder:text-[#474747]"
+          />
+          <button type="button" onClick={commit} className={CHIP_BASE + ' border-[var(--app-accent)] text-[var(--app-accent)]'}>Add</button>
+        </div>
+      )}
+      <div className="flex flex-row flex-wrap gap-[8px]">{children}</div>
+    </div>
+  );
+}
+
 // Full task panel — the desktop AddModal's field set, laid out for a phone. Used BOTH for
-// creating (bottom "+") and for editing (the card sheet's "Edit"), so the two can never drift
-// apart. Deliberately keeps When (Today / Tomorrow / Next) prominent and separated at the top
-// rather than burying it among the other pickers. Client filters the project list, as on desktop.
-function ComposeSheet({ listSequence, projects, clients, people, currentUserShort, defaultSection, isos, anchor, editingTask, onCreate, onUpdate, onClose }: {
+// creating (bottom "+") and for editing (the card sheet's "Edit"), so the two can never drift.
+//
+// Layout rules:
+//  - Every section is the same shape and rhythm. When (Today / Tomorrow / Next) is just the first
+//    such section — no special width or padding — so all the capsules feel identical.
+//  - Nothing is hidden behind a disclosure; the body scrolls instead.
+//  - Dismissing COMMITS. The backdrop, the X and Add Task all save what you have filled in, so a
+//    half-typed task can't be lost by tapping away.
+//  - Client and Project narrow to the chosen Category, since a project is pinned to a category.
+function ComposeSheet({ listSequence, projects, clients, people, currentUserShort, defaultSection, isos, anchor, editingTask, onCreate, onUpdate, onAddClient, onAddProject, onClose }: {
   listSequence: ListId[];
   projects: Project[]; clients: Client[]; people: Person[];
   currentUserShort: string;
   defaultSection: SectionId;
   isos: string[]; anchor: Date;
-  /** When set, the panel edits this task instead of creating one. */
   editingTask?: Task | null;
   onCreate: (payload: {
     title: string; list: ListId; section: SectionId;
@@ -1223,6 +1313,8 @@ function ComposeSheet({ listSequence, projects, clients, people, currentUserShor
     assignees?: string[]; milestone?: boolean;
   }, keepOpen: boolean) => void;
   onUpdate: (id: string, patch: Partial<Task>) => void;
+  onAddClient: (name: string) => string;
+  onAddProject: (p: { name: string; clientId?: string; list?: ListId }) => string;
   onClose: () => void;
 }) {
   const isEdit = !!editingTask;
@@ -1238,22 +1330,35 @@ function ComposeSheet({ listSequence, projects, clients, people, currentUserShor
   const [assignees, setAssignees] = useState<string[]>(editingTask?.assignees ?? (currentUserShort ? [currentUserShort] : []));
   const [deadline, setDeadline] = useState(editingTask?.deadline ?? '');
   const [milestone, setMilestone] = useState(editingTask?.type === 'scheduled');
-  // Editing shows everything straight away — you came here to change one of those fields.
-  // Creating starts collapsed so the common case stays title + When + Add.
-  const [more, setMore] = useState(isEdit);
   const [addedCount, setAddedCount] = useState(0);
+  const [openLabel, setOpenLabel] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement | null>(null);
   // WebKit only raises the software keyboard when focus() runs synchronously inside the user
   // gesture's own task, so this must be a layout effect, not a timeout. Don't steal focus when
   // editing — the keyboard would cover the fields you opened this for.
   useLayoutEffect(() => { if (!isEdit) inputRef.current?.focus(); }, [isEdit]);
 
-  // Picking a project implies its client; picking a client narrows the projects and drops a
-  // project that no longer belongs — same rule as the desktop modal.
-  const visibleProjects = useMemo(
-    () => (clientId ? projects.filter((p) => p.clientId === clientId) : projects),
-    [projects, clientId]
+  // Projects are pinned to a category (`project.list`); unpinned ones belong everywhere. So the
+  // Project list follows the Category you picked, and the Client list narrows to whoever owns
+  // those projects. The current selection is always kept visible so it can't silently vanish.
+  const categoryProjects = useMemo(
+    () => projects.filter((p) => !p.list || p.list === listId),
+    [projects, listId]
   );
+  const visibleClients = useMemo(() => {
+    const owners = new Set(categoryProjects.map((p) => p.clientId).filter(Boolean) as string[]);
+    return clients.filter((c) => owners.has(c.id) || c.id === clientId);
+  }, [clients, categoryProjects, clientId]);
+  const visibleProjects = useMemo(
+    () => (clientId ? categoryProjects.filter((p) => p.clientId === clientId) : categoryProjects),
+    [categoryProjects, clientId]
+  );
+  // Changing Category can orphan the current picks — drop them rather than submit a mismatch.
+  useEffect(() => {
+    if (projectId && !categoryProjects.some((p) => p.id === projectId)) setProjectId('');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [listId]);
+
   const chooseClient = (id: string) => {
     setClientId(id);
     if (projectId && !projects.some((p) => p.id === projectId && p.clientId === id)) setProjectId('');
@@ -1264,35 +1369,37 @@ function ComposeSheet({ listSequence, projects, clients, people, currentUserShor
     if (owner) setClientId(owner);
   };
 
+  const payload = () => {
+    const owner = projectId ? projects.find((p) => p.id === projectId)?.clientId : undefined;
+    return {
+      title: title.trim(),
+      list: listId,
+      section,
+      projectId: projectId || undefined,
+      clientId: owner ?? (clientId || undefined),
+      deadline: deadline || undefined,
+      assignees,
+      milestone,
+    };
+  };
+
   // RAPID ENTRY (create only): return saves and clears WITHOUT closing or dismissing the
   // keyboard, keeping every other field as-is so a run of related tasks is one gesture each.
   const save = (keepOpen: boolean) => {
     const t = title.trim();
     if (!t) { if (!keepOpen) onClose(); return; }
-    const owner = projectId ? projects.find((p) => p.id === projectId)?.clientId : undefined;
-    const resolvedClient = owner ?? (clientId || undefined);
     if (isEdit && editingTask) {
+      const p = payload();
       onUpdate(editingTask.id, {
-        title: t,
-        type: milestone ? 'scheduled' : 'todo',
-        list: listId,
-        section,
-        projectId: projectId || undefined,
-        clientId: resolvedClient,
-        deadline: deadline || undefined,
-        assignees,
+        title: p.title, type: milestone ? 'scheduled' : 'todo',
+        list: p.list, section: p.section,
+        projectId: p.projectId, clientId: p.clientId, deadline: p.deadline, assignees: p.assignees,
       });
       onClose();
       return;
     }
     try { window.localStorage.setItem('todo-app-mobile-last-list', listId); } catch { /* ignore */ }
-    onCreate({
-      title: t, list: listId, section,
-      projectId: projectId || undefined,
-      clientId: resolvedClient,
-      deadline: deadline || undefined,
-      assignees, milestone,
-    }, keepOpen);
+    onCreate(payload(), keepOpen);
     if (keepOpen) {
       setTitle('');
       setAddedCount((n) => n + 1);
@@ -1300,18 +1407,18 @@ function ComposeSheet({ listSequence, projects, clients, people, currentUserShor
     }
   };
 
-  const Label = ({ children }: { children: React.ReactNode }) => (
-    <p className="text-[#5e5e5e] pb-[6px]" style={{ fontSize: 11 }}>{children}</p>
-  );
+  // Dismissing commits. A half-filled task tapped away is saved, not thrown away.
+  const commitAndClose = () => save(false);
+  const toggleLabel = (k: string) => setOpenLabel((v) => (v === k ? null : k));
 
   const primaryLabel = isEdit ? 'Save' : title.trim() ? 'Add Task' : addedCount > 0 ? 'Done' : 'Add Task';
   const primaryEnabled = isEdit ? !!title.trim() : !!title.trim() || addedCount > 0;
 
   return (
-    <SheetShell onClose={onClose}>
-      <div className="flex flex-row items-center justify-between pb-[10px]">
-        <p className="text-[#5e5e5e] text-[13px]">{isEdit ? 'Edit Task' : addedCount > 0 ? `Added ${addedCount} — keep going` : 'New Task'}</p>
-        <button type="button" aria-label="Close" onClick={onClose} className="text-[#656464] p-2 -m-2"><X size={16} /></button>
+    <SheetShell onClose={commitAndClose}>
+      <div className="flex flex-row items-center justify-between pb-[12px]">
+        <p className="text-white text-[14px]">{isEdit ? 'Edit Task' : addedCount > 0 ? `Added ${addedCount}` : 'New Task'}</p>
+        <button type="button" aria-label="Close" onClick={commitAndClose} className="text-[#656464] p-2 -m-2"><X size={16} /></button>
       </div>
 
       <input
@@ -1319,91 +1426,99 @@ function ComposeSheet({ listSequence, projects, clients, people, currentUserShor
         value={title}
         onChange={(e) => setTitle(e.target.value)}
         onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); save(!isEdit); } }}
-        placeholder="What needs doing?"
+        placeholder="Task name"
         enterKeyHint={isEdit ? 'done' : 'next'}
         autoCapitalize="sentences"
         autoCorrect="off"
         spellCheck={false}
-        className="w-full bg-transparent outline-none border-none text-white font-['Univers_BQ:55_Regular',sans-serif] text-[14px] placeholder:text-[#474747] pb-[14px]"
+        className="w-full bg-transparent outline-none border-none text-white font-['Univers_BQ:55_Regular',sans-serif] text-[14px] placeholder:text-[#474747] pb-[18px]"
       />
 
-      {/* WHEN — kept first and on its own row: it is the decision you make every time. */}
-      <Label>When</Label>
-      <div className="flex flex-row gap-[8px] pb-[14px]">
-        {PANES.map((p) => (
-          <button key={p.section} type="button" className={`flex-1 ${chipCls(p.section === section)}`} onClick={() => setSection(p.section)}>{p.label}</button>
-        ))}
-      </div>
+      {/* Everything is present — no disclosure. The body scrolls when it outgrows the sheet. */}
+      <div className="max-h-[46vh] overflow-y-auto overscroll-contain">
+        <PanelSection label="When">
+          {PANES.map((p) => (
+            <button key={p.section} type="button" className={chipCls(p.section === section)} onClick={() => setSection(p.section)}>{p.label}</button>
+          ))}
+        </PanelSection>
 
-      <Label>Category</Label>
-      <div className="flex flex-row flex-wrap gap-[8px] pb-[14px]">
-        {listSequence.map((l) => (
-          <button key={l} type="button" className={chipCls(l === listId)} onClick={() => setListId(l)}>{LIST_TITLES[l]}</button>
-        ))}
-      </div>
+        <PanelSection label="Category">
+          {listSequence.map((l) => (
+            <button key={l} type="button" className={chipCls(l === listId)} onClick={() => setListId(l)}>{LIST_TITLES[l]}</button>
+          ))}
+        </PanelSection>
 
-      {/* Optional fields start collapsed when creating, so the common case stays two taps. */}
-      {!more ? (
-        <button type="button" onClick={() => setMore(true)} className="text-[var(--app-accent)] text-[13px] pb-[14px]">
-          + Client, project, date, people
-        </button>
-      ) : (
-        <div className="max-h-[36vh] overflow-y-auto pb-[6px]">
-          <Label>Client</Label>
-          <div className="flex flex-row flex-wrap gap-[8px] pb-[14px]">
-            <button type="button" className={chipCls(clientId === '')} onClick={() => chooseClient('')}>None</button>
-            {clients.map((c) => (
-              <button key={c.id} type="button" className={chipCls(clientId === c.id)} onClick={() => chooseClient(c.id)}>{c.short || c.name}</button>
-            ))}
-          </div>
+        <PanelSection
+          label="Client"
+          open={openLabel === 'client'}
+          onToggle={() => toggleLabel('client')}
+          onCreate={(n) => setClientId(onAddClient(n))}
+          createPlaceholder="New client name"
+        >
+          <button type="button" className={chipCls(clientId === '')} onClick={() => chooseClient('')}>None</button>
+          {visibleClients.map((c) => (
+            <button key={c.id} type="button" className={chipCls(clientId === c.id)} onClick={() => chooseClient(c.id)}>{c.short || c.name}</button>
+          ))}
+        </PanelSection>
 
-          <Label>Project{clientId ? '' : ' (all)'}</Label>
-          <div className="flex flex-row flex-wrap gap-[8px] pb-[14px]">
-            <button type="button" className={chipCls(projectId === '')} onClick={() => setProjectId('')}>None</button>
-            {visibleProjects.map((p) => (
-              <button key={p.id} type="button" className={chipCls(projectId === p.id)} onClick={() => chooseProject(p.id)}>{p.name}</button>
-            ))}
-          </div>
+        <PanelSection
+          label="Project"
+          open={openLabel === 'project'}
+          onToggle={() => toggleLabel('project')}
+          onCreate={(n) => setProjectId(onAddProject({ name: n, clientId: clientId || undefined, list: listId }))}
+          createPlaceholder="New project name"
+        >
+          <button type="button" className={chipCls(projectId === '')} onClick={() => setProjectId('')}>None</button>
+          {visibleProjects.map((p) => (
+            <button key={p.id} type="button" className={chipCls(projectId === p.id)} onClick={() => chooseProject(p.id)}>{p.name}</button>
+          ))}
+        </PanelSection>
 
-          <Label>Deadline</Label>
-          <div className="flex flex-row items-center gap-[8px] pb-[14px]">
+        <PanelSection label="Deadline">
+          {/* type=date has no placeholder of its own — when empty it shows the locale mask or
+              nothing at all. Hide its text and lay "Date" over it so the empty state reads
+              like the other fields. */}
+          <span className="relative inline-flex">
             <input
               type="date"
               value={deadline}
               onChange={(e) => setDeadline(e.target.value)}
-              className="bg-[#2b2a27] text-white rounded-[8px] px-[10px] py-[8px] text-[13px] outline-none border-none"
+              className={`bg-[#2b2a27] rounded-full px-[12px] py-[7px] text-[13px] outline-none border border-[#3a3a3a] ${deadline ? 'text-white' : 'text-transparent'}`}
             />
-            <button type="button" className={chipCls(false)} onClick={() => setDeadline(isos[0])}>Today</button>
-            <button type="button" className={chipCls(false)} onClick={() => setDeadline(dateToISO(addDaysToDate(anchor, 7)))}>+1 wk</button>
-            {deadline && <button type="button" aria-label="Clear deadline" onClick={() => setDeadline('')} className="text-[#656464] p-2 -m-2"><X size={14} /></button>}
-          </div>
+            {!deadline && (
+              <span className="absolute inset-0 flex items-center pl-[12px] pointer-events-none text-[#474747] text-[13px]">Date</span>
+            )}
+          </span>
+          <button type="button" className={chipCls(false)} onClick={() => setDeadline(isos[0])}>Today</button>
+          <button type="button" className={chipCls(false)} onClick={() => setDeadline(dateToISO(addDaysToDate(anchor, 7)))}>+1 wk</button>
+          {deadline && <button type="button" className={chipCls(false)} onClick={() => setDeadline('')}>Clear</button>}
+        </PanelSection>
 
-          <Label>People</Label>
-          <div className="flex flex-row flex-wrap gap-[8px] pb-[14px]">
-            {people.map((pr) => {
-              const on = assignees.includes(pr.short);
-              return (
-                <button
-                  key={pr.id}
-                  type="button"
-                  className={chipCls(on)}
-                  onClick={() => setAssignees((a) => (on ? a.filter((x) => x !== pr.short) : [...a, pr.short]))}
-                >{pr.name}</button>
-              );
-            })}
-          </div>
+        <PanelSection label="People">
+          {people.map((pr) => {
+            const on = assignees.includes(pr.short);
+            return (
+              <button
+                key={pr.id}
+                type="button"
+                className={chipCls(on)}
+                onClick={() => setAssignees((a) => (on ? a.filter((x) => x !== pr.short) : [...a, pr.short]))}
+              >{pr.name}</button>
+            );
+          })}
+        </PanelSection>
 
-          <div className="flex flex-row items-center gap-[8px] pb-[6px]">
-            <button type="button" className={chipCls(milestone)} onClick={() => setMilestone((m) => !m)}>Milestone</button>
-          </div>
-        </div>
-      )}
+        <PanelSection label="Type">
+          <button type="button" className={chipCls(!milestone)} onClick={() => setMilestone(false)}>Task</button>
+          <button type="button" className={chipCls(milestone)} onClick={() => setMilestone(true)}>Milestone</button>
+        </PanelSection>
+      </div>
 
       <button
         type="button"
         onClick={() => save(false)}
         disabled={!primaryEnabled}
-        className={`w-full py-[12px] rounded-[8px] text-[14px] font-['Univers_BQ:55_Regular',sans-serif] transition-colors ${primaryEnabled ? 'bg-[var(--app-accent)] text-[#151412]' : 'bg-[#2b2a27] text-[#5e5e5e]'}`}
+        className={`mt-[4px] w-full py-[12px] rounded-[8px] text-[14px] font-['Univers_BQ:55_Regular',sans-serif] transition-colors ${primaryEnabled ? 'bg-[var(--app-accent)] text-[#151412]' : 'bg-[#2b2a27] text-[#5e5e5e]'}`}
       >
         {primaryLabel}
       </button>
