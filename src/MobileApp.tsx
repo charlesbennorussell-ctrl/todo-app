@@ -1202,44 +1202,61 @@ function TaskSheet({ task, projects, clients, isos, anchor, onRename, onMove, on
         name="ctrl-entry-rename"
         autoCorrect="off"
         spellCheck={false}
-        className="w-full bg-transparent outline-none border-none text-white font-['Univers_BQ:55_Regular',sans-serif] text-[14px] placeholder:text-[#474747] pb-[10px]"
+        // Same full-width capsule as the creator panel's title field, so both sheets read as
+        // one system rather than one styled field and one bare line of text.
+        className="w-full bg-[#151412] rounded-[22px] px-[16px] py-[12px] outline-none border-none text-white font-['Univers_BQ:55_Regular',sans-serif] text-[14px] leading-[1.4] placeholder:text-[#656464]"
       />
+      <div className="h-[12px]" />
       {(client || project) && (
-        <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] text-[#656464] pb-[12px]">
+        <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] text-[#656464] pb-[12px] px-[4px]">
           {client?.short}{client && project ? <Arrowhead /> : null}{project?.name}
         </p>
       )}
-      <div className="flex flex-row gap-[8px] pb-[16px]">
-        {PANES.map((p, i) => (
-          <button key={p.section} type="button" className={chipCls(i === currentIdx)} onClick={() => { if (i !== currentIdx) { onMove(i); } onClose(); }}>
-            {p.label}
-          </button>
-        ))}
+      {/* Same control as the day switcher and the creator panel: capsules on a dark track. */}
+      <div className="pb-[16px]">
+        <div className={CHIP_TRACK}>
+          {PANES.map((p, i) => (
+            <button key={p.section} type="button" className={chipCls(i === currentIdx)} onClick={() => { if (i !== currentIdx) { onMove(i); } onClose(); }}>
+              {p.label}
+            </button>
+          ))}
+        </div>
       </div>
       {/* Edit · Delete · Done. Edit hands off to the same full panel the bottom "+" opens, so
           there is one task form in the app rather than two that drift.
           Delete stays two taps: tapping a card is the gesture that opens this sheet, so a
           single-tap Delete under your thumb was one mis-tap from trashing a task — and the phone
           has no Trash view to recover from. The second tap is labelled and red; Cancel backs out. */}
-      <div className="flex flex-row items-center justify-between border-t border-[#33312e] pt-[14px]">
-        {confirmDelete ? (
-          <>
-            <button type="button" aria-label="Confirm delete task" onClick={onDelete} className="flex flex-row items-center gap-[8px] text-[#FF7171] p-2 -m-2">
-              <Trash2 size={16} /><span className="text-[13px]">Tap again to delete</span>
-            </button>
-            <button type="button" onClick={() => setConfirmDelete(false)} className="text-[var(--app-accent)] text-[13px] p-2 -m-2">Cancel</button>
-          </>
-        ) : (
-          <>
-            <button type="button" onClick={() => { commit(); onEdit(); }} className="flex flex-row items-center gap-[7px] text-[#a8a8a8] p-2 -m-2">
-              <Pencil size={15} /><span className="text-[13px]">Edit</span>
-            </button>
-            <button type="button" aria-label="Delete task" onClick={() => setConfirmDelete(true)} className="flex flex-row items-center gap-[7px] text-[#656464] p-2 -m-2">
-              <Trash2 size={15} /><span className="text-[13px]">Delete</span>
-            </button>
-            <button type="button" onClick={() => { commit(); onClose(); }} className="text-[var(--app-accent)] text-[13px] p-2 -m-2">Done</button>
-          </>
-        )}
+      {/* A fixed three-slot grid in BOTH states, so arming the delete never re-flows the row:
+          the trash stays exactly where it was and only its label and colour change. Previously
+          the confirm state dropped to two buttons and justify-between threw the trash to the
+          left, which read as the button moving out from under your thumb. */}
+      <div className="grid grid-cols-3 items-center border-t border-[#33312e] pt-[14px]">
+        <button
+          type="button"
+          onClick={() => { if (confirmDelete) { setConfirmDelete(false); return; } commit(); onEdit(); }}
+          className={`justify-self-start flex flex-row items-center gap-[7px] p-2 -m-2 ${confirmDelete ? 'text-[#656464]' : 'text-[#a8a8a8]'}`}
+        >
+          {confirmDelete ? <span className="text-[13px]">Cancel</span> : <><Pencil size={15} /><span className="text-[13px]">Edit</span></>}
+        </button>
+
+        <button
+          type="button"
+          aria-label={confirmDelete ? 'Confirm delete task' : 'Delete task'}
+          onClick={() => (confirmDelete ? onDelete() : setConfirmDelete(true))}
+          className={`justify-self-center flex flex-row items-center gap-[7px] p-2 -m-2 ${confirmDelete ? 'text-[#FF7171]' : 'text-[#656464]'}`}
+        >
+          <Trash2 size={15} />
+          <span className="text-[13px]">{confirmDelete ? 'Confirm' : 'Delete'}</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => { if (confirmDelete) { setConfirmDelete(false); return; } commit(); onClose(); }}
+          className="justify-self-end text-[var(--app-accent)] text-[13px] p-2 -m-2"
+        >
+          Done
+        </button>
       </div>
     </SheetShell>
   );
