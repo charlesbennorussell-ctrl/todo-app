@@ -1456,8 +1456,11 @@ function ComposeSheet({ listSequence, projects, clients, people, currentUserShor
         spellCheck={false}
         autoComplete="off"
         name="ctrl-entry"
-        className="w-full resize-none overflow-hidden bg-transparent outline-none border-none text-white font-['Univers_BQ:55_Regular',sans-serif] text-[14px] leading-[1.4] placeholder:text-[#474747] pb-[18px]"
+        // A full-width capsule on the dark track colour, so the title reads as THE field of the
+        // sheet rather than floating loose above the chip groups that surround it.
+        className="w-full resize-none overflow-hidden bg-[#151412] rounded-[22px] px-[16px] py-[12px] outline-none border-none text-white font-['Univers_BQ:55_Regular',sans-serif] text-[14px] leading-[1.4] placeholder:text-[#656464]"
       />
+      <div className="h-[18px]" />
 
       {/* Everything is present — no disclosure. The body scrolls when it outgrows the sheet. */}
       <div className="max-h-[46vh] overflow-y-auto overscroll-contain">
