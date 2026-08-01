@@ -362,6 +362,12 @@ export default function MobileApp() {
 
   // Same room theme the desktop paints with — this is what keeps the two surfaces identical.
   useSharedTheme();
+  // Layout diagnostics (long-press the header). Exists because the bottom bar sitting off the
+  // screen bottom reproduces ONLY in the installed standalone PWA — desktop Chrome reports every
+  // env(safe-area-inset-*) as 0, so the failing condition can't be recreated here. Measure on the
+  // device instead of guessing.
+  const [diag, setDiag] = useState(false);
+  const holdRef = useRef<number | null>(null);
   const currentUserShort = readUserShort();
   if (DEBUG && typeof window !== 'undefined') (window as any).__mtasks = tasks;
   const listSequence = useMemo(readListSequence, []);
@@ -692,9 +698,16 @@ export default function MobileApp() {
       onDragCancel={() => { dndActiveRef.current = false; setActiveTask(null); setActiveCellId(null); }}
       measuring={{ droppable: { strategy: MeasuringStrategy.BeforeDragging } }}
     >
-      <div className="fixed inset-0 flex flex-col bg-[var(--app-bg)] overflow-hidden" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
-        {/* Header — brand + date */}
-        <div className="shrink-0 px-[18px] pt-[14px]">
+      <div data-mshell className="fixed inset-0 flex flex-col bg-[var(--app-bg)] overflow-hidden" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
+        {/* Header — brand + date. LONG-PRESS it to open the layout diagnostic panel; that works
+            inside the installed home-screen app, where you can't append ?debug=1 to the URL. */}
+        <div
+          className="shrink-0 px-[18px] pt-[14px]"
+          onTouchStart={() => { holdRef.current = window.setTimeout(() => setDiag((d) => !d), 700); }}
+          onTouchEnd={() => { if (holdRef.current) { window.clearTimeout(holdRef.current); holdRef.current = null; } }}
+          onTouchCancel={() => { if (holdRef.current) { window.clearTimeout(holdRef.current); holdRef.current = null; } }}
+          onDoubleClick={() => setDiag((d) => !d)}
+        >
           <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[13px] text-white whitespace-nowrap">Ctrl-Project — {headerDate}</p>
         </div>
         {/* Day switcher — the CTRL Assets toolbar paradigm: ONE rounded track with a lighter
@@ -778,7 +791,7 @@ export default function MobileApp() {
         {/* Bottom bar — the four icons + plus, desktop rail palette. Tall enough to CONTAIN the
             42px add button (42 + 13 top + 13 bottom = 68) instead of letting it break the top
             edge; the button is centred in the bar rather than lifted out of it. */}
-        <div className="shrink-0 bg-[#151412] flex flex-row items-center justify-around px-[10px]" style={{ paddingBottom: 'env(safe-area-inset-bottom)', height: 'calc(68px + env(safe-area-inset-bottom))' }}>
+        <div data-mbar className="shrink-0 bg-[#151412] flex flex-row items-center justify-around px-[10px]" style={{ paddingBottom: 'env(safe-area-inset-bottom)', height: 'calc(68px + env(safe-area-inset-bottom))' }}>
           {/* Focus is the only view the phone implements. The other three are marked
               aria-disabled and dimmed further so they read as "not here yet" rather than as
               normal inactive tabs you tapped and nothing happened. */}
@@ -856,6 +869,8 @@ export default function MobileApp() {
           />
         )}
 
+        {diag && <DiagPanel onClose={() => setDiag(false)} />}
+
         {/* Debug overlay (?debug=1) */}
         {DEBUG && (
           <div className="fixed left-0 right-0 z-[60] pointer-events-none px-2" style={{ bottom: 'calc(70px + env(safe-area-inset-bottom))' }}>
@@ -866,6 +881,63 @@ export default function MobileApp() {
         )}
       </div>
     </DndContext>
+  );
+}
+
+// Layout diagnostics for the installed PWA. Reports the numbers that decide where the bottom bar
+// lands — the real safe-area insets (0 in desktop Chrome, non-zero only on device), the several
+// different "heights" iOS exposes, and the measured shell/bar rectangles. The GAP line is the
+// answer: how many pixels sit between the bottom of the bar and the bottom of the window.
+function DiagPanel({ onClose }: { onClose: () => void }) {
+  const [rows, setRows] = useState<[string, string][]>([]);
+  useEffect(() => {
+    const read = () => {
+      // Resolve env() by letting the engine compute it on a throwaway element.
+      const probe = document.createElement('div');
+      probe.style.cssText = 'position:fixed;left:-9999px;top:0;padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom);';
+      document.body.appendChild(probe);
+      const cs = getComputedStyle(probe);
+      const insetTop = cs.paddingTop, insetBottom = cs.paddingBottom;
+      probe.remove();
+      const shell = document.querySelector('[data-mshell]') as HTMLElement | null;
+      const bar = document.querySelector('[data-mbar]') as HTMLElement | null;
+      const sr = shell?.getBoundingClientRect();
+      const br = bar?.getBoundingClientRect();
+      const vv = window.visualViewport;
+      const r = (n?: number) => (n === undefined ? '—' : String(Math.round(n)));
+      setRows([
+        ['version', `v${__APP_VERSION__}`],
+        ['standalone', String(window.matchMedia('(display-mode: standalone)').matches || !!(navigator as unknown as { standalone?: boolean }).standalone)],
+        ['inset top / bottom', `${insetTop} / ${insetBottom}`],
+        ['window.innerHeight', r(window.innerHeight)],
+        ['visualViewport.h', r(vv?.height)],
+        ['screen.height', r(window.screen.height)],
+        ['documentElement.clientH', r(document.documentElement.clientHeight)],
+        ['shell top → bottom', `${r(sr?.top)} → ${r(sr?.bottom)}`],
+        ['bar top → bottom', `${r(br?.top)} → ${r(br?.bottom)}`],
+        ['bar height', r(br?.height)],
+        ['GAP below bar', br ? r(window.innerHeight - br.bottom) : '—'],
+        ['body scroll overflow', r(document.body.scrollHeight - window.innerHeight)],
+        ['body padTop / padBottom', `${getComputedStyle(document.body).paddingTop} / ${getComputedStyle(document.body).paddingBottom}`],
+      ]);
+    };
+    read();
+    const h = window.setInterval(read, 1000);
+    return () => window.clearInterval(h);
+  }, []);
+  return (
+    <div className="fixed inset-0 z-[80] bg-black/85 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="w-full max-w-[330px] rounded-[10px] bg-[#232220] p-[14px]" onClick={(e) => e.stopPropagation()}>
+        <p className="text-white text-[13px] pb-[8px]">Layout diagnostics</p>
+        {rows.map(([k, v]) => (
+          <div key={k} className="flex flex-row justify-between gap-3 py-[2px]">
+            <span className="text-[#8a8a8a]" style={{ fontSize: 11 }}>{k}</span>
+            <span className="text-white text-right" style={{ fontSize: 11 }}>{v}</span>
+          </div>
+        ))}
+        <button type="button" onClick={onClose} className="mt-[12px] w-full py-[9px] rounded-[8px] bg-[var(--app-accent)] text-[#151412] text-[13px]">Close</button>
+      </div>
+    </div>
   );
 }
 
