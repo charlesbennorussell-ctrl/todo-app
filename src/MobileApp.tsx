@@ -388,8 +388,8 @@ function SheetShell({ onClose, children }: { onClose: () => void; children: Reac
 // Capsules speak the day-switcher's language: the GROUP is a near-black track, the SELECTED
 // capsule is the page-background colour sitting on it (the switcher's knob), selected text is
 // white, and everything unselected recedes to the same grey the switcher uses. No borders.
-const CHIP_TRACK = 'flex flex-row flex-wrap items-center gap-[4px] rounded-[18px] bg-[#151412] p-[4px]';
-const CHIP_BASE = "px-[14px] py-[7px] rounded-full text-[13px] font-['Univers_BQ:55_Regular',sans-serif] transition-colors";
+const CHIP_TRACK = 'flex flex-row flex-wrap items-center gap-[4px] rounded-[21px] bg-[#151412] p-[3px]';
+const CHIP_BASE = "h-[36px] inline-flex items-center px-[14px] rounded-full text-[13px] font-['Univers_BQ:55_Regular',sans-serif] transition-colors";
 const chipCls = (active: boolean) => `${CHIP_BASE} ${active ? 'bg-[var(--app-bg)] text-white' : 'bg-transparent text-[#656464]'}`;
 
 // ── The app ───────────────────────────────────────────────────────────────────
@@ -1290,7 +1290,7 @@ function PanelSection({ label, open, onToggle, onCreate, createPlaceholder, chil
             spellCheck={false}
             autoComplete="off"
             name="ctrl-entry-new"
-            className="flex-1 bg-[var(--app-bg)] rounded-full px-[14px] py-[7px] text-[13px] text-white outline-none border-none placeholder:text-[#474747]"
+            className="flex-1 h-[36px] bg-[var(--app-bg)] rounded-full px-[14px] text-[13px] text-white outline-none border-none placeholder:text-[#474747]"
           />
           <button type="button" onClick={commit} className={CHIP_BASE + ' bg-[var(--app-bg)] text-[var(--app-accent)]'}>Add</button>
         </div>
@@ -1342,7 +1342,7 @@ function ComposeSheet({ listSequence, projects, clients, people, currentUserShor
   const [milestone, setMilestone] = useState(editingTask?.type === 'scheduled');
   const [addedCount, setAddedCount] = useState(0);
   const [openLabel, setOpenLabel] = useState<string | null>(null);
-  const inputRef = useRef<HTMLInputElement | null>(null);
+  const inputRef = useRef<HTMLTextAreaElement | null>(null);
   // WebKit only raises the software keyboard when focus() runs synchronously inside the user
   // gesture's own task, so this must be a layout effect, not a timeout. Don't steal focus when
   // editing — the keyboard would cover the fields you opened this for.
@@ -1431,8 +1431,15 @@ function ComposeSheet({ listSequence, projects, clients, people, currentUserShor
         <button type="button" aria-label="Close" onClick={commitAndClose} className="text-[#656464] p-2 -m-2"><X size={16} /></button>
       </div>
 
-      <input
+      {/* A TEXTAREA, not an input. iOS kept raising the Contact AutoFill bar over the keyboard,
+          and autocomplete="off" does not stop it — Safari ignores that hint for contact
+          autofill. WebKit only runs the contact classifier over <input> fields, so a one-row
+          textarea sidesteps it entirely while looking and behaving identically: Enter is
+          intercepted for save/rapid-entry (so it never inserts a newline), and resize and
+          scrolling are off. */}
+      <textarea
         ref={inputRef}
+        rows={1}
         value={title}
         onChange={(e) => setTitle(e.target.value)}
         onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); save(!isEdit); } }}
@@ -1441,13 +1448,9 @@ function ComposeSheet({ listSequence, projects, clients, people, currentUserShor
         autoCapitalize="sentences"
         autoCorrect="off"
         spellCheck={false}
-        // iOS was raising the Contact AutoFill bar over the keyboard. WebKit infers a person
-        // field from the name/autocomplete attributes and from "name" appearing in the
-        // placeholder — this field had no autocomplete at all and read "Task name". An explicit
-        // off, a neutral field name, and a placeholder without that token close all three.
         autoComplete="off"
         name="ctrl-entry"
-        className="w-full bg-transparent outline-none border-none text-white font-['Univers_BQ:55_Regular',sans-serif] text-[14px] placeholder:text-[#474747] pb-[18px]"
+        className="w-full resize-none overflow-hidden bg-transparent outline-none border-none text-white font-['Univers_BQ:55_Regular',sans-serif] text-[14px] leading-[1.4] placeholder:text-[#474747] pb-[18px]"
       />
 
       {/* Everything is present — no disclosure. The body scrolls when it outgrows the sheet. */}
@@ -1499,7 +1502,7 @@ function ComposeSheet({ listSequence, projects, clients, people, currentUserShor
               type="date"
               value={deadline}
               onChange={(e) => setDeadline(e.target.value)}
-              className={`bg-[var(--app-bg)] rounded-full px-[14px] py-[7px] text-[13px] outline-none border-none ${deadline ? 'text-white' : 'text-transparent'}`}
+              className={`h-[36px] bg-[var(--app-bg)] rounded-full px-[14px] text-[13px] outline-none border-none ${deadline ? 'text-white' : 'text-transparent'}`}
             />
             {!deadline && (
               <span className="absolute inset-0 flex items-center pl-[14px] pointer-events-none text-[#656464] text-[13px]">Date</span>
