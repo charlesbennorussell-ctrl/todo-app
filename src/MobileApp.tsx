@@ -707,19 +707,14 @@ export default function MobileApp() {
               chrome rather than as content. */}
           <div className="relative inline-flex items-center rounded-full bg-[#151412] p-[3px] w-[calc(100%-36px)] max-w-[340px]">
             {/* Sliding knob: one third of the inner width, translated by whole knob-widths.
-                On TODAY it is EXACTLY the today-card fill. A card is 10% accent composited over
-                var(--app-bg); the knob sits on the near-black track instead, so the same alpha
-                alone would composite darker. Painting the accent wash over an opaque --app-bg
-                base reproduces the card's colour precisely, whatever the track underneath is. */}
+                It is simply the page background colour sitting on the near-black track — the
+                same one knob for all three days, no purple wash and no per-day special case. */}
             <div
               aria-hidden
-              className="absolute top-[3px] bottom-[3px] left-[3px] rounded-full"
+              className="absolute top-[3px] bottom-[3px] left-[3px] rounded-full bg-[var(--app-bg)]"
               style={{
                 width: 'calc((100% - 6px) / 3)',
                 transform: `translateX(${pane * 100}%)`,
-                background: pane === 0
-                  ? 'linear-gradient(rgb(from var(--app-accent) r g b / 0.1), rgb(from var(--app-accent) r g b / 0.1)), var(--app-bg)'
-                  : '#282828',
                 transition: `transform 320ms cubic-bezier(0.16, 1, 0.3, 1)`,
               }}
             />
@@ -780,8 +775,10 @@ export default function MobileApp() {
             ))}
           </div>
         </div>
-        {/* Bottom bar — the four icons + plus, desktop rail palette */}
-        <div className="shrink-0 bg-[#151412] flex flex-row items-center justify-around px-[10px]" style={{ paddingBottom: 'env(safe-area-inset-bottom)', height: 'calc(58px + env(safe-area-inset-bottom))' }}>
+        {/* Bottom bar — the four icons + plus, desktop rail palette. Tall enough to CONTAIN the
+            42px add button (42 + 13 top + 13 bottom = 68) instead of letting it break the top
+            edge; the button is centred in the bar rather than lifted out of it. */}
+        <div className="shrink-0 bg-[#151412] flex flex-row items-center justify-around px-[10px]" style={{ paddingBottom: 'env(safe-area-inset-bottom)', height: 'calc(68px + env(safe-area-inset-bottom))' }}>
           {/* Focus is the only view the phone implements. The other three are marked
               aria-disabled and dimmed further so they read as "not here yet" rather than as
               normal inactive tabs you tapped and nothing happened. */}
@@ -800,7 +797,7 @@ export default function MobileApp() {
           <button
             aria-label="Add task"
             onClick={() => setComposing(true)}
-            className="size-[42px] rounded-full bg-[var(--app-accent)] flex items-center justify-center shadow-lg -translate-y-[8px]"
+            className="size-[42px] shrink-0 rounded-full bg-[var(--app-accent)] flex items-center justify-center"
           >
             <Plus size={22} color="#151412" strokeWidth={2.5} />
           </button>
