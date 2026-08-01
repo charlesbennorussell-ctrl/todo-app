@@ -682,12 +682,29 @@ export default function MobileApp() {
       measuring={{ droppable: { strategy: MeasuringStrategy.BeforeDragging } }}
     >
       <div className="fixed inset-0 flex flex-col bg-[var(--app-bg)] overflow-hidden" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
-        {/* Header — brand + date, then the three day tabs (tap to jump; drop targets mid-drag) */}
-        <div className="shrink-0 px-[18px] pt-[14px] pb-[2px]">
+        {/* Header — brand + date */}
+        <div className="shrink-0 px-[18px] pt-[14px]">
           <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[13px] text-[#5e5e5e] whitespace-nowrap">Ctrl-Project — {headerDate}</p>
         </div>
-        <div className="shrink-0 flex flex-row items-center gap-[4px] px-[10px] pb-[8px] pt-[6px]">
-          {PANES.map((p, i) => <DayTab key={p.section} idx={i} label={p.label} active={pane === i} dragging={!!activeTask} onTap={() => setPane(i)} />)}
+        {/* Day switcher — the CTRL Assets toolbar paradigm: ONE rounded track with a lighter
+            knob that slides to the active segment. No underline. Equal py above and below so
+            the gap from the brand line and the gap down to the first band label match, and the
+            control sits centred in that band of space. Each segment is still a drop target, so
+            dragging a card onto "Tomorrow" moves it there. */}
+        <div className="shrink-0 flex items-center justify-center py-[18px]">
+          <div className="relative inline-flex items-center rounded-full bg-[#1f1f1f] p-[3px] w-[calc(100%-36px)] max-w-[340px]">
+            {/* Sliding knob: one third of the inner width, translated by whole knob-widths. */}
+            <div
+              aria-hidden
+              className="absolute top-[3px] bottom-[3px] left-[3px] rounded-full bg-[#282828]"
+              style={{
+                width: 'calc((100% - 6px) / 3)',
+                transform: `translateX(${pane * 100}%)`,
+                transition: `transform 320ms cubic-bezier(0.16, 1, 0.3, 1)`,
+              }}
+            />
+            {PANES.map((p, i) => <DayTab key={p.section} idx={i} label={p.label} active={pane === i} dragging={!!activeTask} onTap={() => setPane(i)} />)}
+          </div>
         </div>
         {/* Pager */}
         <div
@@ -835,7 +852,9 @@ export default function MobileApp() {
   );
 }
 
-// Day tab — tap target + drop target ("drop a card on Tomorrow to move it there").
+// One segment of the day switcher: tap target + drop target ("drop a card on Tomorrow to move
+// it there"). The active pill is the shared sliding knob behind these, so a segment paints no
+// background of its own — only its label colour changes. z-10 keeps the labels above the knob.
 function DayTab({ idx, label, active, dragging, onTap }: { idx: number; label: string; active: boolean; dragging: boolean; onTap: () => void }) {
   const { setNodeRef, isOver } = useDroppable({ id: `mtab:${idx}` });
   return (
@@ -843,15 +862,17 @@ function DayTab({ idx, label, active, dragging, onTap }: { idx: number; label: s
       ref={setNodeRef}
       type="button"
       onClick={onTap}
-      className={`flex-1 py-[9px] rounded-[6px] text-center transition-colors font-['Univers_BQ:55_Regular',sans-serif] text-[14px] ${
-        isOver && dragging ? 'bg-[var(--app-accent)]/20 text-[var(--app-accent)]'
+      className={`relative z-10 flex-1 py-[8px] rounded-full text-center transition-colors font-['Univers_BQ:55_Regular',sans-serif] text-[14px] ${
+        // Mid-drag the segments read as landing zones: the one under the finger goes full
+        // accent, the others hint in accent so it's obvious you can drop on them.
+        isOver && dragging ? 'text-[var(--app-accent)]'
         : active ? 'text-white'
-        : dragging ? 'text-[var(--app-accent)]/70'
+        : dragging ? 'text-[var(--app-accent)]/60'
         : 'text-[#656464]'
       }`}
+      style={isOver && dragging ? { boxShadow: 'inset 0 0 0 1.5px var(--app-accent)', borderRadius: 9999 } : undefined}
     >
       {label}
-      <span className={`block mx-auto mt-[4px] h-[2px] w-[18px] rounded-full ${active ? 'bg-[var(--app-accent)]' : 'bg-transparent'}`} />
     </button>
   );
 }
