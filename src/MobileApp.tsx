@@ -939,7 +939,30 @@ function DiagPanel({ onClose }: { onClose: () => void }) {
             <span className="text-white text-right" style={{ fontSize: 11 }}>{v}</span>
           </div>
         ))}
-        <button type="button" onClick={onClose} className="mt-[12px] w-full py-[9px] rounded-[8px] bg-[var(--app-accent)] text-[#151412] text-[13px]">Close</button>
+        {/* HARD RELOAD. There is no service worker, so an installed home-screen app just uses
+            the HTTP cache and can keep serving an old build — which previously meant deleting
+            the icon and re-adding it to pick up a deploy. Dropping any Cache Storage and
+            re-entering with a fresh ?v= makes iOS fetch a genuinely new document (the asset
+            filenames are content-hashed, so new JS/CSS follows). Existing params are preserved,
+            and the URL stays in the PWA's scope so it stays full-screen. */}
+        <button
+          type="button"
+          onClick={async () => {
+            try {
+              if ('caches' in window) {
+                const keys = await caches.keys();
+                await Promise.all(keys.map((k) => caches.delete(k)));
+              }
+            } catch { /* nothing cached — carry on */ }
+            const u = new URL(window.location.href);
+            u.searchParams.set('v', String(Date.now()));
+            window.location.replace(u.toString());
+          }}
+          className="mt-[12px] w-full py-[9px] rounded-[8px] bg-[#2f2e2c] text-white text-[13px]"
+        >
+          Hard reload (fetch newest build)
+        </button>
+        <button type="button" onClick={onClose} className="mt-[8px] w-full py-[9px] rounded-[8px] bg-[var(--app-accent)] text-[#151412] text-[13px]">Close</button>
       </div>
     </div>
   );
