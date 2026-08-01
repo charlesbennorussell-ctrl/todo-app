@@ -347,42 +347,58 @@ function SheetShell({ onClose, children }: { onClose: () => void; children: Reac
   // stray click lands on the fresh backdrop and would close it instantly. Ignore backdrop
   // clicks for the first 500ms of the sheet's life.
   const openedAtRef = useRef(Date.now());
-  // KEYBOARD AVOIDANCE. iOS does not shrink the LAYOUT viewport when the software keyboard
-  // opens — only the visual viewport — so a bottom-anchored fixed panel stays pinned to the
-  // screen bottom and the keyboard covers it (chips and the Add button become untappable).
-  // visualViewport tells us how much is actually covered; lift the sheet by exactly that.
-  const [kbInset, setKbInset] = useState(0);
+  // KEYBOARD AVOIDANCE — the overlay TRACKS THE VISUAL VIEWPORT instead of doing keyboard maths.
+  //
+  // Two earlier attempts failed for the same underlying reason: the overlay was `fixed inset-0`,
+  // which pins it to the LAYOUT viewport. iOS does not shrink the layout viewport when the
+  // keyboard opens — it offsets the VISUAL viewport (scrolls it) to reveal the focused field.
+  // Fixed elements stay glued to the layout viewport, so relative to what you can actually see
+  // the whole overlay rides upward and the sheet's top — the title you are typing into — goes
+  // off screen. Subtracting an inset from the bottom cannot fix that, because the container
+  // itself is in the wrong place.
+  //
+  // So: position the overlay AT the visual viewport (top = vv.offsetTop, height = vv.height).
+  // It then covers exactly the visible area in every state — keyboard up, keyboard down,
+  // mid-scroll — and the sheet simply sits at its bottom with max-height 100%. No arithmetic.
+  const [vvBox, setVvBox] = useState<{ top: number; height: number }>(() => ({
+    top: 0,
+    height: typeof window === 'undefined' ? 0 : window.innerHeight,
+  }));
+  const keyboardUp = typeof window !== 'undefined' && vvBox.height > 0 && window.innerHeight - vvBox.height > 80;
   useEffect(() => {
     const vv = window.visualViewport;
-    if (!vv) return;
     const update = () => {
-      // How much of the layout viewport is hidden below the visual viewport = keyboard height.
-      const covered = Math.max(0, window.innerHeight - vv.height - vv.offsetTop);
-      setKbInset(covered);
+      setVvBox(vv ? { top: vv.offsetTop, height: vv.height } : { top: 0, height: window.innerHeight });
     };
     update();
-    vv.addEventListener('resize', update);
-    vv.addEventListener('scroll', update);
-    return () => { vv.removeEventListener('resize', update); vv.removeEventListener('scroll', update); };
+    vv?.addEventListener('resize', update);
+    vv?.addEventListener('scroll', update);
+    window.addEventListener('resize', update);
+    window.addEventListener('orientationchange', update);
+    return () => {
+      vv?.removeEventListener('resize', update);
+      vv?.removeEventListener('scroll', update);
+      window.removeEventListener('resize', update);
+      window.removeEventListener('orientationchange', update);
+    };
   }, []);
   return (
-    <div className="fixed inset-0 z-50">
+    // Positioned at the VISUAL viewport, so this box is exactly what the user can see.
+    <div className="fixed left-0 right-0 z-50" style={{ top: vvBox.top, height: vvBox.height }}>
       <div className="absolute inset-0 bg-black/50" onClick={() => { if (Date.now() - openedAtRef.current > 500) onClose(); }} />
-      {/* The sheet is ANCHORED just above the keyboard and BOUNDED to the space that leaves —
-          it is not translated upwards. Translating a tall sheet by the keyboard's height pushed
-          its own top (the title field you are typing into) off the screen, which is exactly the
-          wrong end to lose. Sitting it on top of the keyboard with a max-height instead keeps
-          the title pinned and lets the middle scroll. Children lay out as a flex column so a
-          child marked flex-1 becomes that scrolling middle. */}
+      {/* Sheet sits at the bottom of the visible box and can never exceed it, so its top — the
+          title field — is always on screen. Children lay out as a flex column, so the child
+          marked flex-1 becomes the scrolling middle while the title and the primary button
+          stay pinned. */}
       <div
-        className="absolute left-0 right-0 flex flex-col rounded-t-[14px] px-[18px] pt-[16px]"
+        data-msheet
+        className="absolute left-0 right-0 bottom-0 flex flex-col rounded-t-[14px] px-[18px] pt-[16px]"
         style={{
           backgroundColor: SHEET_BG,
-          bottom: kbInset,
-          maxHeight: `calc(100% - ${kbInset}px - 10px)`,
-          // The safe-area pad is only meaningful when the sheet rests on the home indicator;
-          // once it sits on the keyboard that space is already accounted for.
-          paddingBottom: kbInset > 0 ? 14 : 'calc(env(safe-area-inset-bottom) + 18px)',
+          maxHeight: '100%',
+          // The home-indicator pad only means anything when the sheet rests on the screen
+          // bottom; with the keyboard up it is sitting on the keyboard instead.
+          paddingBottom: keyboardUp ? 14 : 'calc(env(safe-area-inset-bottom) + 18px)',
           animation: 'msheet-up 240ms cubic-bezier(0.16, 1, 0.3, 1)',
         }}
       >
@@ -1097,6 +1113,19 @@ function DiagPanel({ onClose }: { onClose: () => void }) {
         ['bar top → bottom', `${r(br?.top)} → ${r(br?.bottom)}`],
         ['bar height', r(br?.height)],
         ['GAP below bar', br ? r(window.innerHeight - br.bottom) : '—'],
+        // Sheet/keyboard diagnostics — only meaningful while a sheet is open with the keyboard up.
+        ['vv offsetTop', r(vv?.offsetTop)],
+        ['keyboard height', vv ? r(window.innerHeight - vv.height) : '—'],
+        (() => {
+          const sheet = document.querySelector('[data-msheet]') as HTMLElement | null;
+          const sr = sheet?.getBoundingClientRect();
+          return ['sheet top → bottom', sr ? `${r(sr.top)} → ${r(sr.bottom)}` : 'closed'] as [string, string];
+        })(),
+        (() => {
+          const fld = document.querySelector('[data-msheet] textarea') as HTMLElement | null;
+          const fr = fld?.getBoundingClientRect();
+          return ['title field top', fr ? `${r(fr.top)}${fr.top < 0 ? ' (OFF TOP)' : ''}` : 'closed'] as [string, string];
+        })(),
         ['body scroll overflow', r(document.body.scrollHeight - window.innerHeight)],
         ['body padTop / padBottom', `${getComputedStyle(document.body).paddingTop} / ${getComputedStyle(document.body).paddingBottom}`],
       ]);
