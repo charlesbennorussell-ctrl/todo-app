@@ -10,13 +10,18 @@
     <!-- Theme color matches the app background so the iPhone status-bar
          tint blends cleanly when running as a home-screen app. -->
     <meta name="theme-color" content="#1c1b19" />
-    <!-- iOS PWA meta: "Add to Home Screen" → opens full-screen without the
-         Safari chrome. apple-mobile-web-app-status-bar-style=black-translucent
-         lets our app paint behind the status bar (paired with the safe-area
-         padding handled in MobileApp). -->
+    <!-- iOS PWA meta: "Add to Home Screen" → opens full-screen without the Safari chrome.
+         status-bar-style is "black", NOT "black-translucent". With black-translucent, iOS
+         reported safe-area-inset-top: 59px (so the page believed it was painting behind the
+         status bar) while sizing the web view to only screen.height - 59 = 873 of the 932pt
+         screen AND top-aligning it — leaving a 59pt dead band below the web view that made the
+         bottom bar look like it was floating up off the screen edge. Measured on device:
+         screen 932, innerHeight 873, shell 0→873, bar flush at 873, gap 0. "black" lays the web
+         view out below an opaque status bar so it reaches the bottom edge, and the top inset
+         becomes 0 (the shell's env() padding then correctly collapses). -->
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
-    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black" />
     <meta name="apple-mobile-web-app-title" content="Ctrl-Project" />
     <link rel="apple-touch-icon" href="/todo-app/icons/icon-192.png" />
     <link rel="manifest" href="/todo-app/manifest.webmanifest" />
