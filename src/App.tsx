@@ -849,7 +849,7 @@ export function Arrowhead({ dim = false, tone = 'default', faint = false, color 
   );
 }
 
-function DeadlineArrow({ dim = false, small = false, color }: { dim?: boolean; small?: boolean; color?: string }) {
+export function DeadlineArrow({ dim = false, small = false, color }: { dim?: boolean; small?: boolean; color?: string }) {
   // Custom inline SVG so we can shorten the LINE while keeping the arrowhead size and the
   // line's stroke thickness constant. `small` (responsive density 3+) cuts the line length
   // by ~50% (line goes from x=0..14 → x=7..14). Total wrapper width drops 18 → 11.

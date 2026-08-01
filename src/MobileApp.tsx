@@ -47,7 +47,7 @@ import { MdOutlineCalendarMonth } from 'react-icons/md';
 import type { Task, Project, Client, ListId, SectionId } from './data';
 import { LIST_TITLES, LISTS, PERSONAL_CLIENT_ID, formatDeadline, isLateDeadline, todayISO } from './data';
 import {
-  computeCalendarDistribution, makeCpCompare, TaskCheckbox, AssigneeBadge, Arrowhead,
+  computeCalendarDistribution, makeCpCompare, TaskCheckbox, Arrowhead, DeadlineArrow,
   addDaysToDate, dateToISO, useSharedTheme,
 } from './App';
 
@@ -99,7 +99,6 @@ function MobileCardBody({ task, projects, clients, isTodayCard }: {
   const resolvedClientId = task.clientId ?? project?.clientId;
   const client = resolvedClientId ? clients.find((c) => c.id === resolvedClientId) : undefined;
   const isScheduled = task.type === 'scheduled';
-  const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID || task.list === 'personal';
   const titleColor = task.completed ? 'text-[#383838]' : isScheduled ? 'text-[var(--app-accent)]' : isTodayCard ? 'text-white' : 'text-[#a8a8a8]';
   const metaColor = (isScheduled || isTodayCard) ? 'text-[var(--app-accent)]' : 'text-[#656464]';
 
@@ -129,7 +128,12 @@ function MobileCardBody({ task, projects, clients, isTodayCard }: {
       {client && project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap shrink-0 ${metaColor}`}>{client.short}<Arrowhead dim={task.completed} color={isTodayCard && !task.completed ? 'var(--app-accent)' : undefined} />{project.name}</p>}
       {client && !project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap shrink-0 ${metaColor}`}>{client.short}</p>}
       {!client && project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap shrink-0 ${metaColor}`}>{project.name}</p>}
-      {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={(isScheduled || isTodayCard) ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} />)}
+      {/* Assignee initials are deliberately NOT rendered on the phone — it's a single-user
+          surface and the circles just crowded a narrow row. `assignees` is untouched in the
+          data; it still drives personal-task privacy and shows on the desktop. */}
+      {/* A real deadline gets the desktop's arrow ahead of the date. `small` is the narrower
+          11px variant (vs 18px) so it reads on a phone row without eating the title's space. */}
+      {task.deadline && <DeadlineArrow small dim={task.completed} color={(isScheduled || isTodayCard) ? 'var(--app-accent)' : undefined} />}
       {task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap shrink-0 ${(isScheduled || isTodayCard) ? 'text-[var(--app-accent)]' : isLateDeadline(task.deadline) ? 'text-white' : 'text-[#656464]'}`}>{formatDeadline(task.deadline)}</p>}
     </>
   );
