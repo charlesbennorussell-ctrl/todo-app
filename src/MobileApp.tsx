@@ -136,7 +136,7 @@ function MobileCardBody({ task, projects, clients, isTodayCard }: {
       {/* The shared arrow carries a -2px optical lift tuned for the desktop's larger rows; on a
           phone row it reads high, so nudge it back down to sit on the date's baseline. */}
       {task.deadline && (
-        <span className="inline-flex shrink-0" style={{ transform: 'translateY(5px)' }}>
+        <span className="inline-flex shrink-0" style={{ transform: 'translateY(3px)' }}>
           <DeadlineArrow small dim={task.completed} color={(isScheduled || isTodayCard) ? 'var(--app-accent)' : undefined} />
         </span>
       )}
@@ -369,8 +369,9 @@ function SheetShell({ onClose, children }: { onClose: () => void; children: Reac
     <div className="fixed inset-0 z-50">
       <div className="absolute inset-0 bg-black/50" onClick={() => { if (Date.now() - openedAtRef.current > 500) onClose(); }} />
       <div
-        className="absolute left-0 right-0 bottom-0 bg-[#232220] rounded-t-[14px] px-[18px] pt-[16px]"
+        className="absolute left-0 right-0 bottom-0 rounded-t-[14px] px-[18px] pt-[16px]"
         style={{
+          backgroundColor: SHEET_BG,
           transform: kbInset > 0 ? `translateY(-${kbInset}px)` : undefined,
           // The safe-area pad is only meaningful when the sheet is resting on the home
           // indicator; once lifted by the keyboard it would just add dead space.
@@ -388,9 +389,14 @@ function SheetShell({ onClose, children }: { onClose: () => void; children: Reac
 // Capsules speak the day-switcher's language: the GROUP is a near-black track, the SELECTED
 // capsule is the page-background colour sitting on it (the switcher's knob), selected text is
 // white, and everything unselected recedes to the same grey the switcher uses. No borders.
-const CHIP_TRACK = 'flex flex-row flex-wrap items-center gap-[4px] rounded-[21px] bg-[#151412] p-[3px]';
+// The sheet's own surface colour. The SELECTED capsule uses it, so a chosen chip reads as a
+// piece of the sheet lifted onto the darker track beneath it.
+const SHEET_BG = '#232220';
+// Track hugs its capsules (inline-flex) instead of stretching edge to edge — two People chips
+// get a two-chip-wide track, not a full-width bar. max-w-full lets long lists still wrap.
+const CHIP_TRACK = 'inline-flex flex-row flex-wrap items-center gap-[4px] rounded-[21px] bg-[#151412] p-[3px] max-w-full';
 const CHIP_BASE = "h-[36px] inline-flex items-center px-[14px] rounded-full text-[13px] font-['Univers_BQ:55_Regular',sans-serif] transition-colors";
-const chipCls = (active: boolean) => `${CHIP_BASE} ${active ? 'bg-[var(--app-bg)] text-white' : 'bg-transparent text-[#656464]'}`;
+const chipCls = (active: boolean) => `${CHIP_BASE} ${active ? 'bg-[#232220] text-white' : 'bg-transparent text-[#656464]'}`;
 
 // ── The app ───────────────────────────────────────────────────────────────────
 
@@ -1290,9 +1296,9 @@ function PanelSection({ label, open, onToggle, onCreate, createPlaceholder, chil
             spellCheck={false}
             autoComplete="off"
             name="ctrl-entry-new"
-            className="flex-1 h-[36px] bg-[var(--app-bg)] rounded-full px-[14px] text-[13px] text-white outline-none border-none placeholder:text-[#474747]"
+            className="flex-1 h-[36px] bg-[#232220] rounded-full px-[14px] text-[13px] text-white outline-none border-none placeholder:text-[#474747]"
           />
-          <button type="button" onClick={commit} className={CHIP_BASE + ' bg-[var(--app-bg)] text-[var(--app-accent)]'}>Add</button>
+          <button type="button" onClick={commit} className={CHIP_BASE + ' bg-[#232220] text-[var(--app-accent)]'}>Add</button>
         </div>
       )}
       <div className={CHIP_TRACK}>{children}</div>
@@ -1494,15 +1500,18 @@ function ComposeSheet({ listSequence, projects, clients, people, currentUserShor
         </PanelSection>
 
         <PanelSection label="Deadline">
-          {/* type=date has no placeholder of its own — when empty it shows the locale mask or
-              nothing at all. Hide its text and lay "Date" over it so the empty state reads
-              like the other fields. */}
+          {/* The date field is a CAPSULE like every other chip. type=date brings its own
+              intrinsic sizing on iOS — a native control height and inner padding that made it
+              stand taller than its neighbours — so appearance-none plus box-border and an
+              explicit height force it onto the same 36px as the rest. It also has no
+              placeholder of its own, so when empty its text is hidden and "Date" is laid over
+              it, and it fills with the sheet colour once set, exactly like a selected chip. */}
           <span className="relative inline-flex">
             <input
               type="date"
               value={deadline}
               onChange={(e) => setDeadline(e.target.value)}
-              className={`h-[36px] bg-[var(--app-bg)] rounded-full px-[14px] text-[13px] outline-none border-none ${deadline ? 'text-white' : 'text-transparent'}`}
+              className={`${CHIP_BASE} box-border appearance-none leading-none ${deadline ? 'bg-[#232220] text-white' : 'bg-transparent text-transparent'}`}
             />
             {!deadline && (
               <span className="absolute inset-0 flex items-center pl-[14px] pointer-events-none text-[#656464] text-[13px]">Date</span>
