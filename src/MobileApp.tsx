@@ -42,9 +42,9 @@ import {
 } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { List, FolderTree, SquareKanban, Plus, Trash2, X } from 'lucide-react';
+import { List, FolderTree, SquareKanban, Plus, Trash2, Pencil, X } from 'lucide-react';
 import { MdOutlineCalendarMonth } from 'react-icons/md';
-import type { Task, Project, Client, ListId, SectionId } from './data';
+import type { Task, Project, Client, Person, ListId, SectionId } from './data';
 import { LIST_TITLES, LISTS, PERSONAL_CLIENT_ID, formatDeadline, isLateDeadline, todayISO } from './data';
 import {
   computeCalendarDistribution, makeCpCompare, TaskCheckbox, Arrowhead, DeadlineArrow,
@@ -145,7 +145,7 @@ function MobileCardBody({ task, projects, clients, isTodayCard }: {
   const title = <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleColor}`}>{task.title || 'New Task'}</span>;
 
   return (
-    <div className="relative px-[12px] py-[8px] overflow-hidden h-full flex flex-col justify-center gap-[2px]">
+    <div className="relative pl-[12px] pr-[40px] py-[8px] overflow-hidden h-full flex flex-col justify-center gap-[2px]">
       {/* Measuring probe — invisible, single-line, identical content */}
       <div ref={probeRef} aria-hidden className="absolute inset-x-0 top-0 px-[12px] invisible overflow-hidden flex flex-row items-center gap-[10px] whitespace-nowrap pointer-events-none">
         {checkbox}
@@ -176,9 +176,9 @@ function MobileCardBody({ task, projects, clients, isTodayCard }: {
   );
 }
 
-function MobileCard({ task, cellId, projects, clients, isTodayCard, onToggle, onOpen }: {
+function MobileCard({ task, cellId, projects, clients, isTodayCard, onToggle, onOpen, onAddSibling }: {
   task: Task; cellId: string; projects: Project[]; clients: Client[]; isTodayCard: boolean;
-  onToggle: () => void; onOpen: () => void;
+  onToggle: () => void; onOpen: () => void; onAddSibling: () => void;
 }) {
   const isScheduled = task.type === 'scheduled';
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
@@ -202,6 +202,7 @@ function MobileCard({ task, cellId, projects, clients, isTodayCard, onToggle, on
   // held finger can never read as both "tap" and "drag" at once.
   const tapRef = useRef<{ x: number; y: number; t: number } | null>(null);
   const padTapRef = useRef<{ x: number; y: number; t: number } | null>(null);
+  const plusTapRef = useRef<{ x: number; y: number; t: number } | null>(null);
   // dnd-kit's listeners include the TouchSensor's own onTouchStart activator. Spreading it and
   // then declaring our own onTouchStart would CLOBBER it (later prop wins) and silently kill
   // long-press dragging on real touch devices — so compose the two by hand.
@@ -245,6 +246,35 @@ function MobileCard({ task, cellId, projects, clients, isTodayCard, onToggle, on
       }}
     >
       <MobileCardBody task={task} projects={projects} clients={clients} isTodayCard={isTodayCard} />
+      {/* "+" on the right edge — a new task carrying this one's category, project, client and
+          deadline, opened straight into the sheet so you can name it. Same movement-guarded tap
+          as the checkbox pad: a swipe or scroll that starts here must still pan, not fire. */}
+      {!isScheduled && (
+        <button
+          type="button"
+          aria-label="Add task in same project"
+          className={`absolute right-0 top-0 bottom-0 w-[44px] flex items-center justify-center ${isTodayCard ? 'text-[var(--app-accent)]' : 'text-[#4a4a4a]'}`}
+          onPointerDown={(e) => { if (e.pointerType === 'mouse') e.stopPropagation(); }}
+          onTouchStart={(e) => { const t = e.touches[0]; plusTapRef.current = { x: t.clientX, y: t.clientY, t: Date.now() }; }}
+          onTouchEnd={(e) => {
+            const s = plusTapRef.current; plusTapRef.current = null;
+            if (!s) return;
+            const t = e.changedTouches[0];
+            if (Math.abs(t.clientX - s.x) <= 10 && Math.abs(t.clientY - s.y) <= 10 && Date.now() - s.t <= 230) {
+              e.stopPropagation(); e.preventDefault();
+              dbg(`plus ${task.id}`);
+              onAddSibling();
+            }
+          }}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (lastTouchAt.current && Date.now() - lastTouchAt.current < 700) return;
+            onAddSibling();
+          }}
+        >
+          <Plus size={15} />
+        </button>
+      )}
       {/* Checkbox tap pad — 40px invisible target over the 12px box. Touchstart is NOT
           stopped (a swipe/scroll starting on the pad must still pan/scroll normally);
           instead the toggle only fires on a genuine tap (≤10px, ≤230ms). */}
@@ -358,6 +388,7 @@ export default function MobileApp() {
   const tasks = (useStorage((root) => root.tasks) || []) as Task[];
   const projects = (useStorage((root) => root.projects) || []) as Project[];
   const clients = (useStorage((root) => root.clients) || []) as Client[];
+  const people = (useStorage((root) => root.people) || []) as Person[];
 
   const setTasks = useMutation(({ storage }, updater: (prev: Task[]) => Task[]) => {
     const current = (storage.get('tasks' as never) as Task[] | undefined) || [];
@@ -397,18 +428,68 @@ export default function MobileApp() {
     setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, title } : t)));
   }, [setTasks]);
 
+  /** Patch any field set on a task — what the full panel writes back when editing. */
+  const updateTask = useCallback((id: string, patch: Partial<Task>) => {
+    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
+  }, [setTasks]);
+
   const deleteTask = useCallback((id: string) => {
     setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, trashed: true, trashedAt: Date.now(), revivedAt: undefined } : t)));
   }, [setTasks]);
 
-  const addTask = useCallback((title: string, listId: ListId, section: SectionId) => {
-    const id = `task-${Date.now()}`;
+  // Monotonic suffix so two creations inside the same millisecond (rapid entry, a fast double
+  // tap) can't collide on `task-<Date.now()>`.
+  const idSeq = useRef(0);
+  const newId = () => `task-${Date.now()}-${idSeq.current++}`;
+
+  /** Create a task with the desktop's full field set. Appends to the bottom of its bucket. */
+  const createTask = useCallback((p: {
+    title: string; list: ListId; section: SectionId;
+    projectId?: string; clientId?: string; deadline?: string;
+    assignees?: string[]; milestone?: boolean;
+  }) => {
+    const id = newId();
     setTasks((prev) => {
-      const maxOrder = prev.filter((x) => x.list === listId && x.section === section).reduce((m, x) => Math.max(m, x.order), -1);
+      const maxOrder = prev.filter((x) => x.list === p.list && x.section === p.section).reduce((m, x) => Math.max(m, x.order), -1);
       return [...prev, {
-        id, title, type: 'todo' as const, assignees: currentUserShort ? [currentUserShort] : [],
-        completed: false, list: listId, section, order: maxOrder + 1, createdAt: Date.now(),
+        id,
+        title: p.title,
+        type: p.milestone ? ('scheduled' as const) : ('todo' as const),
+        assignees: p.assignees ?? (currentUserShort ? [currentUserShort] : []),
+        completed: false,
+        list: p.list,
+        section: p.section,
+        order: maxOrder + 1,
+        projectId: p.projectId,
+        clientId: p.clientId,
+        deadline: p.deadline,
+        createdAt: Date.now(),
       }];
+    });
+    return id;
+  }, [setTasks, currentUserShort]);
+
+  /** The card "+" — a sibling of `src` carrying its category, section, project, client, deadline
+   *  and type, inserted directly beneath it. Mirrors the desktop's addSiblingTask, including
+   *  renumbering the bucket so the new row actually lands next to its source. */
+  const addSibling = useCallback((src: Task) => {
+    const id = newId();
+    setTasks((prev) => {
+      const bucket = prev.filter((t) => t.list === src.list && t.section === src.section).sort((a, b) => a.order - b.order);
+      const idx = bucket.findIndex((t) => t.id === src.id);
+      const created: Task = {
+        id, title: '',
+        type: src.type === 'scheduled' ? 'scheduled' : 'todo',
+        assignees: currentUserShort ? [currentUserShort] : [],
+        completed: false,
+        list: src.list, section: src.section, order: 0,
+        projectId: src.projectId, clientId: src.clientId, deadline: src.deadline,
+        createdAt: Date.now(),
+      };
+      const insertAt = idx >= 0 ? idx + 1 : bucket.length;
+      const reordered = [...bucket.slice(0, insertAt), created, ...bucket.slice(insertAt)].map((t, i) => ({ ...t, order: i }));
+      const untouched = prev.filter((t) => !(t.list === src.list && t.section === src.section));
+      return [...untouched, ...reordered];
     });
     return id;
   }, [setTasks, currentUserShort]);
@@ -671,9 +752,17 @@ export default function MobileApp() {
   };
 
   // ── Sheets state ───────────────────────────────────────────────────────────
-  const [sheetTask, setSheetTask] = useState<Task | null>(null);
+  // Track the sheet by ID, not by object: the card "+" creates a sibling and opens the sheet on
+  // it in the same tick, before that task exists in `tasks`. Looking it up live resolves on the
+  // next render, and also keeps the sheet in sync if the task changes underneath it.
+  const [sheetTaskId, setSheetTaskId] = useState<string | null>(null);
+  // Which band label has its "+" disclosed, keyed "<section>:<listId>". One at a time.
+  const [openBand, setOpenBand] = useState<string | null>(null);
+  // Task currently open in the FULL panel for editing (from the card sheet's "Edit").
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const editingTask = editingId ? tasks.find((t) => t.id === editingId) ?? null : null;
   const [composing, setComposing] = useState(false);
-  const liveSheetTask = sheetTask ? tasks.find((t) => t.id === sheetTask.id) ?? null : null;
+  const liveSheetTask = sheetTaskId ? tasks.find((t) => t.id === sheetTaskId) ?? null : null;
 
   // ── Render ─────────────────────────────────────────────────────────────────
   // Viewport width as STATE so rotation / resize re-lays the pager out instead of
@@ -767,8 +856,26 @@ export default function MobileApp() {
               <PaneDroppable key={p.section} id={`mpane:${i}`} width={w}>
                 {bandsByPane[i].map(({ listId, cellId, tasks: bandTasks }) => (
                   <div key={`${p.section}-${listId}`} className={bandTasks.length > 0 ? 'pb-[20px]' : 'pb-[10px]'}>
-                    <div className="h-[24px] px-[20px] pb-[4px] flex items-center sticky top-0 z-10 bg-[var(--app-bg)]">
-                      <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap text-[#5e5e5e]">{LIST_TITLES[listId]}</p>
+                    {/* Tap a category label to reveal its "+", then tap that to add a task in this
+                        category and day. Hover-reveal is meaningless on touch, so the label itself
+                        is the disclosure; tapping it again (or adding) puts the + away. */}
+                    <div className="h-[24px] px-[20px] pb-[4px] flex items-center gap-[10px] sticky top-0 z-10 bg-[var(--app-bg)]">
+                      <button
+                        type="button"
+                        onClick={() => setOpenBand((b) => (b === `${p.section}:${listId}` ? null : `${p.section}:${listId}`))}
+                        className={`font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap transition-colors ${openBand === `${p.section}:${listId}` ? 'text-[#a8a8a8]' : 'text-[#5e5e5e]'}`}
+                      >{LIST_TITLES[listId]}</button>
+                      {openBand === `${p.section}:${listId}` && (
+                        <button
+                          type="button"
+                          aria-label={`Add ${LIST_TITLES[listId]} task`}
+                          onClick={() => {
+                            setSheetTaskId(createTask({ title: '', list: listId, section: p.section }));
+                            setOpenBand(null);
+                          }}
+                          className="text-[var(--app-accent)] p-1 -m-1"
+                        ><Plus size={15} /></button>
+                      )}
                     </div>
                     <BandDroppable id={cellId} isEmpty={bandTasks.length === 0}>
                       <SortableContext items={bandTasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
@@ -781,7 +888,8 @@ export default function MobileApp() {
                             clients={clients}
                             isTodayCard={i === 0}
                             onToggle={() => toggleTask(t.id)}
-                            onOpen={() => setSheetTask(t)}
+                            onOpen={() => setSheetTaskId(t.id)}
+                            onAddSibling={() => setSheetTaskId(addSibling(t))}
                           />
                         ))}
                       </SortableContext>
@@ -858,18 +966,29 @@ export default function MobileApp() {
               const targetDate = idx === 0 ? isos[0] : idx === 1 ? isos[1] : dateToISO(addDaysToDate(anchor, 7));
               dropTask(liveSheetTask, targetDate, targetSection, null, false);
             }}
-            onDelete={() => { deleteTask(liveSheetTask.id); setSheetTask(null); }}
-            onClose={() => setSheetTask(null)}
+            onDelete={() => { deleteTask(liveSheetTask.id); setSheetTaskId(null); }}
+            onEdit={() => { setEditingId(liveSheetTask.id); setSheetTaskId(null); }}
+            onClose={() => setSheetTaskId(null)}
           />
         )}
 
         {/* Compose sheet */}
-        {composing && (
+        {/* One panel, two jobs: creating (bottom "+") and editing (card sheet -> Edit). */}
+        {(composing || editingTask) && (
           <ComposeSheet
+            key={editingTask ? `edit-${editingTask.id}` : 'create'}
             listSequence={listSequence}
+            projects={projects}
+            clients={clients}
+            people={people}
+            currentUserShort={currentUserShort}
             defaultSection={PANES[pane].section}
-            onCreate={(title, listId, section, keepOpen) => { addTask(title, listId, section); if (!keepOpen) setComposing(false); }}
-            onClose={() => setComposing(false)}
+            isos={isos}
+            anchor={anchor}
+            editingTask={editingTask}
+            onCreate={(payload, keepOpen) => { createTask(payload); if (!keepOpen) setComposing(false); }}
+            onUpdate={updateTask}
+            onClose={() => { setComposing(false); setEditingId(null); }}
           />
         )}
 
@@ -1018,9 +1137,12 @@ function DayTab({ idx, label, active, dragging, onTap }: { idx: number; label: s
   );
 }
 
-function TaskSheet({ task, projects, clients, isos, anchor, onRename, onMove, onDelete, onClose }: {
+function TaskSheet({ task, projects, clients, isos, anchor, onRename, onMove, onDelete, onEdit, onClose }: {
   task: Task; projects: Project[]; clients: Client[]; isos: string[]; anchor: Date;
-  onRename: (title: string) => void; onMove: (paneIdx: number) => void; onDelete: () => void; onClose: () => void;
+  onRename: (title: string) => void; onMove: (paneIdx: number) => void; onDelete: () => void;
+  /** Hand off to the full task panel, pre-filled with this task. */
+  onEdit: () => void;
+  onClose: () => void;
 }) {
   const [title, setTitle] = useState(task.title);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -1054,99 +1176,236 @@ function TaskSheet({ task, projects, clients, isos, anchor, onRename, onMove, on
           </button>
         ))}
       </div>
-      {/* Delete is two taps. Tapping a card is the most common gesture here (it opens this
-          sheet), so a single-tap Delete sitting under your thumb was one mis-tap away from
-          trashing a task — and the phone has no Trash view to recover it from. The second tap
-          is explicitly labelled and red; tapping anything else cancels it. */}
+      {/* Edit · Delete · Done. Edit hands off to the same full panel the bottom "+" opens, so
+          there is one task form in the app rather than two that drift.
+          Delete stays two taps: tapping a card is the gesture that opens this sheet, so a
+          single-tap Delete under your thumb was one mis-tap from trashing a task — and the phone
+          has no Trash view to recover from. The second tap is labelled and red; Cancel backs out. */}
       <div className="flex flex-row items-center justify-between border-t border-[#33312e] pt-[14px]">
         {confirmDelete ? (
-          <button type="button" aria-label="Confirm delete task" onClick={onDelete} className="flex flex-row items-center gap-[8px] text-[#FF7171] p-2 -m-2">
-            <Trash2 size={16} /><span className="text-[13px]">Tap again to delete</span>
-          </button>
+          <>
+            <button type="button" aria-label="Confirm delete task" onClick={onDelete} className="flex flex-row items-center gap-[8px] text-[#FF7171] p-2 -m-2">
+              <Trash2 size={16} /><span className="text-[13px]">Tap again to delete</span>
+            </button>
+            <button type="button" onClick={() => setConfirmDelete(false)} className="text-[var(--app-accent)] text-[13px] p-2 -m-2">Cancel</button>
+          </>
         ) : (
-          <button type="button" aria-label="Delete task" onClick={() => setConfirmDelete(true)} className="flex flex-row items-center gap-[8px] text-[#656464] p-2 -m-2">
-            <Trash2 size={16} /><span className="text-[13px]">Delete</span>
-          </button>
+          <>
+            <button type="button" onClick={() => { commit(); onEdit(); }} className="flex flex-row items-center gap-[7px] text-[#a8a8a8] p-2 -m-2">
+              <Pencil size={15} /><span className="text-[13px]">Edit</span>
+            </button>
+            <button type="button" aria-label="Delete task" onClick={() => setConfirmDelete(true)} className="flex flex-row items-center gap-[7px] text-[#656464] p-2 -m-2">
+              <Trash2 size={15} /><span className="text-[13px]">Delete</span>
+            </button>
+            <button type="button" onClick={() => { commit(); onClose(); }} className="text-[var(--app-accent)] text-[13px] p-2 -m-2">Done</button>
+          </>
         )}
-        <button type="button" onClick={() => { if (confirmDelete) { setConfirmDelete(false); return; } commit(); onClose(); }} className="text-[var(--app-accent)] text-[13px] p-2 -m-2">
-          {confirmDelete ? 'Cancel' : 'Done'}
-        </button>
       </div>
     </SheetShell>
   );
 }
 
-function ComposeSheet({ listSequence, defaultSection, onCreate, onClose }: {
-  listSequence: ListId[]; defaultSection: SectionId;
-  onCreate: (title: string, listId: ListId, section: SectionId, keepOpen: boolean) => void; onClose: () => void;
+// Full task panel — the desktop AddModal's field set, laid out for a phone. Used BOTH for
+// creating (bottom "+") and for editing (the card sheet's "Edit"), so the two can never drift
+// apart. Deliberately keeps When (Today / Tomorrow / Next) prominent and separated at the top
+// rather than burying it among the other pickers. Client filters the project list, as on desktop.
+function ComposeSheet({ listSequence, projects, clients, people, currentUserShort, defaultSection, isos, anchor, editingTask, onCreate, onUpdate, onClose }: {
+  listSequence: ListId[];
+  projects: Project[]; clients: Client[]; people: Person[];
+  currentUserShort: string;
+  defaultSection: SectionId;
+  isos: string[]; anchor: Date;
+  /** When set, the panel edits this task instead of creating one. */
+  editingTask?: Task | null;
+  onCreate: (payload: {
+    title: string; list: ListId; section: SectionId;
+    projectId?: string; clientId?: string; deadline?: string;
+    assignees?: string[]; milestone?: boolean;
+  }, keepOpen: boolean) => void;
+  onUpdate: (id: string, patch: Partial<Task>) => void;
+  onClose: () => void;
 }) {
-  const [title, setTitle] = useState('');
+  const isEdit = !!editingTask;
+  const seedProject = editingTask?.projectId ? projects.find((p) => p.id === editingTask.projectId) : undefined;
+  const [title, setTitle] = useState(editingTask?.title ?? '');
   const [listId, setListId] = useState<ListId>(() => {
+    if (editingTask) return editingTask.list;
     try { const v = window.localStorage.getItem('todo-app-mobile-last-list') as ListId | null; return v && LISTS.includes(v) ? v : listSequence[0]; } catch { return listSequence[0]; }
   });
-  const [section, setSection] = useState<SectionId>(defaultSection);
-  // How many tasks this composer run has added — drives the "Added N" hint so a rapid burst
-  // gives feedback even though the sheet never closes.
+  const [section, setSection] = useState<SectionId>(editingTask?.section ?? defaultSection);
+  const [clientId, setClientId] = useState(editingTask?.clientId ?? seedProject?.clientId ?? '');
+  const [projectId, setProjectId] = useState(editingTask?.projectId ?? '');
+  const [assignees, setAssignees] = useState<string[]>(editingTask?.assignees ?? (currentUserShort ? [currentUserShort] : []));
+  const [deadline, setDeadline] = useState(editingTask?.deadline ?? '');
+  const [milestone, setMilestone] = useState(editingTask?.type === 'scheduled');
+  // Editing shows everything straight away — you came here to change one of those fields.
+  // Creating starts collapsed so the common case stays title + When + Add.
+  const [more, setMore] = useState(isEdit);
   const [addedCount, setAddedCount] = useState(0);
   const inputRef = useRef<HTMLInputElement | null>(null);
   // WebKit only raises the software keyboard when focus() runs synchronously inside the user
-  // gesture's own task. The old setTimeout(…, 120) broke that chain, so the composer opened
-  // focused but with NO keyboard — you had to tap the field a second time, which also defeats
-  // the return-key rapid entry. Focus in a layout effect, before paint, still inside the tap.
-  useLayoutEffect(() => { inputRef.current?.focus(); }, []);
-  // RAPID ENTRY (desktop parity — Enter on a title spawns the next blank one):
-  // the keyboard's return key saves and immediately clears the field WITHOUT closing the sheet
-  // or dismissing the keyboard, keeping the same category + day selected. Type, return, type,
-  // return. The "Add Task" button is the explicit finish — it saves and closes.
-  // Blur is never called on the input, so iOS keeps the keyboard up between entries.
+  // gesture's own task, so this must be a layout effect, not a timeout. Don't steal focus when
+  // editing — the keyboard would cover the fields you opened this for.
+  useLayoutEffect(() => { if (!isEdit) inputRef.current?.focus(); }, [isEdit]);
+
+  // Picking a project implies its client; picking a client narrows the projects and drops a
+  // project that no longer belongs — same rule as the desktop modal.
+  const visibleProjects = useMemo(
+    () => (clientId ? projects.filter((p) => p.clientId === clientId) : projects),
+    [projects, clientId]
+  );
+  const chooseClient = (id: string) => {
+    setClientId(id);
+    if (projectId && !projects.some((p) => p.id === projectId && p.clientId === id)) setProjectId('');
+  };
+  const chooseProject = (id: string) => {
+    setProjectId(id);
+    const owner = projects.find((p) => p.id === id)?.clientId;
+    if (owner) setClientId(owner);
+  };
+
+  // RAPID ENTRY (create only): return saves and clears WITHOUT closing or dismissing the
+  // keyboard, keeping every other field as-is so a run of related tasks is one gesture each.
   const save = (keepOpen: boolean) => {
     const t = title.trim();
     if (!t) { if (!keepOpen) onClose(); return; }
+    const owner = projectId ? projects.find((p) => p.id === projectId)?.clientId : undefined;
+    const resolvedClient = owner ?? (clientId || undefined);
+    if (isEdit && editingTask) {
+      onUpdate(editingTask.id, {
+        title: t,
+        type: milestone ? 'scheduled' : 'todo',
+        list: listId,
+        section,
+        projectId: projectId || undefined,
+        clientId: resolvedClient,
+        deadline: deadline || undefined,
+        assignees,
+      });
+      onClose();
+      return;
+    }
     try { window.localStorage.setItem('todo-app-mobile-last-list', listId); } catch { /* ignore */ }
-    onCreate(t, listId, section, keepOpen);
+    onCreate({
+      title: t, list: listId, section,
+      projectId: projectId || undefined,
+      clientId: resolvedClient,
+      deadline: deadline || undefined,
+      assignees, milestone,
+    }, keepOpen);
     if (keepOpen) {
       setTitle('');
       setAddedCount((n) => n + 1);
       inputRef.current?.focus();
     }
   };
+
+  const Label = ({ children }: { children: React.ReactNode }) => (
+    <p className="text-[#5e5e5e] pb-[6px]" style={{ fontSize: 11 }}>{children}</p>
+  );
+
+  const primaryLabel = isEdit ? 'Save' : title.trim() ? 'Add Task' : addedCount > 0 ? 'Done' : 'Add Task';
+  const primaryEnabled = isEdit ? !!title.trim() : !!title.trim() || addedCount > 0;
+
   return (
     <SheetShell onClose={onClose}>
       <div className="flex flex-row items-center justify-between pb-[10px]">
-        <p className="text-[#5e5e5e] text-[13px]">{addedCount > 0 ? `Added ${addedCount} — keep going` : 'New Task'}</p>
+        <p className="text-[#5e5e5e] text-[13px]">{isEdit ? 'Edit Task' : addedCount > 0 ? `Added ${addedCount} — keep going` : 'New Task'}</p>
         <button type="button" aria-label="Close" onClick={onClose} className="text-[#656464] p-2 -m-2"><X size={16} /></button>
       </div>
+
       <input
         ref={inputRef}
         value={title}
         onChange={(e) => setTitle(e.target.value)}
-        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); save(true); } }}
+        onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); save(!isEdit); } }}
         placeholder="What needs doing?"
-        // iOS: label the return key "next" (rapid entry), start each task capitalized, and skip
-        // autocorrect/spellcheck noise on short task titles.
-        enterKeyHint="next"
+        enterKeyHint={isEdit ? 'done' : 'next'}
         autoCapitalize="sentences"
         autoCorrect="off"
         spellCheck={false}
         className="w-full bg-transparent outline-none border-none text-white font-['Univers_BQ:55_Regular',sans-serif] text-[14px] placeholder:text-[#474747] pb-[14px]"
       />
-      <div className="flex flex-row flex-wrap gap-[8px] pb-[10px]">
+
+      {/* WHEN — kept first and on its own row: it is the decision you make every time. */}
+      <Label>When</Label>
+      <div className="flex flex-row gap-[8px] pb-[14px]">
+        {PANES.map((p) => (
+          <button key={p.section} type="button" className={`flex-1 ${chipCls(p.section === section)}`} onClick={() => setSection(p.section)}>{p.label}</button>
+        ))}
+      </div>
+
+      <Label>Category</Label>
+      <div className="flex flex-row flex-wrap gap-[8px] pb-[14px]">
         {listSequence.map((l) => (
           <button key={l} type="button" className={chipCls(l === listId)} onClick={() => setListId(l)}>{LIST_TITLES[l]}</button>
         ))}
       </div>
-      <div className="flex flex-row gap-[8px] pb-[16px]">
-        {PANES.map((p) => (
-          <button key={p.section} type="button" className={chipCls(p.section === section)} onClick={() => setSection(p.section)}>{p.label}</button>
-        ))}
-      </div>
+
+      {/* Optional fields start collapsed when creating, so the common case stays two taps. */}
+      {!more ? (
+        <button type="button" onClick={() => setMore(true)} className="text-[var(--app-accent)] text-[13px] pb-[14px]">
+          + Client, project, date, people
+        </button>
+      ) : (
+        <div className="max-h-[36vh] overflow-y-auto pb-[6px]">
+          <Label>Client</Label>
+          <div className="flex flex-row flex-wrap gap-[8px] pb-[14px]">
+            <button type="button" className={chipCls(clientId === '')} onClick={() => chooseClient('')}>None</button>
+            {clients.map((c) => (
+              <button key={c.id} type="button" className={chipCls(clientId === c.id)} onClick={() => chooseClient(c.id)}>{c.short || c.name}</button>
+            ))}
+          </div>
+
+          <Label>Project{clientId ? '' : ' (all)'}</Label>
+          <div className="flex flex-row flex-wrap gap-[8px] pb-[14px]">
+            <button type="button" className={chipCls(projectId === '')} onClick={() => setProjectId('')}>None</button>
+            {visibleProjects.map((p) => (
+              <button key={p.id} type="button" className={chipCls(projectId === p.id)} onClick={() => chooseProject(p.id)}>{p.name}</button>
+            ))}
+          </div>
+
+          <Label>Deadline</Label>
+          <div className="flex flex-row items-center gap-[8px] pb-[14px]">
+            <input
+              type="date"
+              value={deadline}
+              onChange={(e) => setDeadline(e.target.value)}
+              className="bg-[#2b2a27] text-white rounded-[8px] px-[10px] py-[8px] text-[13px] outline-none border-none"
+            />
+            <button type="button" className={chipCls(false)} onClick={() => setDeadline(isos[0])}>Today</button>
+            <button type="button" className={chipCls(false)} onClick={() => setDeadline(dateToISO(addDaysToDate(anchor, 7)))}>+1 wk</button>
+            {deadline && <button type="button" aria-label="Clear deadline" onClick={() => setDeadline('')} className="text-[#656464] p-2 -m-2"><X size={14} /></button>}
+          </div>
+
+          <Label>People</Label>
+          <div className="flex flex-row flex-wrap gap-[8px] pb-[14px]">
+            {people.map((pr) => {
+              const on = assignees.includes(pr.short);
+              return (
+                <button
+                  key={pr.id}
+                  type="button"
+                  className={chipCls(on)}
+                  onClick={() => setAssignees((a) => (on ? a.filter((x) => x !== pr.short) : [...a, pr.short]))}
+                >{pr.name}</button>
+              );
+            })}
+          </div>
+
+          <div className="flex flex-row items-center gap-[8px] pb-[6px]">
+            <button type="button" className={chipCls(milestone)} onClick={() => setMilestone((m) => !m)}>Milestone</button>
+          </div>
+        </div>
+      )}
+
       <button
         type="button"
         onClick={() => save(false)}
-        disabled={!title.trim() && addedCount === 0}
-        className={`w-full py-[12px] rounded-[8px] text-[14px] font-['Univers_BQ:55_Regular',sans-serif] transition-colors ${(title.trim() || addedCount > 0) ? 'bg-[var(--app-accent)] text-[#151412]' : 'bg-[#2b2a27] text-[#5e5e5e]'}`}
+        disabled={!primaryEnabled}
+        className={`w-full py-[12px] rounded-[8px] text-[14px] font-['Univers_BQ:55_Regular',sans-serif] transition-colors ${primaryEnabled ? 'bg-[var(--app-accent)] text-[#151412]' : 'bg-[#2b2a27] text-[#5e5e5e]'}`}
       >
-        {title.trim() ? 'Add Task' : addedCount > 0 ? 'Done' : 'Add Task'}
+        {primaryLabel}
       </button>
     </SheetShell>
   );
