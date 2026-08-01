@@ -136,6 +136,11 @@ export function useSharedTheme(): void {
     if (bg) {
       document.documentElement.style.setProperty('--app-bg', bg);
       try { localStorage.setItem('app-bg', bg); } catch { /* ignore */ }
+      // Keep the browser chrome tinted to match. On iOS this colours Safari's toolbars, so the
+      // address bar blends into the app instead of reading as a contrasting slab, and it sets
+      // the PWA splash/status-bar tint. Follows a custom background automatically.
+      const meta = document.querySelector('meta[name="theme-color"]');
+      if (meta) meta.setAttribute('content', bg);
     }
     if (accent) {
       document.documentElement.style.setProperty('--app-accent', accent);
