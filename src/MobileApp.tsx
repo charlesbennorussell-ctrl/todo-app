@@ -703,18 +703,24 @@ export default function MobileApp() {
             control sits centred in that band of space. Each segment is still a drop target, so
             dragging a card onto "Tomorrow" moves it there. */}
         <div className="shrink-0 flex items-center justify-center py-[18px]">
-          <div className="relative inline-flex items-center rounded-full bg-[#1f1f1f] p-[3px] w-[calc(100%-36px)] max-w-[340px]">
+          {/* Track is the same near-black as the bottom bar (#151412) so the switcher reads as
+              chrome rather than as content. */}
+          <div className="relative inline-flex items-center rounded-full bg-[#151412] p-[3px] w-[calc(100%-36px)] max-w-[340px]">
             {/* Sliding knob: one third of the inner width, translated by whole knob-widths.
-                On TODAY it fills faint purple to echo the today wash on the cards; on the other
-                two days it's the neutral CTRL Assets grey. */}
+                On TODAY it is EXACTLY the today-card fill. A card is 10% accent composited over
+                var(--app-bg); the knob sits on the near-black track instead, so the same alpha
+                alone would composite darker. Painting the accent wash over an opaque --app-bg
+                base reproduces the card's colour precisely, whatever the track underneath is. */}
             <div
               aria-hidden
               className="absolute top-[3px] bottom-[3px] left-[3px] rounded-full"
               style={{
                 width: 'calc((100% - 6px) / 3)',
                 transform: `translateX(${pane * 100}%)`,
-                backgroundColor: pane === 0 ? 'rgb(from var(--app-accent) r g b / 0.18)' : '#282828',
-                transition: `transform 320ms cubic-bezier(0.16, 1, 0.3, 1), background-color 320ms cubic-bezier(0.16, 1, 0.3, 1)`,
+                background: pane === 0
+                  ? 'linear-gradient(rgb(from var(--app-accent) r g b / 0.1), rgb(from var(--app-accent) r g b / 0.1)), var(--app-bg)'
+                  : '#282828',
+                transition: `transform 320ms cubic-bezier(0.16, 1, 0.3, 1)`,
               }}
             />
             {PANES.map((p, i) => <DayTab key={p.section} idx={i} label={p.label} active={pane === i} dragging={!!activeTask} onTap={() => setPane(i)} />)}
@@ -880,9 +886,9 @@ function DayTab({ idx, label, active, dragging, onTap }: { idx: number; label: s
         // Mid-drag the segments read as landing zones: the one under the finger goes full
         // accent, the others hint in accent so it's obvious you can drop on them.
         isOver && dragging ? 'text-[var(--app-accent)]'
-        // TODAY reads purple when it's the active segment (matching its faint-purple knob and
-        // the purple wash on today's cards); Tomorrow and Next stay neutral white.
-        : active ? (idx === 0 ? 'text-[var(--app-accent)]' : 'text-white')
+        // The active label is always WHITE — including Today. The purple lives in Today's knob
+        // fill, not the word, so the label stays legible against it.
+        : active ? 'text-white'
         : dragging ? 'text-[var(--app-accent)]/60'
         : 'text-[#656464]'
       }`}
