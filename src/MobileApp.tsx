@@ -719,7 +719,7 @@ export default function MobileApp() {
             the gap from the brand line and the gap down to the first band label match, and the
             control sits centred in that band of space. Each segment is still a drop target, so
             dragging a card onto "Tomorrow" moves it there. */}
-        <div className="shrink-0 flex items-center justify-center pt-[50px] pb-[18px]">
+        <div className="shrink-0 flex items-center justify-center pt-[45px] pb-[18px]">
           {/* Track is the same near-black as the bottom bar (#151412) so the switcher reads as
               chrome rather than as content. */}
           <div className="relative inline-flex items-center rounded-full bg-[#151412] p-[3px] w-[calc(100%-36px)] max-w-[340px]">
@@ -894,6 +894,20 @@ export default function MobileApp() {
 // answer: how many pixels sit between the bottom of the bar and the bottom of the window.
 function DiagPanel({ onClose }: { onClose: () => void }) {
   const [rows, setRows] = useState<[string, string][]>([]);
+  // What the SERVER currently has, read past every cache. This is the row that settles whether a
+  // hard reload failed or the deploy simply had not finished when you pressed it: if `server`
+  // is ahead of `version`, the reload is at fault; if they match, you already have the newest
+  // build and there was nothing to fetch.
+  const [server, setServer] = useState('checking…');
+  useEffect(() => {
+    let alive = true;
+    const url = `${import.meta.env.BASE_URL}version.json?t=${Date.now()}`;
+    fetch(url, { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((j) => { if (alive) setServer(`v${j.version}`); })
+      .catch(() => { if (alive) setServer('unreachable'); });
+    return () => { alive = false; };
+  }, []);
   useEffect(() => {
     const read = () => {
       // Resolve env() by letting the engine compute it on a throwaway element.
@@ -910,7 +924,7 @@ function DiagPanel({ onClose }: { onClose: () => void }) {
       const vv = window.visualViewport;
       const r = (n?: number) => (n === undefined ? '—' : String(Math.round(n)));
       setRows([
-        ['version', `v${__APP_VERSION__}`],
+        ['version (installed)', `v${__APP_VERSION__}`],
         ['standalone', String(window.matchMedia('(display-mode: standalone)').matches || !!(navigator as unknown as { standalone?: boolean }).standalone)],
         ['inset top / bottom', `${insetTop} / ${insetBottom}`],
         ['window.innerHeight', r(window.innerHeight)],
@@ -933,6 +947,10 @@ function DiagPanel({ onClose }: { onClose: () => void }) {
     <div className="fixed inset-0 z-[80] bg-black/85 flex items-center justify-center p-4" onClick={onClose}>
       <div className="w-full max-w-[330px] rounded-[10px] bg-[#232220] p-[14px]" onClick={(e) => e.stopPropagation()}>
         <p className="text-white text-[13px] pb-[8px]">Layout diagnostics</p>
+        <div className="flex flex-row justify-between gap-3 py-[2px]">
+          <span className="text-[#8a8a8a]" style={{ fontSize: 11 }}>version (server)</span>
+          <span className={server.startsWith('v') && server !== `v${__APP_VERSION__}` ? 'text-[var(--app-accent)] text-right' : 'text-white text-right'} style={{ fontSize: 11 }}>{server}</span>
+        </div>
         {rows.map(([k, v]) => (
           <div key={k} className="flex flex-row justify-between gap-3 py-[2px]">
             <span className="text-[#8a8a8a]" style={{ fontSize: 11 }}>{k}</span>
@@ -954,6 +972,11 @@ function DiagPanel({ onClose }: { onClose: () => void }) {
                 await Promise.all(keys.map((k) => caches.delete(k)));
               }
             } catch { /* nothing cached — carry on */ }
+            // Force the HTTP cache entry for the DOCUMENT itself to be revalidated before we
+            // navigate. A fresh ?v= alone only guarantees a new cache KEY; iOS could still hand
+            // back a stale entry for the base path on the next boot. cache:'reload' makes the
+            // engine go to the network and overwrite what it stored.
+            try { await fetch(window.location.pathname, { cache: 'reload' }); } catch { /* offline */ }
             const u = new URL(window.location.href);
             u.searchParams.set('v', String(Date.now()));
             window.location.replace(u.toString());
