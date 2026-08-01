@@ -122,9 +122,13 @@ function MobileCardBody({ task, projects, clients, isTodayCard }: {
 
   const meta = (
     <>
-      {client && project && <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap shrink-0 text-[#656464]">{client.short}<Arrowhead dim={task.completed} />{project.name}</p>}
+      {/* All three client/project forms use metaColor, so they go accent-purple on a TODAY card
+          the same way the date and assignee badges already do. The combined and project-only
+          forms used to hardcode #656464, which is why Today's client/project stayed grey while
+          everything else on the card turned purple. The arrowhead between them follows too. */}
+      {client && project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap shrink-0 ${metaColor}`}>{client.short}<Arrowhead dim={task.completed} color={isTodayCard && !task.completed ? 'var(--app-accent)' : undefined} />{project.name}</p>}
       {client && !project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap shrink-0 ${metaColor}`}>{client.short}</p>}
-      {!client && project && <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap shrink-0 text-[#656464]">{project.name}</p>}
+      {!client && project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap shrink-0 ${metaColor}`}>{project.name}</p>}
       {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={(isScheduled || isTodayCard) ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} />)}
       {task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap shrink-0 ${(isScheduled || isTodayCard) ? 'text-[var(--app-accent)]' : isLateDeadline(task.deadline) ? 'text-white' : 'text-[#656464]'}`}>{formatDeadline(task.deadline)}</p>}
     </>
@@ -689,7 +693,7 @@ export default function MobileApp() {
       <div className="fixed inset-0 flex flex-col bg-[var(--app-bg)] overflow-hidden" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
         {/* Header — brand + date */}
         <div className="shrink-0 px-[18px] pt-[14px]">
-          <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[13px] text-[#5e5e5e] whitespace-nowrap">Ctrl-Project — {headerDate}</p>
+          <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[13px] text-white whitespace-nowrap">Ctrl-Project — {headerDate}</p>
         </div>
         {/* Day switcher — the CTRL Assets toolbar paradigm: ONE rounded track with a lighter
             knob that slides to the active segment. No underline. Equal py above and below so
@@ -698,14 +702,17 @@ export default function MobileApp() {
             dragging a card onto "Tomorrow" moves it there. */}
         <div className="shrink-0 flex items-center justify-center py-[18px]">
           <div className="relative inline-flex items-center rounded-full bg-[#1f1f1f] p-[3px] w-[calc(100%-36px)] max-w-[340px]">
-            {/* Sliding knob: one third of the inner width, translated by whole knob-widths. */}
+            {/* Sliding knob: one third of the inner width, translated by whole knob-widths.
+                On TODAY it fills faint purple to echo the today wash on the cards; on the other
+                two days it's the neutral CTRL Assets grey. */}
             <div
               aria-hidden
-              className="absolute top-[3px] bottom-[3px] left-[3px] rounded-full bg-[#282828]"
+              className="absolute top-[3px] bottom-[3px] left-[3px] rounded-full"
               style={{
                 width: 'calc((100% - 6px) / 3)',
                 transform: `translateX(${pane * 100}%)`,
-                transition: `transform 320ms cubic-bezier(0.16, 1, 0.3, 1)`,
+                backgroundColor: pane === 0 ? 'rgb(from var(--app-accent) r g b / 0.18)' : '#282828',
+                transition: `transform 320ms cubic-bezier(0.16, 1, 0.3, 1), background-color 320ms cubic-bezier(0.16, 1, 0.3, 1)`,
               }}
             />
             {PANES.map((p, i) => <DayTab key={p.section} idx={i} label={p.label} active={pane === i} dragging={!!activeTask} onTap={() => setPane(i)} />)}
@@ -871,7 +878,9 @@ function DayTab({ idx, label, active, dragging, onTap }: { idx: number; label: s
         // Mid-drag the segments read as landing zones: the one under the finger goes full
         // accent, the others hint in accent so it's obvious you can drop on them.
         isOver && dragging ? 'text-[var(--app-accent)]'
-        : active ? 'text-white'
+        // TODAY reads purple when it's the active segment (matching its faint-purple knob and
+        // the purple wash on today's cards); Tomorrow and Next stay neutral white.
+        : active ? (idx === 0 ? 'text-[var(--app-accent)]' : 'text-white')
         : dragging ? 'text-[var(--app-accent)]/60'
         : 'text-[#656464]'
       }`}
