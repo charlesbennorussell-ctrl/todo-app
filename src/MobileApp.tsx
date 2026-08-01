@@ -385,8 +385,12 @@ function SheetShell({ onClose, children }: { onClose: () => void; children: Reac
   );
 }
 
-const CHIP_BASE = "px-[12px] py-[7px] rounded-full border text-[13px] font-['Univers_BQ:55_Regular',sans-serif] transition-colors";
-const chipCls = (active: boolean) => `${CHIP_BASE} ${active ? 'border-[var(--app-accent)] text-[var(--app-accent)]' : 'border-[#3a3a3a] text-[#a8a8a8]'}`;
+// Capsules speak the day-switcher's language: the GROUP is a near-black track, the SELECTED
+// capsule is the page-background colour sitting on it (the switcher's knob), selected text is
+// white, and everything unselected recedes to the same grey the switcher uses. No borders.
+const CHIP_TRACK = 'flex flex-row flex-wrap items-center gap-[4px] rounded-[18px] bg-[#151412] p-[4px]';
+const CHIP_BASE = "px-[14px] py-[7px] rounded-full text-[13px] font-['Univers_BQ:55_Regular',sans-serif] transition-colors";
+const chipCls = (active: boolean) => `${CHIP_BASE} ${active ? 'bg-[var(--app-bg)] text-white' : 'bg-transparent text-[#656464]'}`;
 
 // ── The app ───────────────────────────────────────────────────────────────────
 
@@ -1286,12 +1290,12 @@ function PanelSection({ label, open, onToggle, onCreate, createPlaceholder, chil
             spellCheck={false}
             autoComplete="off"
             name="ctrl-entry-new"
-            className="flex-1 bg-[#2b2a27] rounded-full px-[12px] py-[7px] text-[13px] text-white outline-none border border-[#3a3a3a] placeholder:text-[#474747]"
+            className="flex-1 bg-[var(--app-bg)] rounded-full px-[14px] py-[7px] text-[13px] text-white outline-none border-none placeholder:text-[#474747]"
           />
-          <button type="button" onClick={commit} className={CHIP_BASE + ' border-[var(--app-accent)] text-[var(--app-accent)]'}>Add</button>
+          <button type="button" onClick={commit} className={CHIP_BASE + ' bg-[var(--app-bg)] text-[var(--app-accent)]'}>Add</button>
         </div>
       )}
-      <div className="flex flex-row flex-wrap gap-[8px]">{children}</div>
+      <div className={CHIP_TRACK}>{children}</div>
     </div>
   );
 }
@@ -1495,10 +1499,10 @@ function ComposeSheet({ listSequence, projects, clients, people, currentUserShor
               type="date"
               value={deadline}
               onChange={(e) => setDeadline(e.target.value)}
-              className={`bg-[#2b2a27] rounded-full px-[12px] py-[7px] text-[13px] outline-none border border-[#3a3a3a] ${deadline ? 'text-white' : 'text-transparent'}`}
+              className={`bg-[var(--app-bg)] rounded-full px-[14px] py-[7px] text-[13px] outline-none border-none ${deadline ? 'text-white' : 'text-transparent'}`}
             />
             {!deadline && (
-              <span className="absolute inset-0 flex items-center pl-[12px] pointer-events-none text-[#474747] text-[13px]">Date</span>
+              <span className="absolute inset-0 flex items-center pl-[14px] pointer-events-none text-[#656464] text-[13px]">Date</span>
             )}
           </span>
           <button type="button" className={chipCls(false)} onClick={() => setDeadline(isos[0])}>Today</button>
