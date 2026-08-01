@@ -156,7 +156,12 @@ function MobileCardBody({ task, projects, clients, isTodayCard }: {
         <div className="flex flex-row items-center gap-[10px]">
           {checkbox}
           {title}
-          <span className="flex flex-row items-center gap-[6px] shrink-0 ml-auto">{meta}</span>
+          {/* Meta HUGS the title rather than being pushed to the right edge — the client and
+              project read as part of the task's name, not as a separate right-hand column.
+              (No ml-auto.) The title carries overflow-hidden, which zeroes a flex item's
+              automatic minimum size, so a long title truncates instead of shoving the meta
+              off the card. */}
+          <span className="flex flex-row items-center gap-[6px] shrink-0">{meta}</span>
         </div>
       )}
     </div>
