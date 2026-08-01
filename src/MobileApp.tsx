@@ -1187,7 +1187,11 @@ function TaskSheet({ task, projects, clients, isos, anchor, onRename, onMove, on
         onChange={(e) => setTitle(e.target.value)}
         onBlur={commit}
         onKeyDown={(e) => { if (e.key === 'Enter') { commit(); (e.target as HTMLInputElement).blur(); } }}
-        placeholder="New Task"
+        placeholder="New task"
+        autoComplete="off"
+        name="ctrl-entry-rename"
+        autoCorrect="off"
+        spellCheck={false}
         className="w-full bg-transparent outline-none border-none text-white font-['Univers_BQ:55_Regular',sans-serif] text-[14px] placeholder:text-[#474747] pb-[10px]"
       />
       {(client || project) && (
@@ -1280,6 +1284,8 @@ function PanelSection({ label, open, onToggle, onCreate, createPlaceholder, chil
             autoCapitalize="words"
             autoCorrect="off"
             spellCheck={false}
+            autoComplete="off"
+            name="ctrl-entry-new"
             className="flex-1 bg-[#2b2a27] rounded-full px-[12px] py-[7px] text-[13px] text-white outline-none border border-[#3a3a3a] placeholder:text-[#474747]"
           />
           <button type="button" onClick={commit} className={CHIP_BASE + ' border-[var(--app-accent)] text-[var(--app-accent)]'}>Add</button>
@@ -1426,11 +1432,17 @@ function ComposeSheet({ listSequence, projects, clients, people, currentUserShor
         value={title}
         onChange={(e) => setTitle(e.target.value)}
         onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); save(!isEdit); } }}
-        placeholder="Task name"
+        placeholder="New task"
         enterKeyHint={isEdit ? 'done' : 'next'}
         autoCapitalize="sentences"
         autoCorrect="off"
         spellCheck={false}
+        // iOS was raising the Contact AutoFill bar over the keyboard. WebKit infers a person
+        // field from the name/autocomplete attributes and from "name" appearing in the
+        // placeholder — this field had no autocomplete at all and read "Task name". An explicit
+        // off, a neutral field name, and a placeholder without that token close all three.
+        autoComplete="off"
+        name="ctrl-entry"
         className="w-full bg-transparent outline-none border-none text-white font-['Univers_BQ:55_Regular',sans-serif] text-[14px] placeholder:text-[#474747] pb-[18px]"
       />
 
