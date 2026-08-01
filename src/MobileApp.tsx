@@ -368,14 +368,21 @@ function SheetShell({ onClose, children }: { onClose: () => void; children: Reac
   return (
     <div className="fixed inset-0 z-50">
       <div className="absolute inset-0 bg-black/50" onClick={() => { if (Date.now() - openedAtRef.current > 500) onClose(); }} />
+      {/* The sheet is ANCHORED just above the keyboard and BOUNDED to the space that leaves —
+          it is not translated upwards. Translating a tall sheet by the keyboard's height pushed
+          its own top (the title field you are typing into) off the screen, which is exactly the
+          wrong end to lose. Sitting it on top of the keyboard with a max-height instead keeps
+          the title pinned and lets the middle scroll. Children lay out as a flex column so a
+          child marked flex-1 becomes that scrolling middle. */}
       <div
-        className="absolute left-0 right-0 bottom-0 rounded-t-[14px] px-[18px] pt-[16px]"
+        className="absolute left-0 right-0 flex flex-col rounded-t-[14px] px-[18px] pt-[16px]"
         style={{
           backgroundColor: SHEET_BG,
-          transform: kbInset > 0 ? `translateY(-${kbInset}px)` : undefined,
-          // The safe-area pad is only meaningful when the sheet is resting on the home
-          // indicator; once lifted by the keyboard it would just add dead space.
-          paddingBottom: kbInset > 0 ? 18 : 'calc(env(safe-area-inset-bottom) + 18px)',
+          bottom: kbInset,
+          maxHeight: `calc(100% - ${kbInset}px - 10px)`,
+          // The safe-area pad is only meaningful when the sheet rests on the home indicator;
+          // once it sits on the keyboard that space is already accounted for.
+          paddingBottom: kbInset > 0 ? 14 : 'calc(env(safe-area-inset-bottom) + 18px)',
           animation: 'msheet-up 240ms cubic-bezier(0.16, 1, 0.3, 1)',
         }}
       >
@@ -1204,9 +1211,9 @@ function TaskSheet({ task, projects, clients, isos, anchor, onRename, onMove, on
         spellCheck={false}
         // Same full-width capsule as the creator panel's title field, so both sheets read as
         // one system rather than one styled field and one bare line of text.
-        className="w-full bg-[#151412] rounded-[22px] px-[16px] py-[12px] outline-none border-none text-white font-['Univers_BQ:55_Regular',sans-serif] text-[14px] leading-[1.4] placeholder:text-[#656464]"
+        className="shrink-0 w-full bg-[#151412] rounded-[22px] px-[16px] py-[12px] outline-none border-none text-white font-['Univers_BQ:55_Regular',sans-serif] text-[14px] leading-[1.4] placeholder:text-[#656464]"
       />
-      <div className="h-[12px]" />
+      <div className="shrink-0 h-[12px]" />
       {(client || project) && (
         <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] text-[#656464] pb-[12px] px-[4px]">
           {client?.short}{client && project ? <Arrowhead /> : null}{project?.name}
@@ -1231,7 +1238,7 @@ function TaskSheet({ task, projects, clients, isos, anchor, onRename, onMove, on
           the trash stays exactly where it was and only its label and colour change. Previously
           the confirm state dropped to two buttons and justify-between threw the trash to the
           left, which read as the button moving out from under your thumb. */}
-      <div className="grid grid-cols-3 items-center border-t border-[#33312e] pt-[14px]">
+      <div className="shrink-0 grid grid-cols-3 items-center border-t border-[#33312e] pt-[14px]">
         <button
           type="button"
           onClick={() => { if (confirmDelete) { setConfirmDelete(false); return; } commit(); onEdit(); }}
@@ -1449,7 +1456,7 @@ function ComposeSheet({ listSequence, projects, clients, people, currentUserShor
 
   return (
     <SheetShell onClose={commitAndClose}>
-      <div className="flex flex-row items-center justify-between pb-[12px]">
+      <div className="shrink-0 flex flex-row items-center justify-between pb-[12px]">
         <p className="text-white text-[14px]">{isEdit ? 'Edit Task' : addedCount > 0 ? `Added ${addedCount}` : 'New Task'}</p>
         <button type="button" aria-label="Close" onClick={commitAndClose} className="text-[#656464] p-2 -m-2"><X size={16} /></button>
       </div>
@@ -1475,12 +1482,12 @@ function ComposeSheet({ listSequence, projects, clients, people, currentUserShor
         name="ctrl-entry"
         // A full-width capsule on the dark track colour, so the title reads as THE field of the
         // sheet rather than floating loose above the chip groups that surround it.
-        className="w-full resize-none overflow-hidden bg-[#151412] rounded-[22px] px-[16px] py-[12px] outline-none border-none text-white font-['Univers_BQ:55_Regular',sans-serif] text-[14px] leading-[1.4] placeholder:text-[#656464]"
+        className="shrink-0 w-full resize-none overflow-hidden bg-[#151412] rounded-[22px] px-[16px] py-[12px] outline-none border-none text-white font-['Univers_BQ:55_Regular',sans-serif] text-[14px] leading-[1.4] placeholder:text-[#656464]"
       />
-      <div className="h-[18px]" />
+      <div className="shrink-0 h-[18px]" />
 
       {/* Everything is present — no disclosure. The body scrolls when it outgrows the sheet. */}
-      <div className="max-h-[46vh] overflow-y-auto overscroll-contain">
+      <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
         <PanelSection label="When">
           {PANES.map((p) => (
             <button key={p.section} type="button" className={chipCls(p.section === section)} onClick={() => setSection(p.section)}>{p.label}</button>
@@ -1566,7 +1573,7 @@ function ComposeSheet({ listSequence, projects, clients, people, currentUserShor
         type="button"
         onClick={() => save(false)}
         disabled={!primaryEnabled}
-        className={`mt-[4px] w-full py-[12px] rounded-[8px] text-[14px] font-['Univers_BQ:55_Regular',sans-serif] transition-colors ${primaryEnabled ? 'bg-[var(--app-accent)] text-[#151412]' : 'bg-[#2b2a27] text-[#5e5e5e]'}`}
+        className={`shrink-0 mt-[10px] w-full py-[12px] rounded-[8px] text-[14px] font-['Univers_BQ:55_Regular',sans-serif] transition-colors ${primaryEnabled ? 'bg-[var(--app-accent)] text-[#151412]' : 'bg-[#2b2a27] text-[#5e5e5e]'}`}
       >
         {primaryLabel}
       </button>
