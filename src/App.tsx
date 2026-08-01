@@ -119,13 +119,60 @@ function TauriTitlebar() {
   );
 }
 
+// ── Shared theme ────────────────────────────────────────────────────────────────────────────
+// Theme colours used to live ONLY in localStorage, which is per-device: the desktop app, the
+// PIP window and the phone each kept their own, so the surfaces visibly drifted apart (the
+// phone painted the index.css defaults while the desktop showed the user's custom colours).
+// The room is now the source of truth. localStorage stays as a pre-connect CACHE so the very
+// first paint isn't the wrong colour — the module-load block near the top of this file applies
+// it before React mounts, then the room value lands and wins.
+
+/** Applies the room's theme to the CSS custom properties. Call once per surface (App, MobileApp). */
+export function useSharedTheme(): void {
+  const theme = useStorage((root) => (root as unknown as { theme?: { bg?: string; accent?: string } }).theme);
+  const bg = theme?.bg;
+  const accent = theme?.accent;
+  useEffect(() => {
+    if (bg) {
+      document.documentElement.style.setProperty('--app-bg', bg);
+      try { localStorage.setItem('app-bg', bg); } catch { /* ignore */ }
+    }
+    if (accent) {
+      document.documentElement.style.setProperty('--app-accent', accent);
+      try { localStorage.setItem('app-accent', accent); } catch { /* ignore */ }
+    }
+  }, [bg, accent]);
+}
+
+/** Writes one or both theme colours into the room. Merges, so setting `bg` keeps `accent`. */
+export function useSetSharedTheme() {
+  return useMutation(({ storage }, patch: { bg?: string; accent?: string }) => {
+    const current = (storage.get('theme' as never) as { bg?: string; accent?: string } | undefined) ?? {};
+    storage.set('theme' as never, { ...current, ...patch } as never);
+  }, []);
+}
+
 // One row of the Settings → Colors module: a native color well + hex readout that writes a CSS
 // custom property live (and persists it). Everything themeable reads var(--app-bg)/var(--app-accent),
 // so moving this well repaints the whole app instantly. Reset clears the override back to default.
-function ThemeColorPicker({ varName, storageKey, label, fallback }: { varName: string; storageKey: string; label: string; fallback: string }) {
+function ThemeColorPicker({ varName, storageKey, label, fallback, themeKey }: { varName: string; storageKey: string; label: string; fallback: string; themeKey: 'bg' | 'accent' }) {
+  const roomTheme = useStorage((root) => (root as unknown as { theme?: { bg?: string; accent?: string } }).theme);
+  const setRoomTheme = useSetSharedTheme();
+  // The ROOM is the source of truth; localStorage is only the pre-connect paint cache.
   const [color, setColor] = useState(() => (typeof localStorage !== 'undefined' && localStorage.getItem(storageKey)) || fallback);
-  const apply = (v: string) => { setColor(v); document.documentElement.style.setProperty(varName, v); try { localStorage.setItem(storageKey, v); } catch { /* ignore */ } };
-  const reset = () => { setColor(fallback); document.documentElement.style.setProperty(varName, fallback); try { localStorage.removeItem(storageKey); } catch { /* ignore */ } };
+  useEffect(() => { const v = roomTheme?.[themeKey]; if (v) setColor(v); }, [roomTheme, themeKey]);
+  const apply = (v: string) => {
+    setColor(v);
+    document.documentElement.style.setProperty(varName, v);
+    try { localStorage.setItem(storageKey, v); } catch { /* ignore */ }
+    setRoomTheme({ [themeKey]: v });   // → every other surface repaints
+  };
+  const reset = () => {
+    setColor(fallback);
+    document.documentElement.style.setProperty(varName, fallback);
+    try { localStorage.removeItem(storageKey); } catch { /* ignore */ }
+    setRoomTheme({ [themeKey]: fallback });
+  };
   return (
     <div className="flex flex-row items-center gap-3 text-[13px]">
       <input type="color" value={color} onChange={(e) => apply(e.target.value)} aria-label={label} className="w-[28px] h-[28px] rounded-md cursor-pointer bg-transparent border border-[#333] p-0" />
@@ -5121,8 +5168,8 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
             <div>
               {sectionTitle('Colors')}
               <div className="px-[35px] pt-[4px] flex flex-col gap-3">
-                <ThemeColorPicker varName="--app-bg" storageKey="app-bg" label="Background" fallback="#1c1b19" />
-                <ThemeColorPicker varName="--app-accent" storageKey="app-accent" label="Accent" fallback="#8465ff" />
+                <ThemeColorPicker varName="--app-bg" storageKey="app-bg" label="Background" fallback="#1c1b19" themeKey="bg" />
+                <ThemeColorPicker varName="--app-accent" storageKey="app-accent" label="Accent" fallback="#8465ff" themeKey="accent" />
               </div>
             </div>
             <div>
@@ -5871,6 +5918,8 @@ function TaskQuickEdit({
 }
 
 export default function App() {
+  // Paint with the ROOM's theme colours, so this surface matches the phone and PIP exactly.
+  useSharedTheme();
   const [tasks, setTasks] = useStorageList<'tasks', Task>('tasks');
   const [projects, setProjects] = useStorageList<'projects', Project>('projects');
   const [clients, setClients] = useStorageList<'clients', Client>('clients');

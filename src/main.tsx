@@ -159,6 +159,11 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
             // Images carry an optional `folderId` that points into this list — null /
             // missing = root of the bucket.
             focusImageFolders: {},
+            // Theme colours are shared across every surface (desktop / PIP / phone) so they
+            // cannot drift the way per-device localStorage did. Only seeds a NEW room; existing
+            // rooms have no `theme` key and fall back to the localStorage cache then defaults,
+            // and get one written the first time a colour is changed in Settings.
+            theme: { bg: '#1c1b19', accent: '#8465ff' },
           }}
         >
           <ClientSideSuspense fallback={<Loading />}>

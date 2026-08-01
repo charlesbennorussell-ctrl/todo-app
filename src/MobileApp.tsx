@@ -48,7 +48,7 @@ import type { Task, Project, Client, ListId, SectionId } from './data';
 import { LIST_TITLES, LISTS, PERSONAL_CLIENT_ID, formatDeadline, isLateDeadline, todayISO } from './data';
 import {
   computeCalendarDistribution, makeCpCompare, TaskCheckbox, AssigneeBadge, Arrowhead,
-  addDaysToDate, dateToISO,
+  addDaysToDate, dateToISO, useSharedTheme,
 } from './App';
 
 // ── Shared module state ───────────────────────────────────────────────────────
@@ -360,6 +360,8 @@ export default function MobileApp() {
     storage.set('tasks' as never, updater(current) as never);
   }, []);
 
+  // Same room theme the desktop paints with — this is what keeps the two surfaces identical.
+  useSharedTheme();
   const currentUserShort = readUserShort();
   if (DEBUG && typeof window !== 'undefined') (window as any).__mtasks = tasks;
   const listSequence = useMemo(readListSequence, []);

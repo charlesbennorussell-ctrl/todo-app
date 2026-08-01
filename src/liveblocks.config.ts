@@ -25,6 +25,12 @@ declare global {
       // in browser localStorage to keep this Record under the per-key size ceiling.
       focusImages: Record<string, FocusImage[]>;
       focusReferences: Record<string, FocusReference[]>;
+      // Theme colours (Settings → Colors). Stored in the ROOM, not localStorage, so the
+      // desktop app, the PIP window and the phone all paint with the same background and
+      // accent — localStorage is per-device and made the surfaces drift apart.
+      // Optional: rooms created before this key existed simply have no `theme`, and the app
+      // falls back to the localStorage cache and then to the index.css defaults.
+      theme?: { bg?: string; accent?: string };
     };
     Presence: {
       cursor: { x: number; y: number } | null;
