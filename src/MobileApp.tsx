@@ -712,14 +712,14 @@ export default function MobileApp() {
           onTouchCancel={() => { if (holdRef.current) { window.clearTimeout(holdRef.current); holdRef.current = null; } }}
           onDoubleClick={() => setDiag((d) => !d)}
         >
-          <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[13px] text-white whitespace-nowrap">Ctrl-Project — {headerDate}</p>
+          <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[13px] text-white whitespace-nowrap">{headerDate}</p>
         </div>
         {/* Day switcher — the CTRL Assets toolbar paradigm: ONE rounded track with a lighter
             knob that slides to the active segment. No underline. Equal py above and below so
             the gap from the brand line and the gap down to the first band label match, and the
             control sits centred in that band of space. Each segment is still a drop target, so
             dragging a card onto "Tomorrow" moves it there. */}
-        <div className="shrink-0 flex items-center justify-center py-[18px]">
+        <div className="shrink-0 flex items-center justify-center pt-[28px] pb-[18px]">
           {/* Track is the same near-black as the bottom bar (#151412) so the switcher reads as
               chrome rather than as content. */}
           <div className="relative inline-flex items-center rounded-full bg-[#151412] p-[3px] w-[calc(100%-36px)] max-w-[340px]">
@@ -978,7 +978,7 @@ function DayTab({ idx, label, active, dragging, onTap }: { idx: number; label: s
       ref={setNodeRef}
       type="button"
       onClick={onTap}
-      className={`relative z-10 flex-1 py-[8px] rounded-full text-center transition-colors font-['Univers_BQ:55_Regular',sans-serif] text-[14px] ${
+      className={`relative z-10 flex-1 py-[15.5px] rounded-full text-center transition-colors font-['Univers_BQ:55_Regular',sans-serif] text-[14px] ${
         // Mid-drag the segments read as landing zones: the one under the finger goes full
         // accent, the others hint in accent so it's obvious you can drop on them.
         isOver && dragging ? 'text-[var(--app-accent)]'
