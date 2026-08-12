@@ -1236,7 +1236,11 @@ function TaskSheet({ task, projects, clients, isos, anchor, onRename, onMove, on
         placeholder="New task"
         autoComplete="off"
         name="ctrl-entry-rename"
-        autoCorrect="off"
+        // iOS ties auto-capitalisation to the keyboard's smart features: autocorrect="off"
+        // switches them off as a group, so capitalisation died with it. Autocorrect back on;
+        // spellcheck stays off to avoid red squiggles under project jargon.
+        autoCapitalize="sentences"
+        autoCorrect="on"
         spellCheck={false}
         // Same full-width capsule as the creator panel's title field, so both sheets read as
         // one system rather than one styled field and one bare line of text.
@@ -1345,7 +1349,7 @@ function PanelSection({ label, open, onToggle, onCreate, createPlaceholder, chil
             onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); commit(); } }}
             placeholder={createPlaceholder || `New ${label.toLowerCase()}`}
             autoCapitalize="words"
-            autoCorrect="off"
+            autoCorrect="on"
             spellCheck={false}
             autoComplete="off"
             name="ctrl-entry-new"
@@ -1505,7 +1509,7 @@ function ComposeSheet({ listSequence, projects, clients, people, currentUserShor
         placeholder="New task"
         enterKeyHint={isEdit ? 'done' : 'next'}
         autoCapitalize="sentences"
-        autoCorrect="off"
+        autoCorrect="on"
         spellCheck={false}
         autoComplete="off"
         name="ctrl-entry"

@@ -1612,7 +1612,12 @@ function SortableTaskItem({
             opacity-only (reserved width) so appearing never nudges the row's other content. */}
         {density < 5 && task.assignees.length > 0 && (
           <span className={`flex flex-row items-center gap-2 transition-opacity ${(isDragOverlay || isDragging || hovered) ? 'opacity-100 duration-200' : 'opacity-0 duration-500 delay-1000'}`}>
-            {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} faint={isExpiredMilestone} />)}
+            {/* Squeeze order, highest priority LAST to go: title > deadline > project > client >
+                people. People were previously ungated and survived a squeeze that had already
+                dropped the client and project, which inverted the intent — who it's assigned to
+                is the least useful thing when a row is starved for width. density < 3 puts them
+                out first, one step ahead of the client (< 4) and two ahead of project (< 6). */}
+            {density < 3 && task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} faint={isExpiredMilestone} />)}
           </span>
         )}
         {/* "Has Focus content" indicator. Shows when the task (or its parent project) has any
@@ -4160,6 +4165,16 @@ function roundRobinByProject(tasks: Task[]): Task[] {
 // schedules a re-render at 15.1s (and the 60s tick backstops it), at which point the task moves.
 // Legacy tasks with `started` but no `startedAt` count as long-settled.
 const STARTED_GRACE_MS = 15000;
+
+// A task you just ticked off LINGERS on the board this long — sitting there visibly completed —
+// before it drops out. Completing used to remove the card on the same frame as the click, which
+// gave no confirmation of what you just did and no chance to undo a mis-tap (clicking again
+// un-completes it). Tasks completed longer ago than this are gone, as before.
+const COMPLETED_LINGER_MS = 30000;
+function onBoard(t: Task): boolean {
+  if (!t.completed) return true;
+  return !!t.completedAt && Date.now() - t.completedAt < COMPLETED_LINGER_MS;
+}
 function startedSettled(t: Task): boolean {
   if (!t.started) return false;
   if (!t.startedAt) return true;
@@ -4200,7 +4215,7 @@ export function computeCalendarDistribution(tasks: Task[], todayAnchor: Date, ho
       (t.section === 'next' || t.section === 'inbox') &&
       !t.deadline &&
       t.type !== 'scheduled' &&
-      !t.completed
+      onBoard(t)
     ));
     queueIdxs[listId] = 0;
   }
@@ -4232,7 +4247,7 @@ export function computeCalendarDistribution(tasks: Task[], todayAnchor: Date, ho
         return anc === iso || (iso === todayIso && !!anc && anc < todayIso);
       };
       m.push(...tasks.filter((t) =>
-        t.list === listId && datedHere(t) && t.type !== 'scheduled' && !t.completed
+        t.list === listId && datedHere(t) && t.type !== 'scheduled' && onBoard(t)
       ).sort((a, b) => { const aa = anchorOf(a), bb = anchorOf(b); return aa !== bb ? (aa! < bb! ? -1 : 1) : a.order - b.order; }));
       if (iso === todayIso) {
         // TODAY sinks started tasks to the BOTTOM of the category. You've picked it up, so it
@@ -4240,7 +4255,7 @@ export function computeCalendarDistribution(tasks: Task[], todayAnchor: Date, ho
         // "what's left". Dated tasks were pushed above, so this only reorders the undated group.
         // The sink waits out STARTED_GRACE_MS so the row doesn't jump the instant you click it.
         m.push(...tasks.filter((t) =>
-          t.list === listId && t.section === 'today' && !t.deadline && t.type !== 'scheduled' && !t.completed
+          t.list === listId && t.section === 'today' && !t.deadline && t.type !== 'scheduled' && onBoard(t)
         ).sort((a, b) => (startedSettled(a) ? 1 : 0) - (startedSettled(b) ? 1 : 0) || a.order - b.order));
       }
       if (iso === tomorrowIso) {
@@ -4248,7 +4263,7 @@ export function computeCalendarDistribution(tasks: Task[], todayAnchor: Date, ho
         // as the thing already in flight — but still UNDER the dated tasks pushed above, which
         // keep priority. Same 15s hold before it moves.
         m.push(...tasks.filter((t) =>
-          t.list === listId && t.section === 'tomorrow' && !t.deadline && t.type !== 'scheduled' && !t.completed
+          t.list === listId && t.section === 'tomorrow' && !t.deadline && t.type !== 'scheduled' && onBoard(t)
         ).sort((a, b) => (startedSettled(b) ? 1 : 0) - (startedSettled(a) ? 1 : 0) || a.order - b.order));
       }
       mandatoryByList[listId] = m;
@@ -5491,7 +5506,8 @@ function ProjectTaskRow({ task, listId, onToggle, onRename, onDelete, onEdit, on
             width keeps the row from shifting). Matches SortableTaskItem. */}
         {density < 5 && task.assignees.length > 0 && (
           <span className="flex flex-row items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
-            {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} />)}
+            {/* Same squeeze order as the list row: people go first. */}
+            {density < 3 && task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} />)}
           </span>
         )}
         {task.deadline && (
@@ -6451,6 +6467,8 @@ export default function App() {
     window.setTimeout(() => {
       setSortTick((n) => n + 1);
     }, 15100);
+    // ...and again when the completed-linger expires, so a ticked task leaves on schedule.
+    window.setTimeout(() => { setSortTick((n) => n + 1); }, COMPLETED_LINGER_MS + 400);
   }, []);
 
   const deleteTask = useCallback((id: string) => {
@@ -10011,12 +10029,13 @@ export default function App() {
           // centres 12px lower than Work's 20px band label, so the gap is pulled in 12px.) The
           // SAME 62px is then used between EVERY section, so the whole column shares one rhythm.
           const stackGap = 62;
-          // Stack the side column into ONE flow only while it FITS the available height; the moment
-          // it would overflow — shorter window OR more milestones/clients — snap to the two-column
-          // split. Fixed rows: Milestones + Search + Clients headers (3×37) + four stackGap gaps;
-          // plus every 37px list row. (winH - 180 ≈ the grid height below the header/nav chrome.)
-          const estStackH = 111 + 4 * stackGap + 37 * (focusMilestones.length + proj2SortedClients.length);
-          const stackSide = !PIP_MODE && estStackH <= (winH - 180);
+          // The side column is ALWAYS one stacked flow: Search, then Milestones, then Clients +
+          // Projects, scrolling as a unit when it outgrows the window. It used to snap to a
+          // two-column split once it would overflow, but that reflow was the problem — the layout
+          // changed shape underneath you as milestones came and went or the window got shorter.
+          // One column, always; length is handled by scrolling, not by re-arranging.
+          // (The split branch below is now unreachable and can be deleted.)
+          const stackSide = !PIP_MODE;
           // Shared side pieces — the stacked flow and the split columns compose from the same nodes.
           const focusClearFilter = (focusClientId || focusProjectId || focusMilestoneId) ? () => { setFocusClientId(null); setFocusProjectId(null); setFocusMilestoneId(null); } : undefined;
           const focusSearchRow = (
@@ -10123,16 +10142,20 @@ export default function App() {
                     directly above its own cards; then the SAME fixed 74px gap separates every section
                     (Search → Milestones header → milestones → Clients → client list). Hard gaps. */}
                 {!PIP_MODE && stackSide && (
+                  // Search sits at the very top, on the same 37px line as the day columns' dates.
+                  // Then the SPACING.dcr (74px) date→band gap the day columns use, so the
+                  // Milestones header lands exactly on the Work band's line. Each header sits
+                  // DIRECTLY above its own rows; the only other gap is the one separating the
+                  // Milestones block from the Clients + Projects block.
                   <div className="min-w-0 min-h-0 overflow-y-auto flex flex-col">
                     {focusSearchRow}
-                    <div className="shrink-0" style={{ height: stackGap }} aria-hidden />
+                    <div className="shrink-0" style={{ height: SPACING.dcr }} aria-hidden />
                     {focusMilestonesHeader}
-                    <div className="shrink-0" style={{ height: stackGap }} aria-hidden />
                     {renderReadonlyBucket(focusMilestones, undefined, true, milestoneClickTo, focusMilestoneId)}
                     <div className="shrink-0" style={{ height: stackGap }} aria-hidden />
                     {focusClientsHeader}
-                    <div className="shrink-0" style={{ height: stackGap }} aria-hidden />
                     {focusClientsList}
+                    <div className="shrink-0" style={{ height: stackGap }} aria-hidden />
                   </div>
                 )}
                 {/* SPLIT side columns (content would overflow): the previous two-column layout —
