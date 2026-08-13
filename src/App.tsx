@@ -4461,8 +4461,23 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
               <TaskCheckbox completed={task.completed} started={task.started} onToggle={onToggle} accent={isTodayCard ? (categoryDimmed ? 'var(--app-bg)' : 'var(--app-accent)') : undefined} />
             </div>
           )}
-          <div className="flex flex-row items-center gap-[4px] min-w-0">
-            {beforeTitleSlots.map((s, i) => renderMetaSlot(s, `bt-${i}`))}
+          {/* TITLE HAS PRIORITY over everything sharing its row. Two separate competitions:
+              (1) the before-title slots (project/client prefix) in the group just below, and
+              (2) the meta row, when singleLine puts it on this same line.
+              Both are given a huge flex-shrink against the title's 1, so they surrender width
+              first and the title only ellipsizes once they have nothing left to give.
+              The subtle part is min-content: a whitespace-nowrap <p> whose parent has no
+              overflow-hidden has a min-width floor equal to its full text, so flex-shrink can
+              never actually move it — it looked like it had priority no matter what factors we
+              set. The prefix group therefore needs min-w-0 AND overflow-hidden to have a floor
+              of 0. Without that pair, the title (which DOES have overflow-hidden, floor 0)
+              absorbed 100% of every shortfall and got crushed to "Pro…", "Ro…", even a bare "P". */}
+          <div className="flex flex-row items-center gap-[4px] min-w-0" style={{ flexShrink: 1 }}>
+            {beforeTitleSlots.length > 0 && (
+              <div className="flex flex-row items-center gap-[4px] min-w-0 overflow-hidden" style={{ flexShrink: 1000 }}>
+                {beforeTitleSlots.map((s, i) => renderMetaSlot(s, `bt-${i}`))}
+              </div>
+            )}
             {/* Title is ALWAYS an inline EditableText now — click to edit, drag-in-text to select
                 (EditableText swallows the pointer while editing so it doesn't start a card drag).
                 autoFocus only for a freshly created task. No onDiscardIfEmpty: the 3-min blank-sweep
@@ -4500,7 +4515,15 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
             the checkbox. 22px = checkbox width (12) + title-row gap (10). When there's no checkbox
             (isScheduled milestones in this branch), the indent collapses to 0. In stacked mode the
             row reserves a min-height so even a meta-less task still reads as two lines (no mix). */}
-          <div className={`flex flex-row items-center gap-[6px] shrink-0 ${singleLine ? '' : 'min-h-[15px]'}`}>
+          {/* On ONE line the meta shares the row with the title, so it must yield first (see the
+              title wrapper above): min-w-0 + overflow-hidden lets it actually give up width, and
+              the huge shrink factor means it does so before the title loses a character. In
+              STACKED mode the meta sits on its own second line and competes with nothing, so it
+              keeps the original shrink-0 and its reserved min-height. */}
+          <div
+            className={`flex flex-row items-center gap-[6px] ${singleLine ? 'min-w-0 overflow-hidden' : 'shrink-0 min-h-[15px]'}`}
+            style={singleLine ? { flexShrink: 1000 } : undefined}
+          >
             {/* When completed, all line-2 meta drops to the same faint #383838 — visually quieted to match the title.
                 Only render the client/project paragraph when there's actual non-empty text to show; otherwise an
                 empty <p> sits at the start of the row and the gap-[6px] pushes the next item (e.g. an assignee
