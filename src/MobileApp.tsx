@@ -817,7 +817,7 @@ export default function MobileApp() {
   // next render, and also keeps the sheet in sync if the task changes underneath it.
   const [sheetTaskId, setSheetTaskId] = useState<string | null>(null);
   // Which band label has its "+" disclosed, keyed "<section>:<listId>". One at a time.
-  const [openBand, setOpenBand] = useState<string | null>(null);
+  // (band + buttons are always visible now — the tap-to-reveal disclosure state is gone)
   // Task currently open in the FULL panel for editing (from the card sheet's "Edit").
   const [editingId, setEditingId] = useState<string | null>(null);
   const editingTask = editingId ? tasks.find((t) => t.id === editingId) ?? null : null;
@@ -916,26 +916,18 @@ export default function MobileApp() {
               <PaneDroppable key={p.section} id={`mpane:${i}`} width={w}>
                 {bandsByPane[i].map(({ listId, cellId, tasks: bandTasks }) => (
                   <div key={`${p.section}-${listId}`} className={bandTasks.length > 0 ? 'pb-[20px]' : 'pb-[10px]'}>
-                    {/* Tap a category label to reveal its "+", then tap that to add a task in this
-                        category and day. Hover-reveal is meaningless on touch, so the label itself
-                        is the disclosure; tapping it again (or adding) puts the + away. */}
-                    <div className="h-[24px] px-[20px] pb-[4px] flex items-center gap-[10px] sticky top-0 z-10 bg-[var(--app-bg)]">
+                    {/* Label vertically centered; the + is ALWAYS visible (tap-to-reveal made it
+                        undiscoverable) and sits in a 44px touch box with the same right-edge
+                        geometry as the cards' + (card mx-10 + right-0 w-44 → icon center 32px
+                        from the pane edge), so the column of pluses lines up. */}
+                    <div className="h-[28px] pl-[20px] flex items-center sticky top-0 z-10 bg-[var(--app-bg)]">
+                      <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap text-[#5e5e5e]">{LIST_TITLES[listId]}</p>
                       <button
                         type="button"
-                        onClick={() => setOpenBand((b) => (b === `${p.section}:${listId}` ? null : `${p.section}:${listId}`))}
-                        className={`font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap transition-colors ${openBand === `${p.section}:${listId}` ? 'text-[#a8a8a8]' : 'text-[#5e5e5e]'}`}
-                      >{LIST_TITLES[listId]}</button>
-                      {openBand === `${p.section}:${listId}` && (
-                        <button
-                          type="button"
-                          aria-label={`Add ${LIST_TITLES[listId]} task`}
-                          onClick={() => {
-                            setSheetTaskId(createTask({ title: '', list: listId, section: p.section }));
-                            setOpenBand(null);
-                          }}
-                          className="text-[#5e5e5e] p-1 -m-1"
-                        ><Plus size={15} /></button>
-                      )}
+                        aria-label={`Add ${LIST_TITLES[listId]} task`}
+                        onClick={() => setSheetTaskId(createTask({ title: '', list: listId, section: p.section }))}
+                        className="ml-auto w-[44px] mr-[10px] self-stretch flex items-center justify-center text-[#5e5e5e]"
+                      ><Plus size={15} /></button>
                     </div>
                     <BandDroppable id={cellId} isEmpty={bandTasks.length === 0}>
                       <SortableContext items={bandTasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
@@ -953,6 +945,19 @@ export default function MobileApp() {
                           />
                         ))}
                       </SortableContext>
+                      {/* Empty band: a quiet ADD+ placeholder card instead of confusing blank
+                          space. Hidden while a drag is active so the empty-band drop slot keeps
+                          its clean target look. */}
+                      {bandTasks.length === 0 && !activeTask && (
+                        <button
+                          type="button"
+                          onClick={() => setSheetTaskId(createTask({ title: '', list: listId, section: p.section }))}
+                          className="mx-[10px] mb-[5px] min-h-[44px] w-[calc(100%-20px)] rounded-[3.333px] bg-white/[0.03] flex flex-row items-center justify-center gap-[6px]"
+                        >
+                          <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[13px] tracking-[0.08em] text-[#4a4a4a]">ADD</span>
+                          <Plus size={13} className="text-[#4a4a4a]" />
+                        </button>
+                      )}
                     </BandDroppable>
                   </div>
                 ))}

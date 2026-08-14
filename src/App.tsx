@@ -2073,12 +2073,12 @@ function SectionDroppable({ id, children }: { id: string; children: React.ReactN
   );
 }
 
-function BottomBar({ mode, onSetMode, onAdd }: { mode: AppMode; onSetMode: (m: AppMode) => void; onAdd: () => void }) {
+function BottomBar({ mode, onSetMode, onAdd, userShort }: { mode: AppMode; onSetMode: (m: AppMode) => void; onAdd: () => void; userShort: string }) {
   const iconClass = (active: boolean) => `p-2 rounded-full transition-colors ${active ? 'text-white' : 'text-[#656464] hover:text-white'}`;
-  // Settings acts as a TOGGLE: tapping it while already in Settings returns you to the view you
-  // came from (tracked here, updated on every render that isn't Settings).
+  // Settings and Team act as TOGGLES: tapping while already there returns you to the view you
+  // came from (tracked here, updated on every render that isn't an overlay mode).
   const prevModeRef = useRef<AppMode>('focus');
-  if (mode !== 'settings') prevModeRef.current = mode;
+  if (mode !== 'settings' && mode !== 'team') prevModeRef.current = mode;
   return (
     // Vertical nav rail hugging the far-left edge. Top cluster: the four view icons + the
     // add-task button. Settings is pinned to the bottom (mt-auto). Tooltips fly out to the
@@ -2104,8 +2104,19 @@ function BottomBar({ mode, onSetMode, onAdd }: { mode: AppMode; onSetMode: (m: A
       </div>
       {/* Bottom cluster: the user avatar sits just above Settings, both pinned to the bottom. */}
       <div className="mt-auto flex flex-col items-center gap-[22px]">
-        {/* Account chip — the user's initial inside a stroked ring, like most apps' avatar. */}
-        <div className="size-[30px] rounded-full border-[1.75px] border-[#4a4a4a] flex items-center justify-center select-none" aria-label="Account"><span className="font-['Univers_BQ:55_Regular',sans-serif] text-[13px] leading-none text-[#a8a8a8] translate-y-[0.5px]">B</span></div>
+        {/* Account chip — the signed-in member's initial. Clicking opens the Team page
+            (profile, members, invites) — the avatar IS the door to identity, like most apps. */}
+        <div className="group relative flex items-center">
+          <button
+            type="button"
+            aria-label="Team"
+            onClick={() => onSetMode(mode === 'team' ? prevModeRef.current : 'team')}
+            className={`size-[30px] rounded-full border-[1.75px] flex items-center justify-center select-none transition-colors ${mode === 'team' ? 'border-[var(--app-accent)]' : 'border-[#4a4a4a] hover:border-[#7a7a7a]'}`}
+          >
+            <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] leading-none translate-y-[0.5px] ${mode === 'team' ? 'text-white' : 'text-[#a8a8a8]'}`}>{userShort || '?'}</span>
+          </button>
+          <span className="pointer-events-none absolute left-full top-1/2 -translate-y-1/2 ml-2 px-2 py-1 rounded bg-[#333333] text-white text-[11px] whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-50">Team</span>
+        </div>
         <button title="Settings" aria-label="Settings" onClick={() => onSetMode(mode === 'settings' ? prevModeRef.current : 'settings')} className={iconClass(mode === 'settings')}><SettingsIcon size={22} /></button>
       </div>
     </div>
@@ -4794,7 +4805,7 @@ function WeekCalendarMode({
                 const categoryDimmed = !!activeTask && activeTask.list !== listId;
                 return (
                   <CalendarDayDroppable key={listId} id={`cal:${iso}:${listId}`} isEmpty={bucket.length === 0 && dayMilestones.length === 0} slotHeight={activeSlotHeight} className="pb-[37px] last:pb-0">
-                    <div className="group/band h-[20px] px-[16px] pb-[6px] flex items-center gap-2 sticky top-0 z-10 bg-[var(--app-bg)]">
+                    <div className="group/band h-[26px] px-[16px] flex items-center gap-2 sticky top-0 z-10 bg-[var(--app-bg)]">
                       <p onClick={scrollBandToTop} className={`${bodyFont} text-[#5e5e5e] cursor-pointer`}>{label}</p>
                       <button
                         type="button"
@@ -4925,7 +4936,7 @@ function WeekCalendarMode({
                   const cellId = `cal:${nwToken}:${listId}`;
                   return (
                     <CalendarDayDroppable key={listId} id={cellId} isEmpty={bucket.length === 0 && bandMilestones.length === 0} slotHeight={activeSlotHeight} className="pb-[37px] last:pb-0">
-                      <div className="group/band h-[20px] px-[16px] pb-[6px] flex items-center gap-2 sticky top-0 z-10 bg-[var(--app-bg)]">
+                      <div className="group/band h-[26px] px-[16px] flex items-center gap-2 sticky top-0 z-10 bg-[var(--app-bg)]">
                         <p onClick={scrollBandToTop} className={`${bodyFont} text-[#5e5e5e] cursor-pointer`}>{label}</p>
                         <button
                           type="button"
@@ -5171,16 +5182,34 @@ function AccountSection({ people, currentUserShort, onSetCurrentUser, sectionTit
 // the auth gate is on (useMembership() non-null). Distinct from "People":
 // People are assignee entries in the room; Members are sign-in accounts bound
 // to a Person via person_short.
-function MembersSection({ projects }: { projects: Project[] }) {
+// TeamMode — the full-page identity surface, opened by clicking your avatar
+// in the nav rail (and togglable back like Settings). Three columns in the
+// Settings idiom, each scrolling independently:
+//   You      — profile, password, sign out (moved OUT of the Debug zone)
+//   Members  — roster with roles + per-project access, manage always visible
+//   Invites  — standalone invite creation (a link you send yourself; nobody
+//              appears anywhere until they actually redeem) + pending links
+function TeamMode({ projects, people, currentUserShort, onSetCurrentUser }: {
+  projects: Project[];
+  people: Person[];
+  currentUserShort: string;
+  onSetCurrentUser: (s: string) => void;
+}) {
   const membership = useMembership();
   const isAdmin = membership?.role === 'admin';
   const bodyFont = "font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap";
+  const sectionTitle = (title: string, add?: React.ReactNode) => (
+    <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]">
+      <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">{title}</p>
+      {add}
+    </div>
+  );
   const [members, setMembers] = useState<Membership[]>([]);
   const [invites, setInvites] = useState<{ id: string; person_short: string | null; expires_at: string; created_at: string }[]>([]);
-  const [msg, setMsg] = useState('');
+  const [msg, setMsg] = useState('');       // member-ops feedback (column 2)
+  const [invMsg, setInvMsg] = useState(''); // invite-ops feedback (column 3)
 
   // Invite form state
-  const [showInvite, setShowInvite] = useState(false);
   const [invName, setInvName] = useState('');
   const [invShort, setInvShort] = useState('');
   const [shortTouched, setShortTouched] = useState(false);
@@ -5226,8 +5255,6 @@ function MembersSection({ projects }: { projects: Project[] }) {
     if (!shortTouched) setInvShort(invName.trim() ? invName.trim()[0].toUpperCase() : '');
   }, [invName, shortTouched]);
 
-  if (!membership) return null;
-
   const shareableProjects = projects.filter((p) => p.clientId !== PERSONAL_CLIENT_ID);
   const accessSummary = (m: Membership): string => {
     if (m.role === 'admin' || !m.project_access || m.project_access.mode === 'all') return 'All projects';
@@ -5242,7 +5269,7 @@ function MembersSection({ projects }: { projects: Project[] }) {
 
   const submitInvite = async () => {
     setInvBusy(true);
-    setMsg('');
+    setInvMsg('');
     try {
       const res = await createInvite({
         invitedName: invName.trim(),
@@ -5257,7 +5284,7 @@ function MembersSection({ projects }: { projects: Project[] }) {
       setInvName(''); setInvShort(''); setShortTouched(false); setInvRole('member'); setInvAccessMode('all'); setInvProjects(new Set());
       void refresh();
     } catch (e) {
-      setMsg(e instanceof Error ? e.message : String(e));
+      setInvMsg(e instanceof Error ? e.message : String(e));
     } finally {
       setInvBusy(false);
     }
@@ -5274,17 +5301,24 @@ function MembersSection({ projects }: { projects: Project[] }) {
   const adminCount = members.filter((m) => m.role === 'admin').length;
 
   return (
-    <div>
-      <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]">
-        <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Members</p>
-        {isAdmin && (
-          <button type="button" onClick={() => { setShowInvite((s) => !s); setCreatedLink(null); }}
-            className="opacity-0 group-hover:opacity-100 text-[var(--app-accent)] hover:text-white transition-all" aria-label="Invite member">
-            <Plus size={14} />
-          </button>
-        )}
-      </div>
-      <div className="pt-[4px] flex flex-col">
+    <div className="h-full flex flex-col" style={{ paddingTop: SPACING.topMargin, paddingBottom: 12 }}>
+      <div className="shrink-0"><TopHeader viewName="Team" /></div>
+      <div className="flex-1 min-h-0 grid grid-cols-3 gap-x-5">
+        {/* COLUMN 1 — You. */}
+        <div className="min-w-0 h-full overflow-y-auto pt-[2px] pb-[106px]">
+          <AccountSection people={people} currentUserShort={currentUserShort} onSetCurrentUser={onSetCurrentUser} sectionTitle={sectionTitle} />
+          {!membership && (
+            <p className="px-[35px] pt-[10px] text-[#666] text-[13px] whitespace-normal">
+              Sign-in isn't enabled in this build — membership and invites appear once the auth gate is on.
+            </p>
+          )}
+        </div>
+        {/* COLUMN 2 — Members roster. */}
+        <div className="min-w-0 h-full overflow-y-auto pt-[2px] pb-[106px]">
+          {membership && (
+            <div>
+              {sectionTitle('Members')}
+              <div className="pt-[4px] flex flex-col">
         {members.map((m) => {
           const isSelf = m.user_id === membership.user_id;
           const editing = editingMember === m.user_id;
@@ -5299,13 +5333,15 @@ function MembersSection({ projects }: { projects: Project[] }) {
                 </span>
                 {isSelf && <span className={`${bodyFont} text-[11px] text-[#5e5e5e]`}>you</span>}
                 <span className="ml-auto" />
+                <span className={`${bodyFont} text-[12px] text-[#5e5e5e]`}>{accessSummary(m)}</span>
+                {/* Always visible — hover-hidden controls made the whole panel
+                    undiscoverable (the user literally couldn't find it). */}
                 {isAdmin && !isSelf && (
-                  <button type="button" className={`${quiet} opacity-0 group-hover:opacity-100 text-[12px]`}
+                  <button type="button" className={`text-[12px] transition-colors ${editing ? 'text-white' : 'text-[var(--app-accent)] hover:text-white'}`}
                     onClick={() => { setEditingMember(editing ? null : m.user_id); setResetPw(''); setConfirmRemove(null); }}>
                     {editing ? 'Close' : 'Manage'}
                   </button>
                 )}
-                {!isAdmin && !isSelf && <span className={`${bodyFont} text-[12px] text-[#5e5e5e]`}>{accessSummary(m)}</span>}
               </div>
               {editing && isAdmin && (
                 <div className="px-[31px] py-[8px] flex flex-col gap-[10px] bg-white/[0.02] rounded-[6px] mx-[20px] mb-[6px]">
@@ -5371,35 +5407,25 @@ function MembersSection({ projects }: { projects: Project[] }) {
             </div>
           );
         })}
-        {members.length === 0 && !rosterError && <p className="px-[35px] text-[#666] text-[13px]">Loading members…</p>}
-        {rosterError && (
-          <p className="px-[35px] text-[#666] text-[13px] whitespace-normal">
-            Couldn't load members ({rosterError}). <button type="button" className="text-[var(--app-accent)] hover:text-white transition-colors" onClick={() => void refresh()}>Retry</button>
-          </p>
-        )}
-
-        {/* Pending invites (admin) */}
-        {isAdmin && invites.length > 0 && (
-          <div className="pt-[6px]">
-            {invites.map((i) => (
-              <div key={i.id} className="group h-[30px] w-full box-border flex flex-row gap-2 items-center px-[31px]">
-                <span className={`${bodyFont} text-[#656464] text-[13px]`}>
-                  Invite{i.person_short ? ` (${i.person_short})` : ''} · expires {new Date(i.expires_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
-                </span>
-                <button type="button" className={`${quiet} ml-auto opacity-0 group-hover:opacity-100 text-[12px]`}
-                  onClick={async () => {
-                    if (!supabaseClient) return;
-                    await supabaseClient.from('invites').update({ revoked_at: new Date().toISOString() }).eq('id', i.id);
-                    void refresh();
-                  }}>Revoke</button>
+                {members.length === 0 && !rosterError && <p className="px-[35px] text-[#666] text-[13px]">Loading members…</p>}
+                {rosterError && (
+                  <p className="px-[35px] text-[#666] text-[13px] whitespace-normal">
+                    Couldn't load members ({rosterError}). <button type="button" className="text-[var(--app-accent)] hover:text-white transition-colors" onClick={() => void refresh()}>Retry</button>
+                  </p>
+                )}
+                {msg && <p className="px-[31px] pt-[4px] text-[var(--app-accent)] text-[12px] whitespace-normal">{msg}</p>}
               </div>
-            ))}
-          </div>
-        )}
-
-        {/* Invite creation (admin) */}
-        {isAdmin && showInvite && (
-          <div className="px-[31px] py-[10px] flex flex-col gap-[10px]">
+            </div>
+          )}
+        </div>
+        {/* COLUMN 3 — Invites (admin only). The form is always visible: creating
+            an invite is a standalone act — you get a link to send however you
+            like, and NOTHING joins the team until someone actually redeems it. */}
+        <div className="min-w-0 h-full overflow-y-auto pt-[2px] pb-[106px]">
+          {membership && isAdmin && (
+            <div>
+              {sectionTitle('Invite')}
+              <div className="px-[31px] py-[6px] flex flex-col gap-[10px]">
             {createdLink ? (
               <div className="flex flex-col gap-[8px]">
                 <span className={`${bodyFont} text-[13px] text-white`}>Invite link created — send it yourself (iMessage, WhatsApp…):</span>
@@ -5448,9 +5474,30 @@ function MembersSection({ projects }: { projects: Project[] }) {
                 <span className={`${bodyFont} text-[12px] text-[#5e5e5e] whitespace-normal`}>Personal items and unshared projects are hidden from members' views (display filtering — server-side isolation is a planned hardening step).</span>
               </>
             )}
-          </div>
-        )}
-        {msg && <p className="px-[31px] pt-[4px] text-[var(--app-accent)] text-[12px] whitespace-normal">{msg}</p>}
+                {invMsg && <p className={`text-[var(--app-accent)] text-[12px] whitespace-normal`}>{invMsg}</p>}
+              </div>
+              {/* Pending invites — grayed rows with revoke, Trello-style. */}
+              {invites.length > 0 && (
+                <div className="pt-[10px]">
+                  {sectionTitle('Pending')}
+                  {invites.map((i) => (
+                    <div key={i.id} className="h-[30px] w-full box-border flex flex-row gap-2 items-center px-[31px]">
+                      <span className={`${bodyFont} text-[#656464] text-[13px]`}>
+                        Invite{i.person_short ? ` (${i.person_short})` : ''} · expires {new Date(i.expires_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                      </span>
+                      <button type="button" className={`${quiet} ml-auto text-[12px]`}
+                        onClick={async () => {
+                          if (!supabaseClient) return;
+                          await supabaseClient.from('invites').update({ revoked_at: new Date().toISOString() }).eq('id', i.id);
+                          void refresh();
+                        }}>Revoke</button>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -5543,10 +5590,12 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
   return (
     <div className="h-full flex flex-col" style={{ paddingTop: SPACING.topMargin, paddingBottom: 12 }}>
       <div className="shrink-0"><TopHeader viewName="Settings" /></div>
-      <div className="flex-1 min-h-0 overflow-y-auto overflow-x-hidden">
-        <div className="grid grid-cols-4 gap-x-5 pb-[106px]">
+      {/* Each column scrolls INDEPENDENTLY — a long Trash list no longer drags
+          the config column off-screen with it. */}
+      <div className="flex-1 min-h-0 overflow-x-hidden">
+        <div className="grid grid-cols-4 gap-x-5 h-full">
           {/* COLUMN 1 — config: version, ordering, shortcuts, case. */}
-          <div className="min-w-0 flex flex-col gap-[34px] pt-[2px]">
+          <div className="min-w-0 h-full overflow-y-auto flex flex-col gap-[34px] pt-[2px] pb-[106px]">
             <div>
               {sectionTitle('About')}
               <div className="px-[35px] pt-[4px] flex flex-col gap-2 text-[13px]">
@@ -5633,9 +5682,9 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
               </div>
             </div>
           </div>
-          {/* COLUMN 2 — members (when auth is on), people & clients. */}
-          <div className="min-w-0 flex flex-col gap-[34px] pt-[2px]">
-            <MembersSection projects={projects} />
+          {/* COLUMN 2 — people & clients. (Members/account management lives on
+              the Team page now — click your avatar in the nav rail.) */}
+          <div className="min-w-0 h-full overflow-y-auto flex flex-col gap-[34px] pt-[2px] pb-[106px]">
             <div>
               {sectionTitle('People', <AddPlus onClick={onAddPerson} />)}
               <div className="pt-[4px]">
@@ -5672,7 +5721,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
           </div>
 
           {/* COLUMN 3 — Trash. */}
-          <div className="min-w-0 flex flex-col gap-[34px] pt-[2px]">
+          <div className="min-w-0 h-full overflow-y-auto flex flex-col gap-[34px] pt-[2px] pb-[106px]">
             <div>
               {sectionTitle('Trash', <span className="text-[#666] text-[12px]">{trashedTasks.length}</span>)}
               <div className="pt-[4px]">
@@ -5698,7 +5747,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
             </div>
           </div>
           {/* COLUMN 4 — Completed & collapsible Debug. */}
-          <div className="min-w-0 flex flex-col gap-[34px] pt-[2px]">
+          <div className="min-w-0 h-full overflow-y-auto flex flex-col gap-[34px] pt-[2px] pb-[106px]">
             <div>
               {sectionTitle('Completed', <span className="text-[#666] text-[12px]">{completedTasks.length}</span>)}
               <div className="pt-[4px]">
@@ -5727,7 +5776,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
               </button>
               {showDebug && (
                 <div className="flex flex-col gap-[34px] pt-[4px]">
-                  <AccountSection people={people} currentUserShort={currentUserShort} onSetCurrentUser={onSetCurrentUser} sectionTitle={sectionTitle} />
+                  {/* Account moved to the Team page (click your avatar in the nav). */}
                   <div>
                     {sectionTitle('Maintenance')}
                     <div className="px-[31px] pt-[4px] flex flex-col gap-2 items-start">
@@ -9075,6 +9124,22 @@ export default function App() {
     if (!currentUserShort && people.length > 0) setCurrentUserShort(people[0].short);
   }, [membership, currentUserShort, people, setCurrentUserShort]);
 
+  // Self-materialize: a freshly redeemed member has a members row (Postgres)
+  // but no Person entry in the room yet — without one their initial renders
+  // nowhere and the assignee picker doesn't know them. First signed-in client
+  // adds it. Guards: only for SELF, only once people[] has hydrated with real
+  // content (never write into a pre-hydration empty array), case-insensitive
+  // duplicate check (shorts are unique per the membership tombstone rules).
+  useEffect(() => {
+    if (!membership || people.length === 0) return;
+    const shortLower = membership.person_short.toLowerCase();
+    if (people.some((p) => p.short.toLowerCase() === shortLower)) return;
+    setPeople((prev) => {
+      if (prev.length === 0 || prev.some((p) => p.short.toLowerCase() === shortLower)) return prev;
+      return [...prev, { id: `pr-${membership.user_id.slice(0, 8)}`, name: membership.display_name, short: membership.person_short }];
+    });
+  }, [membership, people, setPeople]);
+
   // 4 AM section refill. Today is SACRED — only deadlined / date-ranged tasks land there
   // (handled by the deadline auto-promote effect above). The refill cascade only tops up
   // Tomorrow:
@@ -9098,11 +9163,14 @@ export default function App() {
           const dueOrStarting = (t.deadline && t.deadline <= today) || (t.startDate && t.startDate <= today);
           return dueOrStarting ? { ...t, section: 'today' as SectionId } : t;
         });
-        // STEP B — snapshot fill Today AND Tomorrow from the queue. Each list pulls up to
-        // TARGET (3) queue tasks per day. After this snapshot the calendar leaves today +
-        // tomorrow alone for the rest of the day; only Wed+ keeps re-distributing in real-time.
+        // STEP B — snapshot fill TOMORROW ONLY from the queue (up to TARGET per list).
+        // TODAY IS FULLY MANUAL (experiment, Aug 2026): the old code also pulled 3 per
+        // list into Today every 4 AM, and the user spent each morning pushing them back.
+        // Now nothing flows into Today automatically except STEP A's arrived dates —
+        // you pull what you actually want from Tomorrow by hand, and completing tasks
+        // below the old threshold never triggers a refill.
         const lists: ListId[] = LISTS;
-        for (const targetSection of ['today', 'tomorrow'] as const) {
+        for (const targetSection of ['tomorrow'] as const) {
           for (const listId of lists) {
             const cmp = (a: Task, b: Task) => a.order - b.order;
             const sectionList = next.filter((t) => t.list === listId && t.section === targetSection && t.type !== 'scheduled' && !t.completed).sort(cmp);
@@ -10803,7 +10871,7 @@ export default function App() {
                       <div key={`${colKey}-${listId}`} className={cellTasks.length > 0 ? 'pb-[24px] last:pb-0' : 'pb-[12px] last:pb-0'}>
                         {/* Band label — same treatment as the calendar's in-column
                             category labels (grey, 20px row, 16px inset) + hover +. */}
-                        <div className="group/band h-[20px] px-[16px] pb-[6px] flex items-center gap-2 sticky top-0 z-10 bg-[var(--app-bg)]">
+                        <div className="group/band h-[26px] px-[16px] flex items-center gap-2 sticky top-0 z-10 bg-[var(--app-bg)]">
                           <p onClick={scrollBandToTop} className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap text-[#5e5e5e] cursor-pointer">{bandLabel}</p>
                           <button
                             type="button"
@@ -11801,6 +11869,9 @@ export default function App() {
             </div>
           );
         })()}
+        {!PIP_MODE && mode === 'team' && (
+          <TeamMode projects={projects} people={people} currentUserShort={currentUserShort} onSetCurrentUser={setCurrentUserShort} />
+        )}
         {!PIP_MODE && mode === 'settings' && (
           <SettingsMode
             people={people}
@@ -11979,7 +12050,7 @@ export default function App() {
               </div>
           );
         })()}
-        {!PIP_MODE && <BottomBar mode={mode} onSetMode={setMode} onAdd={addAndEditTask} />}
+        {!PIP_MODE && <BottomBar mode={mode} onSetMode={setMode} onAdd={addAndEditTask} userShort={currentUserShort} />}
 
         <AnimatePresence>
           {pendingTrash && (
