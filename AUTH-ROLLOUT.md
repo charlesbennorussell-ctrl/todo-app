@@ -5,16 +5,36 @@ zero-behavior-change until the cutover below. Do the cutover in ONE sitting:
 the dangerous window is "new auth build deployed but old pk key still valid",
 where a stale device replaying a whole-array LWW write can silently erase work.
 
-## Phase 0 — one-time setup (Benno + Claude together)
+## STATUS (2026-08-13)
 
-1. **Supabase CLI**: run `supabase login` in a terminal (opens browser, one
-   click). Everything after this Claude can drive.
+The ORIGINAL Supabase project (klfbowcuchphysnzioar, "Ctrl-Projects") was
+PURGED by the free-tier lifecycle (paused ~7 idle days → deleted ~90 days
+later) — its domain no longer resolves and its account is unrecoverable.
+Everything now lives on the NEW project `ogbtppqysksooinmftpj` under the
+account Benno controls. Casualty: all 142 focus-image blobs; recovery =
+Settings → Debug → Maintenance → "Recover images" on each device (re-uploads
+from the local image cache; idempotent, run everywhere to top up).
+
+DONE (provisioned 2026-08-13 via Management API + CLI): membership schema +
+RLS + triggers; liveblocks-auth / membership / lr-proxy functions deployed;
+signups disabled; Site URL + redirect allowlist set; focus-images bucket +
+policies; Benno seeded as admin (B, all projects); invite lifecycle tested
+end-to-end (create → info → redeem → single-use enforced); sign-in + gate +
+auth-failure screens verified in dev against the real backend.
+
+REMAINING: Liveblocks secret key (below) → set secret + verify room join →
+sandbox invite rehearsal in-app → Phase 3 cutover → "Recover images" on
+Benno's + Pawel's devices → optional Google OAuth client.
+
+## Phase 0 — remaining one-time setup
+
+1. ~~Supabase CLI access~~ DONE (access token).
 2. **Liveblocks secret key**: liveblocks.io dashboard → project (the one the
    `pk_dev_fTXyt…` key belongs to — must be the SAME project or the room data
    won't be reachable) → API keys → copy the `sk_dev_…` secret key.
 3. **Google OAuth client** (Google Cloud Console → APIs & Services → Credentials):
    - Create OAuth client ID → type "Web application".
-   - Authorized redirect URI: `https://klfbowcuchphysnzioar.supabase.co/auth/v1/callback`
+   - Authorized redirect URI: `https://ogbtppqysksooinmftpj.supabase.co/auth/v1/callback`
    - Consent screen: External, app name "Ctrl-Project", your email; publish it
      (leaving it in Testing mode expires refresh tokens after 7 days).
    - Copy Client ID + Client Secret.

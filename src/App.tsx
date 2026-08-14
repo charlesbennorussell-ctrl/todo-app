@@ -298,8 +298,8 @@ if (typeof document !== 'undefined') {
 let recentEditBlurAt = 0;
 
 import { useStorage, useMutation, useUndo, useRedo } from '@liveblocks/react/suspense';
-import { uploadFocusImage, deleteFocusImageBlob } from './supabase';
-import { getCachedImageUrl, getCachedImageUrlSync, evictCachedImage } from './imageCache';
+import { uploadFocusImage, deleteFocusImageBlob, SUPABASE_BUCKET } from './supabase';
+import { getCachedImageUrl, getCachedImageUrlSync, evictCachedImage, readCachedBlob } from './imageCache';
 import { consumeOauthRedirect, openLightroomAuth, hasLightroomAuth, resolveShareUrl, fetchAlbumAssets, fetchAssetBlob } from './lightroom';
 import {
   buildSnapshot,
@@ -5456,7 +5456,7 @@ function MembersSection({ projects }: { projects: Project[] }) {
   );
 }
 
-function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePersonShort, onDeletePerson, currentUserShort, onSetCurrentUser, taskOrder, onSetTaskOrder, listSequence, onSetListSequence, caseMode, onSetCaseMode, cardRows, onSetCardRows, sortByCP, onSetSortByCP, trashedTasks, completedTasks, projects, clients, onUntrashTask, onPurgeTask, onToggleTask, onPurgeEmptyProjects, onListClosedOutProjects, onRemoveProjectsByIds, onListStragglerProjects, onDeleteStragglerProject, liveBackupAt, dailyBackupAt, onDownloadBackup, onRestoreFromFile, onRestoreFromSlot, onAddClient, onRenameClient, onRenameClientShort, onDeleteClient }: {
+function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePersonShort, onDeletePerson, currentUserShort, onSetCurrentUser, taskOrder, onSetTaskOrder, listSequence, onSetListSequence, caseMode, onSetCaseMode, cardRows, onSetCardRows, sortByCP, onSetSortByCP, trashedTasks, completedTasks, projects, clients, onUntrashTask, onPurgeTask, onToggleTask, onPurgeEmptyProjects, onListClosedOutProjects, onRemoveProjectsByIds, onListStragglerProjects, onDeleteStragglerProject, liveBackupAt, dailyBackupAt, onDownloadBackup, onRecoverImages, onRestoreFromFile, onRestoreFromSlot, onAddClient, onRenameClient, onRenameClientShort, onDeleteClient }: {
   people: Person[]; newId: string | null;
   onAddPerson: () => void;
   onRenamePerson: (id: string, name: string) => void;
@@ -5489,6 +5489,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
   liveBackupAt: number | null;
   dailyBackupAt: number | null;
   onDownloadBackup: () => void | Promise<void>;
+  onRecoverImages: () => Promise<string>;
   onRestoreFromFile: (file: File) => Promise<string>;
   onRestoreFromSlot: (slot: 'live' | 'daily') => Promise<string>;
   onAddClient: () => void;
@@ -5733,6 +5734,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
                       <button type="button" onClick={() => { const n = onPurgeEmptyProjects(); setPurgeMsg(n > 0 ? `Removed ${n} empty project${n === 1 ? '' : 's'}.` : 'No empty projects found.'); }} className="text-[13px] text-[#656464] hover:text-white transition-colors">Clean up empty projects</button>
                       <button type="button" onClick={() => { if (closedOutIds) { const n = onRemoveProjectsByIds(closedOutIds); setPurgeMsg(`Removed ${n} closed-out project${n === 1 ? '' : 's'}.`); setClosedOutIds(null); return; } const list = onListClosedOutProjects(); if (!list.length) { setPurgeMsg('No closed-out projects.'); return; } setClosedOutIds(list.map((p) => p.id)); setPurgeMsg(`${list.length} with no tasks: ${list.map((p) => p.name).join(', ')}. Click again to remove.`); }} className={`text-[13px] transition-colors ${closedOutIds ? 'text-[var(--app-accent)] font-bold' : 'text-[#656464] hover:text-white'}`}>{closedOutIds ? `Confirm — remove ${closedOutIds.length}` : 'Remove closed-out projects'}</button>
                       <button type="button" onClick={() => setStragglers((cur) => (cur ? null : onListStragglerProjects()))} className="text-[13px] text-[#656464] hover:text-white transition-colors">{stragglers ? 'Hide straggler projects' : 'Manage straggler projects (no client)'}</button>
+                      <button type="button" onClick={async () => { setPurgeMsg('Recovering images from this device\'s cache…'); setPurgeMsg(await onRecoverImages()); }} className="text-[13px] text-[#656464] hover:text-white transition-colors">Recover images (re-upload from this device's cache)</button>
                       {stragglers && stragglers.length === 0 && <p className="text-[#656464] text-[12px]">No straggler projects.</p>}
                       {stragglers && stragglers.length > 0 && (<div className="flex flex-col gap-1 w-full max-w-[420px]">{stragglers.map((s) => (<div key={s.id} className="flex flex-row items-center justify-between gap-3 py-[3px] border-b border-white/[0.06]"><span className="text-[13px] text-white truncate">{s.name} <span className="text-[#656464]">· {s.taskCount} task{s.taskCount === 1 ? '' : 's'}</span></span><button type="button" onClick={() => { onDeleteStragglerProject(s.id); setStragglers((prev) => (prev ? prev.filter((x) => x.id !== s.id) : prev)); setPurgeMsg(`Removed "${s.name}".`); }} className="shrink-0 text-[12px] text-[#656464] hover:text-[#ff6b6b] transition-colors">Delete</button></div>))}</div>)}
                       {purgeMsg && <p className="text-[var(--app-accent)] text-[12px]">{purgeMsg}</p>}
@@ -7272,6 +7274,58 @@ export default function App() {
     const snapshot = buildSnapshot(buildCurrentSlice());
     downloadSnapshot(snapshot);
   }, [buildCurrentSlice]);
+
+  // Image disaster recovery (Aug 2026: the original Supabase project was
+  // purged by the free-tier lifecycle, taking every focus-image blob with
+  // it). The image cache in IndexedDB — keyed by the ORIGINAL url — is the
+  // only surviving copy on whatever devices rendered those images. This
+  // re-uploads every cached legacy blob to the CURRENT project's bucket and
+  // rewrites the metadata url. Idempotent (upsert + host check), so it can
+  // run on every device — each one tops up whatever the others were missing.
+  const recoverImages = useCallback(async (): Promise<string> => {
+    if (!supabaseClient) return 'Supabase not configured.';
+    const currentHost = (() => { try { return new URL(import.meta.env.VITE_SUPABASE_URL as string).host; } catch { return ''; } })();
+    if (!currentHost) return 'No VITE_SUPABASE_URL configured.';
+    let legacy = 0, recovered = 0, missing = 0;
+    const updates: Record<string, typeof focusImages[string]> = {};
+    for (const [bucketKey, list] of Object.entries(focusImages ?? {})) {
+      let changed = false;
+      const newList = [...(list ?? [])];
+      for (let i = 0; i < newList.length; i++) {
+        const im = newList[i];
+        if (!im?.url || !im.url.startsWith('http')) continue;
+        let host = '';
+        try { host = new URL(im.url).host; } catch { continue; }
+        if (host === currentHost) continue; // already on the live project
+        legacy++;
+        const blob = await readCachedBlob(im.url);
+        if (!blob) { missing++; continue; }
+        const path = `${im.id}.webp`;
+        const { error } = await supabaseClient.storage.from(SUPABASE_BUCKET).upload(path, blob, {
+          contentType: blob.type || 'image/webp',
+          cacheControl: '31536000',
+          upsert: true, // another device may have uploaded the same id already
+        });
+        if (error) { missing++; continue; }
+        const { data } = supabaseClient.storage.from(SUPABASE_BUCKET).getPublicUrl(path);
+        newList[i] = { ...im, url: data.publicUrl };
+        changed = true;
+        recovered++;
+      }
+      if (changed) updates[bucketKey] = newList;
+    }
+    if (Object.keys(updates).length > 0) {
+      // One functional write for all buckets — smallest possible LWW window.
+      setFocusImages((prev) => {
+        const next = { ...prev };
+        for (const [k, v] of Object.entries(updates)) next[k] = v;
+        return next;
+      });
+    }
+    if (legacy === 0) return 'No legacy images found — everything already points at the live project.';
+    return `Recovered ${recovered} of ${legacy} legacy image${legacy === 1 ? '' : 's'} from this device's cache.` +
+      (missing > 0 ? ` ${missing} still missing — run this on your other devices (and Pawel's) to top up.` : ' All done.');
+  }, [focusImages, setFocusImages]);
   // Helper: confirm-and-restore from a snapshot's data slice.
   const confirmAndRestore = useCallback((snapshot: BackupSnapshot, label: string): string => {
     const counts = {
@@ -11786,6 +11840,7 @@ export default function App() {
             liveBackupAt={liveBackupAt}
             dailyBackupAt={dailyBackupAt}
             onDownloadBackup={downloadBackup}
+            onRecoverImages={recoverImages}
             onRestoreFromFile={restoreFromFile}
             onRestoreFromSlot={restoreFromSlot}
           />

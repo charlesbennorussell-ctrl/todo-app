@@ -50,6 +50,15 @@ function idbDelete(url: string): Promise<void> {
   })).catch(() => undefined);
 }
 
+// Direct read of a cached blob by its original URL. Exists for DISASTER
+// RECOVERY: when the Supabase project hosting the blobs dies (free-tier
+// purge, Aug 2026), this cache is the only surviving copy of each image on
+// whatever devices rendered them — the recovery tool in Settings → Debug
+// reads blobs out through here and re-uploads them to the new project.
+export function readCachedBlob(url: string): Promise<Blob | null> {
+  return idbGet(url);
+}
+
 // In-memory map of remote URL → object URL. Object URLs are session-scoped (no need to
 // persist) and dirt cheap to create from a cached blob.
 const objectUrlCache = new Map<string, string>();

@@ -21,7 +21,7 @@ jobs:
           ANON_KEY="$(curl -s https://raw.githubusercontent.com/charlesbennorussell-ctrl/todo-app/master/.env.production | grep VITE_SUPABASE_ANON_KEY | cut -d= -f2)"
           STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
             -H "apikey: ${ANON_KEY}" \
-            "https://klfbowcuchphysnzioar.supabase.co/rest/v1/")
+            "https://ogbtppqysksooinmftpj.supabase.co/rest/v1/")
           echo "Supabase responded with HTTP ${STATUS}"
           # 200/401/404 all prove the project is awake; only fail on network death.
           if [ "$STATUS" = "000" ]; then exit 1; fi
