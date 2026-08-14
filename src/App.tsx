@@ -24,6 +24,11 @@ import {
 } from '@dnd-kit/core';
 import { restrictToVerticalAxis, restrictToHorizontalAxis, restrictToParentElement } from '@dnd-kit/modifiers';
 import {
+  useMembership, projectAllowed, signOut as authSignOut, fetchAllMembers,
+  createInvite, resetMemberPassword, type Membership, type ProjectAccess,
+} from './auth';
+import { supabase as supabaseClient } from './supabase';
+import {
   arrayMove,
   SortableContext,
   sortableKeyboardCoordinates,
@@ -5096,6 +5101,361 @@ function BackupSection({
   );
 }
 
+// AccountSection — Settings > Debug. With auth ON: the signed-in identity,
+// display-name edit, change-password, sign out. With auth OFF: the legacy
+// "I am" picker (unchanged), which the auth gate replaces at rollout.
+function AccountSection({ people, currentUserShort, onSetCurrentUser, sectionTitle }: {
+  people: Person[];
+  currentUserShort: string;
+  onSetCurrentUser: (short: string) => void;
+  sectionTitle: (title: string, add?: React.ReactNode) => React.ReactNode;
+}) {
+  const membership = useMembership();
+  const [name, setName] = useState(membership?.display_name ?? '');
+  const [pw, setPw] = useState('');
+  const [msg, setMsg] = useState('');
+  useEffect(() => { if (membership) setName(membership.display_name); }, [membership]);
+
+  if (!membership) {
+    return (
+      <div>
+        {sectionTitle('I am (temporary — becomes login)')}
+        <div className="px-[31px] pt-[4px] flex flex-wrap gap-2">
+          {people.map((p) => { const active = p.short === currentUserShort; return (<button key={p.id} type="button" onClick={() => onSetCurrentUser(p.short)} className={`px-3 py-1 rounded-full text-[13px] transition-colors ${active ? 'bg-[#7363FF] text-white' : 'bg-[#1f1f1f] text-[#ccc] hover:bg-[#333]'}`}>{p.name || '(unnamed)'} <span className="opacity-70">({p.short || '?'})</span></button>); })}
+          {people.length === 0 && <span className="text-[#666] text-[12px]">Add a person first.</span>}
+        </div>
+      </div>
+    );
+  }
+
+  const input = "font-['Univers_BQ:55_Regular',sans-serif] h-[30px] px-[12px] rounded-full bg-[#151412] text-white text-[13px] placeholder-[#656464] outline-none";
+  const quiet = 'text-[13px] text-[#656464] hover:text-white transition-colors';
+  return (
+    <div>
+      {sectionTitle('Account')}
+      <div className="px-[31px] pt-[4px] flex flex-col gap-[10px] items-start">
+        <span className="text-[13px] text-[#656464]">
+          Signed in as <span className="text-white">{membership.email}</span> ({membership.person_short})
+        </span>
+        <div className="flex flex-row gap-2 items-center">
+          <input className={input} value={name} onChange={(e) => setName(e.target.value)} placeholder="Display name" />
+          <button type="button" className={quiet} style={{ opacity: name.trim() && name.trim() !== membership.display_name ? 1 : 0.4 }}
+            onClick={async () => {
+              if (!supabaseClient || !name.trim()) return;
+              const { error } = await supabaseClient.from('members').update({ display_name: name.trim() }).eq('user_id', membership.user_id);
+              setMsg(error ? error.message : 'Name updated — takes effect on next sign-in refresh.');
+            }}>Save</button>
+        </div>
+        <div className="flex flex-row gap-2 items-center">
+          <input className={input} type="password" value={pw} onChange={(e) => setPw(e.target.value)} placeholder="New password (6+ chars)" autoComplete="new-password" />
+          <button type="button" className={quiet} style={{ opacity: pw.length >= 6 ? 1 : 0.4 }}
+            onClick={async () => {
+              if (!supabaseClient || pw.length < 6) return;
+              const { error } = await supabaseClient.auth.updateUser({ password: pw });
+              setMsg(error ? error.message : 'Password changed.');
+              if (!error) setPw('');
+            }}>Change</button>
+        </div>
+        <button type="button" className={quiet}
+          onClick={async () => { await authSignOut(); window.location.reload(); }}>
+          Sign out on this device
+        </button>
+        {msg && <p className="text-[var(--app-accent)] text-[12px] whitespace-normal">{msg}</p>}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// MembersSection — workspace accounts (Settings, column 2). Renders only when
+// the auth gate is on (useMembership() non-null). Distinct from "People":
+// People are assignee entries in the room; Members are sign-in accounts bound
+// to a Person via person_short.
+function MembersSection({ projects }: { projects: Project[] }) {
+  const membership = useMembership();
+  const isAdmin = membership?.role === 'admin';
+  const bodyFont = "font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap";
+  const [members, setMembers] = useState<Membership[]>([]);
+  const [invites, setInvites] = useState<{ id: string; person_short: string | null; expires_at: string; created_at: string }[]>([]);
+  const [msg, setMsg] = useState('');
+
+  // Invite form state
+  const [showInvite, setShowInvite] = useState(false);
+  const [invName, setInvName] = useState('');
+  const [invShort, setInvShort] = useState('');
+  const [shortTouched, setShortTouched] = useState(false);
+  const [invRole, setInvRole] = useState<'member' | 'admin'>('member');
+  const [invAccessMode, setInvAccessMode] = useState<'all' | 'selected'>('all');
+  const [invProjects, setInvProjects] = useState<Set<string>>(new Set());
+  const [invBusy, setInvBusy] = useState(false);
+  const [createdLink, setCreatedLink] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  // Per-member editor state (admin)
+  const [editingMember, setEditingMember] = useState<string | null>(null);
+  const [resetPw, setResetPw] = useState('');
+  const [confirmRemove, setConfirmRemove] = useState<string | null>(null);
+
+  const [rosterError, setRosterError] = useState<string | null>(null);
+  const refresh = useCallback(async () => {
+    // Guarded on membership so the FLAG-OFF build makes zero auth-related
+    // network calls — without this, every Settings open fired a GET against
+    // a members table that doesn't even exist pre-cutover.
+    if (!membership) return;
+    try {
+      const list = await fetchAllMembers();
+      setMembers(list.filter((m) => !m.removed_at));
+      setRosterError(null);
+    } catch (e) {
+      setRosterError(e instanceof Error ? e.message : String(e));
+    }
+    if (isAdmin && supabaseClient) {
+      const { data } = await supabaseClient
+        .from('invites')
+        .select('id, person_short, expires_at, created_at, revoked_at, use_count, max_uses')
+        .is('revoked_at', null)
+        .order('created_at', { ascending: false });
+      const now = Date.now();
+      setInvites((data ?? []).filter((i) => i.use_count < i.max_uses && new Date(i.expires_at).getTime() > now));
+    }
+  }, [membership, isAdmin]);
+  useEffect(() => { void refresh(); }, [refresh]);
+
+  // Default the initial from the name until the admin touches it.
+  useEffect(() => {
+    if (!shortTouched) setInvShort(invName.trim() ? invName.trim()[0].toUpperCase() : '');
+  }, [invName, shortTouched]);
+
+  if (!membership) return null;
+
+  const shareableProjects = projects.filter((p) => p.clientId !== PERSONAL_CLIENT_ID);
+  const accessSummary = (m: Membership): string => {
+    if (m.role === 'admin' || !m.project_access || m.project_access.mode === 'all') return 'All projects';
+    const n = (m.project_access as { projectIds?: string[] }).projectIds?.length ?? 0;
+    return `${n} of ${shareableProjects.length} projects`;
+  };
+
+  const capsule = (active: boolean) =>
+    `px-3 py-1 rounded-full text-[13px] transition-colors ${active ? 'bg-[#7363FF] text-white' : 'bg-[#1f1f1f] text-[#ccc] hover:bg-[#333]'}`;
+  const quiet = 'text-[13px] text-[#656464] hover:text-white transition-colors';
+  const input = `${bodyFont} h-[30px] px-[12px] rounded-full bg-[#151412] text-white text-[13px] placeholder-[#656464] outline-none`;
+
+  const submitInvite = async () => {
+    setInvBusy(true);
+    setMsg('');
+    try {
+      const res = await createInvite({
+        invitedName: invName.trim(),
+        personShort: invShort.trim(),
+        role: invRole,
+        projectAccess: (invAccessMode === 'all'
+          ? { mode: 'all' }
+          : { mode: 'selected', projectIds: [...invProjects] }) as ProjectAccess,
+      });
+      setCreatedLink(res.link);
+      setCopied(false);
+      setInvName(''); setInvShort(''); setShortTouched(false); setInvRole('member'); setInvAccessMode('all'); setInvProjects(new Set());
+      void refresh();
+    } catch (e) {
+      setMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setInvBusy(false);
+    }
+  };
+
+  const updateMember = async (userId: string, patch: Record<string, unknown>) => {
+    if (!supabaseClient) return;
+    setMsg('');
+    const { error } = await supabaseClient.from('members').update(patch).eq('user_id', userId);
+    if (error) setMsg(error.message);
+    void refresh();
+  };
+
+  const adminCount = members.filter((m) => m.role === 'admin').length;
+
+  return (
+    <div>
+      <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]">
+        <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">Members</p>
+        {isAdmin && (
+          <button type="button" onClick={() => { setShowInvite((s) => !s); setCreatedLink(null); }}
+            className="opacity-0 group-hover:opacity-100 text-[var(--app-accent)] hover:text-white transition-all" aria-label="Invite member">
+            <Plus size={14} />
+          </button>
+        )}
+      </div>
+      <div className="pt-[4px] flex flex-col">
+        {members.map((m) => {
+          const isSelf = m.user_id === membership.user_id;
+          const editing = editingMember === m.user_id;
+          const acc = (m.project_access ?? { mode: 'all' }) as { mode: 'all' | 'selected'; projectIds?: string[] };
+          return (
+            <div key={m.user_id}>
+              <div className="group h-[34px] w-full box-border flex flex-row gap-2 items-center px-[31px] hover:bg-white/[0.03]">
+                <span className={`${bodyFont} text-white truncate`}>{m.display_name}</span>
+                <span className={`${bodyFont} text-[#656464] text-[12px]`}>({m.person_short})</span>
+                <span className={`px-2 py-[1px] rounded-full text-[11px] ${m.role === 'admin' ? 'bg-[#7363FF]/20 text-[var(--app-accent)]' : 'bg-white/[0.06] text-[#a8a8a8]'}`}>
+                  {m.role}
+                </span>
+                {isSelf && <span className={`${bodyFont} text-[11px] text-[#5e5e5e]`}>you</span>}
+                <span className="ml-auto" />
+                {isAdmin && !isSelf && (
+                  <button type="button" className={`${quiet} opacity-0 group-hover:opacity-100 text-[12px]`}
+                    onClick={() => { setEditingMember(editing ? null : m.user_id); setResetPw(''); setConfirmRemove(null); }}>
+                    {editing ? 'Close' : 'Manage'}
+                  </button>
+                )}
+                {!isAdmin && !isSelf && <span className={`${bodyFont} text-[12px] text-[#5e5e5e]`}>{accessSummary(m)}</span>}
+              </div>
+              {editing && isAdmin && (
+                <div className="px-[31px] py-[8px] flex flex-col gap-[10px] bg-white/[0.02] rounded-[6px] mx-[20px] mb-[6px]">
+                  <div className={`${bodyFont} text-[12px] text-[#656464]`}>{m.email}</div>
+                  <div className="flex flex-row flex-wrap gap-2 items-center">
+                    <span className={`${bodyFont} text-[12px] text-[#656464] w-[52px]`}>Role</span>
+                    <button type="button" className={capsule(m.role === 'member')}
+                      onClick={() => { if (m.role === 'admin' && adminCount <= 1) { setMsg('Cannot demote the last admin.'); return; } void updateMember(m.user_id, { role: 'member' }); }}>Member</button>
+                    <button type="button" className={capsule(m.role === 'admin')}
+                      onClick={() => void updateMember(m.user_id, { role: 'admin' })}>Admin</button>
+                  </div>
+                  <div className="flex flex-row flex-wrap gap-2 items-center">
+                    <span className={`${bodyFont} text-[12px] text-[#656464] w-[52px]`}>Access</span>
+                    <button type="button" className={capsule(acc.mode === 'all')}
+                      onClick={() => void updateMember(m.user_id, { project_access: { mode: 'all' } })}>All projects</button>
+                    <button type="button" className={capsule(acc.mode === 'selected')}
+                      onClick={() => void updateMember(m.user_id, { project_access: { mode: 'selected', projectIds: acc.projectIds ?? [] } })}>Selected…</button>
+                  </div>
+                  {acc.mode === 'selected' && (
+                    <div className="flex flex-col gap-[2px] pl-[60px] max-h-[160px] overflow-y-auto">
+                      {shareableProjects.map((p) => {
+                        const on = (acc.projectIds ?? []).includes(p.id);
+                        return (
+                          <label key={p.id} className={`${bodyFont} text-[13px] flex flex-row items-center gap-2 cursor-pointer ${on ? 'text-white' : 'text-[#656464]'}`}>
+                            <input type="checkbox" checked={on} className="accent-[#7363FF]"
+                              onChange={() => {
+                                const next = new Set(acc.projectIds ?? []);
+                                if (on) next.delete(p.id); else next.add(p.id);
+                                void updateMember(m.user_id, { project_access: { mode: 'selected', projectIds: [...next] } });
+                              }} />
+                            {p.name || '(unnamed)'}
+                          </label>
+                        );
+                      })}
+                      {shareableProjects.length === 0 && <span className={`${bodyFont} text-[12px] text-[#5e5e5e]`}>No projects yet.</span>}
+                    </div>
+                  )}
+                  <div className="flex flex-row flex-wrap gap-2 items-center">
+                    <span className={`${bodyFont} text-[12px] text-[#656464] w-[52px]`}>Reset</span>
+                    <input className={input} type="text" placeholder="Temp password (6+ chars)" value={resetPw} onChange={(e) => setResetPw(e.target.value)} />
+                    <button type="button" className={quiet} style={{ opacity: resetPw.length >= 6 ? 1 : 0.4 }}
+                      onClick={async () => {
+                        if (resetPw.length < 6) return;
+                        try { await resetMemberPassword(m.user_id, resetPw); setMsg(`Password set for ${m.display_name} — tell them in person.`); setResetPw(''); }
+                        catch (e) { setMsg(e instanceof Error ? e.message : String(e)); }
+                      }}>Set</button>
+                  </div>
+                  <button type="button"
+                    className={`self-start text-[13px] transition-colors ${confirmRemove === m.user_id ? 'text-[#FF7171] font-bold' : 'text-[#656464] hover:text-[#FF7171]'}`}
+                    onClick={() => {
+                      // UX guard only — the DB trigger members_protect_last_admin
+                      // is the real invariant; this just gives a friendly message.
+                      if (m.role === 'admin' && adminCount <= 1) { setMsg('Cannot remove the last admin.'); return; }
+                      if (confirmRemove !== m.user_id) { setConfirmRemove(m.user_id); return; }
+                      void updateMember(m.user_id, { removed_at: new Date().toISOString() });
+                      setConfirmRemove(null); setEditingMember(null);
+                      setMsg(`${m.display_name} removed. Their initial stays reserved so task history keeps its meaning.`);
+                    }}>
+                    {confirmRemove === m.user_id ? 'Click again to confirm removal' : 'Remove from workspace'}
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        })}
+        {members.length === 0 && !rosterError && <p className="px-[35px] text-[#666] text-[13px]">Loading members…</p>}
+        {rosterError && (
+          <p className="px-[35px] text-[#666] text-[13px] whitespace-normal">
+            Couldn't load members ({rosterError}). <button type="button" className="text-[var(--app-accent)] hover:text-white transition-colors" onClick={() => void refresh()}>Retry</button>
+          </p>
+        )}
+
+        {/* Pending invites (admin) */}
+        {isAdmin && invites.length > 0 && (
+          <div className="pt-[6px]">
+            {invites.map((i) => (
+              <div key={i.id} className="group h-[30px] w-full box-border flex flex-row gap-2 items-center px-[31px]">
+                <span className={`${bodyFont} text-[#656464] text-[13px]`}>
+                  Invite{i.person_short ? ` (${i.person_short})` : ''} · expires {new Date(i.expires_at).toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                </span>
+                <button type="button" className={`${quiet} ml-auto opacity-0 group-hover:opacity-100 text-[12px]`}
+                  onClick={async () => {
+                    if (!supabaseClient) return;
+                    await supabaseClient.from('invites').update({ revoked_at: new Date().toISOString() }).eq('id', i.id);
+                    void refresh();
+                  }}>Revoke</button>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Invite creation (admin) */}
+        {isAdmin && showInvite && (
+          <div className="px-[31px] py-[10px] flex flex-col gap-[10px]">
+            {createdLink ? (
+              <div className="flex flex-col gap-[8px]">
+                <span className={`${bodyFont} text-[13px] text-white`}>Invite link created — send it yourself (iMessage, WhatsApp…):</span>
+                <div className="flex flex-row gap-2 items-center">
+                  <input className={`${input} flex-1 min-w-0`} readOnly value={createdLink} onFocus={(e) => e.currentTarget.select()} />
+                  <button type="button" className={capsule(copied)}
+                    onClick={async () => { try { await navigator.clipboard.writeText(createdLink); setCopied(true); } catch { /* select fallback */ } }}>
+                    {copied ? 'Copied' : 'Copy'}
+                  </button>
+                </div>
+                <span className={`${bodyFont} text-[12px] text-[#5e5e5e]`}>One use, expires in 7 days. This link won't be shown again.</span>
+                <button type="button" className={`${quiet} self-start`} onClick={() => setCreatedLink(null)}>New invite</button>
+              </div>
+            ) : (
+              <>
+                <div className="flex flex-row gap-2 items-center">
+                  <input className={`${input} flex-1 min-w-0`} placeholder="Name" value={invName} onChange={(e) => setInvName(e.target.value)} />
+                  <input className={`${input} w-[64px] text-center`} placeholder="B" maxLength={4} value={invShort}
+                    onChange={(e) => { setShortTouched(true); setInvShort(e.target.value.toUpperCase()); }} />
+                </div>
+                <div className="flex flex-row flex-wrap gap-2 items-center">
+                  <button type="button" className={capsule(invRole === 'member')} onClick={() => setInvRole('member')}>Member</button>
+                  <button type="button" className={capsule(invRole === 'admin')} onClick={() => setInvRole('admin')}>Admin</button>
+                  <span className="w-[10px]" />
+                  <button type="button" className={capsule(invAccessMode === 'all')} onClick={() => setInvAccessMode('all')}>All projects</button>
+                  <button type="button" className={capsule(invAccessMode === 'selected')} onClick={() => setInvAccessMode('selected')}>Selected…</button>
+                </div>
+                {invAccessMode === 'selected' && (
+                  <div className="flex flex-col gap-[2px] max-h-[160px] overflow-y-auto">
+                    {shareableProjects.map((p) => {
+                      const on = invProjects.has(p.id);
+                      return (
+                        <label key={p.id} className={`${bodyFont} text-[13px] flex flex-row items-center gap-2 cursor-pointer ${on ? 'text-white' : 'text-[#656464]'}`}>
+                          <input type="checkbox" checked={on} className="accent-[#7363FF]"
+                            onChange={() => setInvProjects((prev) => { const next = new Set(prev); if (on) next.delete(p.id); else next.add(p.id); return next; })} />
+                          {p.name || '(unnamed)'}
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+                <button type="button" className={capsule(true)} style={{ opacity: invName.trim() && invShort.trim() && !invBusy ? 1 : 0.4 }}
+                  onClick={() => { if (invName.trim() && invShort.trim() && !invBusy) void submitInvite(); }}>
+                  {invBusy ? 'Creating…' : 'Create invite link'}
+                </button>
+                <span className={`${bodyFont} text-[12px] text-[#5e5e5e] whitespace-normal`}>Personal items and unshared projects are hidden from members' views (display filtering — server-side isolation is a planned hardening step).</span>
+              </>
+            )}
+          </div>
+        )}
+        {msg && <p className="px-[31px] pt-[4px] text-[var(--app-accent)] text-[12px] whitespace-normal">{msg}</p>}
+      </div>
+    </div>
+  );
+}
+
 function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePersonShort, onDeletePerson, currentUserShort, onSetCurrentUser, taskOrder, onSetTaskOrder, listSequence, onSetListSequence, caseMode, onSetCaseMode, cardRows, onSetCardRows, sortByCP, onSetSortByCP, trashedTasks, completedTasks, projects, clients, onUntrashTask, onPurgeTask, onToggleTask, onPurgeEmptyProjects, onListClosedOutProjects, onRemoveProjectsByIds, onListStragglerProjects, onDeleteStragglerProject, liveBackupAt, dailyBackupAt, onDownloadBackup, onRestoreFromFile, onRestoreFromSlot, onAddClient, onRenameClient, onRenameClientShort, onDeleteClient }: {
   people: Person[]; newId: string | null;
   onAddPerson: () => void;
@@ -5272,8 +5632,9 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
               </div>
             </div>
           </div>
-          {/* COLUMN 2 — people & clients. */}
+          {/* COLUMN 2 — members (when auth is on), people & clients. */}
           <div className="min-w-0 flex flex-col gap-[34px] pt-[2px]">
+            <MembersSection projects={projects} />
             <div>
               {sectionTitle('People', <AddPlus onClick={onAddPerson} />)}
               <div className="pt-[4px]">
@@ -5365,13 +5726,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
               </button>
               {showDebug && (
                 <div className="flex flex-col gap-[34px] pt-[4px]">
-                  <div>
-                    {sectionTitle('I am (temporary — becomes login)')}
-                    <div className="px-[31px] pt-[4px] flex flex-wrap gap-2">
-                      {people.map((p) => { const active = p.short === currentUserShort; return (<button key={p.id} type="button" onClick={() => onSetCurrentUser(p.short)} className={`px-3 py-1 rounded-full text-[13px] transition-colors ${active ? 'bg-[#7363FF] text-white' : 'bg-[#1f1f1f] text-[#ccc] hover:bg-[#333]'}`}>{p.name || '(unnamed)'} <span className="opacity-70">({p.short || '?'})</span></button>); })}
-                      {people.length === 0 && <span className="text-[#666] text-[12px]">Add a person first.</span>}
-                    </div>
-                  </div>
+                  <AccountSection people={people} currentUserShort={currentUserShort} onSetCurrentUser={onSetCurrentUser} sectionTitle={sectionTitle} />
                   <div>
                     {sectionTitle('Maintenance')}
                     <div className="px-[31px] pt-[4px] flex flex-col gap-2 items-start">
@@ -6035,10 +6390,17 @@ export default function App() {
   }, []);
   // Hoisted up-front because several useCallbacks below reference currentUserShort in their dep arrays
   // (e.g. to seed new tasks with the current user as assignee).
-  const [currentUserShort, setCurrentUserShortState] = useState<string>(() => {
+  //
+  // IDENTITY: when the auth gate is on, the signed-in membership row is the
+  // source of truth for "who am I" (verified server-side, feeds the personal-
+  // list privacy filter). The localStorage value survives as (a) the pre-auth
+  // legacy identity and (b) the Debug picker's target when auth is off.
+  const membership = useMembership();
+  const [legacyUserShort, setCurrentUserShortState] = useState<string>(() => {
     if (typeof window === 'undefined') return '';
     return window.localStorage.getItem('todo-app-user-short') || '';
   });
+  const currentUserShort = membership?.person_short || legacyUserShort;
   const setCurrentUserShort = useCallback((s: string) => {
     setCurrentUserShortState(s);
     try { window.localStorage.setItem('todo-app-user-short', s); } catch {}
@@ -8651,10 +9013,13 @@ export default function App() {
     setActiveId(null); setActiveTaskIdState(null); setActiveType(null); setActiveCalendarCellId(null); setColumnOffset(0); pendingOffsetRef.current = 0; if (dwellTimerRef.current) { clearTimeout(dwellTimerRef.current); dwellTimerRef.current = null; } if (collapseTimerRef.current) { clearTimeout(collapseTimerRef.current); collapseTimerRef.current = null; } setSourceCollapsed(false);
   }, [tasks, mode, reorderFocusSubtask, reorderFocusFolder, moveFocusImagesToFolder, moveFocusImagesToBucket, setFocusImages]);
 
-  // Default to first person if unset
+  // Default to first person if unset. Auth mode never auto-defaults — the
+  // membership row IS the identity, and "new device briefly impersonates
+  // people[0]" was exactly the bug this fallback used to cause.
   useEffect(() => {
+    if (membership) return;
     if (!currentUserShort && people.length > 0) setCurrentUserShort(people[0].short);
-  }, [currentUserShort, people, setCurrentUserShort]);
+  }, [membership, currentUserShort, people, setCurrentUserShort]);
 
   // 4 AM section refill. Today is SACRED — only deadlined / date-ranged tasks land there
   // (handled by the deadline auto-promote effect above). The refill cascade only tops up
@@ -8916,6 +9281,7 @@ export default function App() {
     return tasks.filter((t) => {
       if (t.trashed) return false;
       if (isPrivateTask(t) && !t.assignees.includes(currentUserShort)) return false;
+      if (!projectAllowed(membership, t.projectId)) return false;
       if (t.completed) {
         // Recently revived tasks ALWAYS stay visible inside the revive window — gives
         // the user a 10-min grace to re-check after an accidental un-check.
@@ -8936,12 +9302,12 @@ export default function App() {
     // sortTick included so the periodic 60-second tick (declared below) re-evaluates
     // this filter and lifts completed tasks out once their 30-minute window expires.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tasks, currentUserShort, sortTick]);
+  }, [tasks, currentUserShort, membership, sortTick]);
 
   // Calendar view bypasses the completedDay filter — historical completions stay visible there.
   const calendarTasks = useMemo(
-    () => tasks.filter((t) => !t.trashed && (!isPrivateTask(t) || t.assignees.includes(currentUserShort))),
-    [tasks, currentUserShort]
+    () => tasks.filter((t) => !t.trashed && (!isPrivateTask(t) || t.assignees.includes(currentUserShort)) && projectAllowed(membership, t.projectId)),
+    [tasks, currentUserShort, membership]
   );
 
   // Focus-page mini-calendar cells — the SAME distribution the week calendar computes,

@@ -1,11 +1,19 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import ReactDOM from 'react-dom/client';
 import { LiveblocksProvider, RoomProvider, ClientSideSuspense } from '@liveblocks/react/suspense';
+import type { Session } from '@supabase/supabase-js';
 import App from './App';
 import MobileApp from './MobileApp';
 import './index.css';
 import './liveblocks.config';
 import { initialTasks, initialProjects, initialClients, initialPeople } from './data';
+import { supabase } from './supabase';
+import {
+  MembershipContext, type Membership,
+  fetchMembership, liveblocksAuthEndpoint, getAuthHealth, onAuthHealth,
+  captureInviteToken, clearInviteToken, redeemInviteAuthed, signOut,
+} from './auth';
+import { SignInScreen, InviteJoinScreen, NoAccessScreen, AuthTroubleScreen } from './AuthScreens';
 
 // Mobile-vs-desktop router. matchMedia is reactive — rotating an iPad or resizing a
 // desktop browser across 768px hot-swaps mid-session. Overrides for testing:
@@ -31,13 +39,32 @@ const Shell = () => {
 const publicApiKey = import.meta.env.VITE_LIVEBLOCKS_PUBLIC_KEY as string | undefined;
 const roomId = (import.meta.env.VITE_ROOM_ID as string | undefined) || 'todo-app-v3';
 
+// Auth rollout flag. OFF → the app behaves exactly as before (public key, no
+// gate) so this code can deploy safely BEFORE the backend is provisioned.
+// Flipped to '1' in .env.production during the cutover window (deploy + pk
+// key revocation happen in the same sitting — see AUTH-ROLLOUT.md).
+const AUTH_ENABLED = (import.meta.env.VITE_AUTH_ENABLED as string | undefined) === '1' && !!supabase;
+
+// The ONLY rooms any build may connect to. A typo'd VITE_ROOM_ID must fail
+// loudly here — with token auth the server would reject unknown rooms anyway,
+// but a public-key build would silently CREATE the room and seed it, which
+// looks exactly like total data loss to the person staring at demo tasks.
+const ROOM_ALLOWLIST = new Set(['todo-app-v3', 'todo-app-sandbox-dev']);
+const roomIdValid = ROOM_ALLOWLIST.has(roomId);
+
+// New rooms get seeded from initialStorage. Demo data is a dev convenience
+// only — a production build must never plant demo tasks anywhere.
+const seedData = import.meta.env.DEV
+  ? { tasks: initialTasks, projects: initialProjects, clients: initialClients, people: initialPeople }
+  : { tasks: [], projects: [], clients: [], people: [] };
+
 // Wipe the browser's local CACHES only: the Liveblocks offline room cache + the `focus-images-cache`
 // blob store. Both are caches — the room's source of truth is the Liveblocks server and images
 // re-fetch from Supabase — so dropping them just forces a clean re-sync, never losing real data.
 // CRITICAL: the `ctrl-project-backups` IndexedDB store is the user's local BACKUP safety net, NOT a
 // cache — it must survive a reset (it's exactly what you'd restore from if the room were lost). Any
-// db whose name mentions "backup" is protected. localStorage (focus-image binaries + settings) is
-// likewise left untouched.
+// db whose name mentions "backup" is protected. localStorage (focus-image binaries + settings +
+// the Supabase session) is likewise left untouched.
 const PROTECTED_DB = /backup/i;
 async function clearLocalCache(): Promise<void> {
   const names = new Set<string>(['focus-images-cache']);
@@ -63,6 +90,11 @@ async function clearLocalCache(): Promise<void> {
 // it corrupt). We then auto-reset the local cache once and reload. A per-session attempt counter
 // guards against a reload loop — after the one automatic reset we stop and surface a manual button
 // rather than reloading forever.
+//
+// AUTH CAVEAT: when token auth is on, a stall can also mean "the auth stack is down" — and wiping
+// caches is the WRONG medicine for that (it fixes nothing and eats the focus-images cache). The
+// timer consults getAuthHealth(): only a stall with HEALTHY auth earns the wipe; auth trouble
+// renders its own message and the AuthGate's health subscription usually swaps the screen first.
 const RECOVER_MS = 10000;
 const ATTEMPT_KEY = 'lb-recover-attempts';
 
@@ -80,19 +112,43 @@ if (typeof console !== 'undefined') {
 }
 
 const Loading = () => {
-  const [phase, setPhase] = useState<'connecting' | 'stuck' | 'concurrency'>('connecting');
+  const [phase, setPhase] = useState<'connecting' | 'stuck' | 'concurrency' | 'authTrouble'>('connecting');
+  const [authDetail, setAuthDetail] = useState('');
   useEffect(() => {
     // Watch for the concurrency-limit error the moment it appears → switch to the "close windows"
     // message and STOP (never reload — that just opens another connection).
     const poll = window.setInterval(() => { if (concurrencyLimited) setPhase('concurrency'); }, 1200);
-    const t = window.setTimeout(async () => {
+    let t = 0;
+    let rearms = 0;
+    const onExpiry = async () => {
       if (concurrencyLimited) { setPhase('concurrency'); return; }
+      if (AUTH_ENABLED) {
+        const health = getAuthHealth();
+        if (health.status === 'forbidden' || health.status === 'unreachable') {
+          // Auth outage, not a corrupt cache — do NOT wipe anything.
+          setAuthDetail('detail' in health ? health.detail : '');
+          setPhase('authTrouble');
+          return;
+        }
+        // 'unknown' = the auth roundtrip hasn't COMPLETED yet (cold-started
+        // edge function, slow network, a wedged getSession lock). Wiping fixes
+        // none of those — the wipe is medicine for a corrupt ROOM cache, which
+        // can only be the diagnosis once auth has positively succeeded ('ok').
+        // Re-arm once to give slow auth time to land; then show auth copy.
+        if (health.status !== 'ok') {
+          if (rearms < 1) { rearms++; t = window.setTimeout(onExpiry, RECOVER_MS); return; }
+          setAuthDetail('sign-in is not responding');
+          setPhase('authTrouble');
+          return;
+        }
+      }
       const attempts = Number(sessionStorage.getItem(ATTEMPT_KEY) || '0');
       if (attempts >= 1) { setPhase('stuck'); return; } // already auto-reset once → hand off to manual
       sessionStorage.setItem(ATTEMPT_KEY, '1');
       await clearLocalCache();
       window.location.reload();
-    }, RECOVER_MS);
+    };
+    t = window.setTimeout(onExpiry, RECOVER_MS);
     return () => { window.clearInterval(poll); window.clearTimeout(t); };
   }, []);
   const manualReset = async () => { await clearLocalCache(); window.location.reload(); };
@@ -106,6 +162,15 @@ const Loading = () => {
             This room hit its live-connection limit. Close your other Ctrl-Project windows — the main app, the PIP quick-view, and any browser tabs — wait about a minute, then Retry. Your tasks are safe on the server; reloading won't help (it just opens another connection).
           </div>
           <button onClick={() => window.location.reload()} style={btn}>Retry</button>
+        </>
+      ) : phase === 'authTrouble' ? (
+        <>
+          <div style={{ fontSize: 15, color: '#ccc' }}>Sign-in problem</div>
+          <div style={{ fontSize: 13, color: '#7a7a7a', maxWidth: 360, lineHeight: 1.5 }}>
+            The room can't authenticate right now{authDetail ? ` (${authDetail})` : ''}. Your tasks are safe on the server and your local backup is untouched. Retry in a moment, or sign out and back in.
+          </div>
+          <button onClick={() => window.location.reload()} style={btn}>Retry</button>
+          <button onClick={() => { void signOut().then(() => window.location.reload()); }} style={{ ...btn, background: '#3a3a3a' }}>Sign out</button>
         </>
       ) : phase === 'stuck' ? (
         <>
@@ -129,50 +194,227 @@ const Connected = () => {
   return <Shell />;
 };
 
-const Missing = () => (
+const Missing = ({ what, hint }: { what: string; hint: string }) => (
   <div style={{ minHeight: '100vh', background: '#282828', color: 'white', padding: 40, fontFamily: 'sans-serif' }}>
-    <h2>Missing Liveblocks key</h2>
-    <p>Set <code>VITE_LIVEBLOCKS_PUBLIC_KEY</code> in <code>.env.local</code> and restart the dev server.</p>
+    <h2>{what}</h2>
+    <p dangerouslySetInnerHTML={{ __html: hint }} />
   </div>
 );
 
+// The providers subtree — identical for both auth modes except for HOW the
+// Liveblocks client authenticates.
+const Providers = ({ member }: { member: Membership | null }) => (
+  <MembershipContext.Provider value={member}>
+    <LiveblocksProvider {...(AUTH_ENABLED
+      ? { authEndpoint: () => liveblocksAuthEndpoint(roomId) }
+      : { publicApiKey: publicApiKey! })}
+    >
+      <RoomProvider
+        id={roomId}
+        initialPresence={{ cursor: null }}
+        initialStorage={{
+          ...seedData,
+          // Focus-mode storage is metadata-only. Image binaries live in browser
+          // localStorage to keep each Liveblocks key under the per-value size cap.
+          focusBriefs: {},
+          focusSubtasks: {},
+          focusImages: {},
+          focusReferences: {},
+          // Image-folder definitions per bucket. Bucket key = projectKey, taskKey,
+          // or `wip:${projectKey}`. Each entry is an ordered list of folders.
+          // Images carry an optional `folderId` that points into this list — null /
+          // missing = root of the bucket.
+          focusImageFolders: {},
+          // Theme colours are shared across every surface (desktop / PIP / phone) so they
+          // cannot drift the way per-device localStorage did. Only seeds a NEW room; existing
+          // rooms have no `theme` key and fall back to the localStorage cache then defaults,
+          // and get one written the first time a colour is changed in Settings.
+          theme: { bg: '#1c1b19', accent: '#8465ff' },
+        }}
+      >
+        <ClientSideSuspense fallback={<Loading />}>
+          <Connected />
+        </ClientSideSuspense>
+      </RoomProvider>
+    </LiveblocksProvider>
+  </MembershipContext.Provider>
+);
+
+// ---------------------------------------------------------------------------
+// AuthGate — sits ABOVE every provider so no room connection is opened until
+// the caller is a verified member. Three-and-a-half states, but the happy
+// path (invite in hand or session cached) never shows a middle screen: a
+// stashed invite token is auto-redeemed the moment auth lands.
+
+type GatePhase =
+  | { k: 'boot' }
+  | { k: 'signedOut' }
+  | { k: 'invite'; token: string }
+  | { k: 'checking' }
+  | { k: 'noAccess'; email: string }
+  | { k: 'member'; member: Membership }
+  | { k: 'trouble'; detail: string };
+
+const AuthGate = () => {
+  const [phase, setPhase] = useState<GatePhase>({ k: 'boot' });
+  const evaluatingRef = useRef(false);
+  // A SIGNED_IN that arrives while an evaluate is already in flight must not
+  // be silently dropped (the in-flight one may be deciding on stale state) —
+  // park it and re-run once the current pass finishes.
+  const pendingRef = useRef<Session | null | undefined>(undefined);
+
+  const evaluate = useCallback(async (session: Session | null) => {
+    if (evaluatingRef.current) { pendingRef.current = session; return; }
+    evaluatingRef.current = true;
+    try {
+      const stashedToken = captureInviteToken();
+      if (!session) {
+        setPhase(stashedToken ? { k: 'invite', token: stashedToken } : { k: 'signedOut' });
+        return;
+      }
+      setPhase({ k: 'checking' });
+      let result = await fetchMembership(session.user.id);
+      // Happy-path auto-redeem: signed in + token in hand + not a member yet →
+      // join silently, then re-check. Failures fall through to NoAccess where
+      // the reason is visible and the paste field offers a way forward.
+      if (result.kind === 'none' && stashedToken) {
+        try {
+          await redeemInviteAuthed(stashedToken);
+          clearInviteToken();
+        } catch { /* invalid/expired token → NoAccess below */ }
+        // Re-check EVEN when redeem threw: a racing window (main + PIP) may
+        // have completed the join first, making this window's failure moot.
+        result = await fetchMembership(session.user.id);
+      }
+      if (result.kind === 'error') {
+        setPhase({ k: 'trouble', detail: result.detail });
+      } else if (result.kind === 'none') {
+        setPhase({ k: 'noAccess', email: session.user.email || 'unknown' });
+      } else {
+        clearInviteToken(); // member + leftover token = already redeemed or moot
+        setPhase({ k: 'member', member: result.member });
+      }
+    } finally {
+      evaluatingRef.current = false;
+      if (pendingRef.current !== undefined) {
+        const next = pendingRef.current;
+        pendingRef.current = undefined;
+        void evaluate(next);
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!supabase) return;
+    // Strip OAuth debris (?code=&state=) once supabase-js has done its
+    // exchange — a bookmarked/refreshed code retriggers stale exchanges.
+    const cleanOAuthParams = () => {
+      try {
+        const url = new URL(window.location.href);
+        if (url.searchParams.has('code')) {
+          url.searchParams.delete('code');
+          url.searchParams.delete('state');
+          window.history.replaceState({}, '', url.pathname + (url.search || ''));
+        }
+      } catch { /* ignore */ }
+    };
+
+    supabase.auth.getSession().then(({ data }) => { cleanOAuthParams(); void evaluate(data.session); });
+
+    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === 'SIGNED_OUT') {
+        setPhase({ k: 'signedOut' });
+      } else if (event === 'SIGNED_IN') {
+        cleanOAuthParams();
+        // Dedupe: SIGNED_IN also fires on tab refocus; don't re-gate a
+        // rendered member for the same user.
+        setPhase((p) => {
+          if (p.k === 'member' && p.member.user_id === session?.user?.id) return p;
+          void evaluate(session);
+          return p.k === 'member' ? p : { k: 'checking' };
+        });
+      }
+      // TOKEN_REFRESHED / USER_UPDATED need no re-gate.
+    });
+
+    // Membership revoked mid-session: liveblocks-auth starts returning 403,
+    // the health store flips to 'forbidden', and we re-evaluate — which tears
+    // down the providers and lands on NoAccess/SignIn.
+    const offHealth = onAuthHealth((h) => {
+      if (h.status === 'forbidden') {
+        void supabase.auth.getSession().then(({ data }) => evaluate(data.session));
+      }
+    });
+
+    return () => { sub.subscription.unsubscribe(); offHealth(); };
+  }, [evaluate]);
+
+  switch (phase.k) {
+    case 'boot':
+    case 'checking':
+      return (
+        <div style={{ minHeight: '100vh', background: 'var(--app-bg, #1c1b19)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#666', fontFamily: 'sans-serif', fontSize: 14 }}>
+          Connecting…
+        </div>
+      );
+    case 'signedOut':
+      return <SignInScreen onHaveInvite={(token) => setPhase({ k: 'invite', token })} />;
+    case 'invite':
+      return (
+        <InviteJoinScreen
+          token={phase.token}
+          onDone={() => { /* signInWithPassword inside redeem fires SIGNED_IN → evaluate */ }}
+          onBail={() => setPhase({ k: 'signedOut' })}
+        />
+      );
+    case 'noAccess':
+      return (
+        <NoAccessScreen
+          email={phase.email}
+          onUseInvite={async (token) => {
+            // Returns the error INLINE — an expired/used/wrong-email invite is
+            // a fact about the invite, and showing it as "can't reach the
+            // sign-in server" would send the user chasing a phantom outage.
+            try {
+              await redeemInviteAuthed(token);
+              clearInviteToken();
+              const { data } = await supabase!.auth.getSession();
+              void evaluate(data.session);
+              return null;
+            } catch (e) {
+              return e instanceof Error ? e.message : String(e);
+            }
+          }}
+        />
+      );
+    case 'trouble':
+      return (
+        <AuthTroubleScreen
+          detail={phase.detail}
+          onRetry={() => {
+            setPhase({ k: 'boot' });
+            void supabase!.auth.getSession().then(({ data }) => evaluate(data.session));
+          }}
+        />
+      );
+    case 'member':
+      return <Providers member={phase.member} />;
+  }
+};
+
+const Root = () => {
+  if (!roomIdValid) {
+    return <Missing what="Unknown room id" hint={`<code>VITE_ROOM_ID=${roomId}</code> is not in the room allowlist. Refusing to connect — a typo here would silently create and seed a new empty room.`} />;
+  }
+  if (AUTH_ENABLED) return <AuthGate />;
+  if (!publicApiKey) {
+    return <Missing what="Missing Liveblocks key" hint="Set <code>VITE_LIVEBLOCKS_PUBLIC_KEY</code> in <code>.env.local</code> and restart the dev server." />;
+  }
+  return <Providers member={null} />;
+};
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    {publicApiKey ? (
-      <LiveblocksProvider publicApiKey={publicApiKey}>
-        <RoomProvider
-          id={roomId}
-          initialPresence={{ cursor: null }}
-          initialStorage={{
-            tasks: initialTasks,
-            projects: initialProjects,
-            clients: initialClients,
-            people: initialPeople,
-            // Focus-mode storage is metadata-only. Image binaries live in browser
-            // localStorage to keep each Liveblocks key under the per-value size cap.
-            focusBriefs: {},
-            focusSubtasks: {},
-            focusImages: {},
-            focusReferences: {},
-            // Image-folder definitions per bucket. Bucket key = projectKey, taskKey,
-            // or `wip:${projectKey}`. Each entry is an ordered list of folders.
-            // Images carry an optional `folderId` that points into this list — null /
-            // missing = root of the bucket.
-            focusImageFolders: {},
-            // Theme colours are shared across every surface (desktop / PIP / phone) so they
-            // cannot drift the way per-device localStorage did. Only seeds a NEW room; existing
-            // rooms have no `theme` key and fall back to the localStorage cache then defaults,
-            // and get one written the first time a colour is changed in Settings.
-            theme: { bg: '#1c1b19', accent: '#8465ff' },
-          }}
-        >
-          <ClientSideSuspense fallback={<Loading />}>
-            <Connected />
-          </ClientSideSuspense>
-        </RoomProvider>
-      </LiveblocksProvider>
-    ) : (
-      <Missing />
-    )}
+    <Root />
   </React.StrictMode>
 );

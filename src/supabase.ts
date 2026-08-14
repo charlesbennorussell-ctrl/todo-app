@@ -7,7 +7,19 @@ const url = import.meta.env.VITE_SUPABASE_URL as string | undefined;
 const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string | undefined;
 export const SUPABASE_BUCKET = (import.meta.env.VITE_SUPABASE_BUCKET as string | undefined) || 'focus-images';
 
-export const supabase = (url && anonKey) ? createClient(url, anonKey) : null;
+// PKCE is the flow that works across all three surfaces (SPA redirect, iOS
+// standalone PWA in-app sheet, Tauri webview password sign-in): the code
+// verifier lives in this context's localStorage and detectSessionInUrl
+// auto-exchanges the ?code= that OAuth redirects back with. persistSession
+// keeps the session in localStorage (sb-<ref>-auth-token) across restarts.
+export const supabase = (url && anonKey) ? createClient(url, anonKey, {
+  auth: {
+    flowType: 'pkce',
+    detectSessionInUrl: true,
+    persistSession: true,
+    autoRefreshToken: true,
+  },
+}) : null;
 
 // Upload a Blob to the focus-images bucket. Returns the public URL on success. Throws on
 // failure so the caller can surface the error to the user.

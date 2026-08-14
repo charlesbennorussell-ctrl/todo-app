@@ -1,0 +1,27 @@
+# Supabase free-tier projects auto-pause after ~7 idle days. Since auth,
+# membership, and Liveblocks token minting all live there, a paused project
+# bricks sign-in for every surface at once (and presents as a confusing auth
+# error, not "server asleep"). Two cheap pings a day keep it warm.
+#
+# The anon key is already public by design (committed in .env.production);
+# the REST root just needs to see *any* request to count as activity.
+name: Supabase keep-alive
+
+on:
+  schedule:
+    - cron: '17 6,18 * * *' # twice daily, off-peak minutes to dodge cron rush
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping Supabase REST API
+        run: |
+          ANON_KEY="$(curl -s https://raw.githubusercontent.com/charlesbennorussell-ctrl/todo-app/master/.env.production | grep VITE_SUPABASE_ANON_KEY | cut -d= -f2)"
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -H "apikey: ${ANON_KEY}" \
+            "https://klfbowcuchphysnzioar.supabase.co/rest/v1/")
+          echo "Supabase responded with HTTP ${STATUS}"
+          # 200/401/404 all prove the project is awake; only fail on network death.
+          if [ "$STATUS" = "000" ]; then exit 1; fi

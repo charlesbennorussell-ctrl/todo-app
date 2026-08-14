@@ -46,6 +46,7 @@ import { List, FolderTree, SquareKanban, Plus, Trash2, Pencil, X } from 'lucide-
 import { MdOutlineCalendarMonth } from 'react-icons/md';
 import type { Task, Project, Client, Person, ListId, SectionId } from './data';
 import { LIST_TITLES, LISTS, PERSONAL_CLIENT_ID, formatDeadline, isLateDeadline, todayISO } from './data';
+import { useMembership, projectAllowed } from './auth';
 import {
   computeCalendarDistribution, makeCpCompare, TaskCheckbox, Arrowhead, DeadlineArrow,
   addDaysToDate, dateToISO, useSharedTheme,
@@ -460,7 +461,9 @@ export default function MobileApp() {
   // device instead of guessing.
   const [diag, setDiag] = useState(false);
   const holdRef = useRef<number | null>(null);
-  const currentUserShort = readUserShort();
+  // Verified identity when the auth gate is on; legacy localStorage otherwise.
+  const membership = useMembership();
+  const currentUserShort = membership?.person_short || readUserShort();
   if (DEBUG && typeof window !== 'undefined') (window as any).__mtasks = tasks;
   const listSequence = useMemo(readListSequence, []);
   const sortByCP = useMemo(readSortByCP, []);
@@ -585,8 +588,8 @@ export default function MobileApp() {
 
   // ── Distribution (the desktop Focus engine, verbatim) ──────────────────────
   const calendarTasks = useMemo(
-    () => tasks.filter((t) => !t.trashed && (!isPrivateTask(t) || t.assignees.includes(currentUserShort))),
-    [tasks, currentUserShort]
+    () => tasks.filter((t) => !t.trashed && (!isPrivateTask(t) || t.assignees.includes(currentUserShort)) && projectAllowed(membership, t.projectId)),
+    [tasks, currentUserShort, membership]
   );
   // Re-render each minute so "today" boundaries and completion-hiding stay honest overnight.
   useEffect(() => { const h = window.setInterval(() => setClockTick((n) => n + 1), 60000); return () => window.clearInterval(h); }, []);
