@@ -616,26 +616,16 @@ function CustomScroll({
           inner scroll element so labels stay fixed while content scrolls. */}
       <StickyOverlay scrollElRef={ref} />
       {bandIndicator && bandBelow && (
-        // The drop beacon speaks the TODAY-card language: the same accent wash
-        // on the app background, accent text — and it's tall (about three card
-        // slots) so it reads as a destination, not a tooltip. Below the label,
-        // the app's own deadline arrow (line + solid head) rotated to point
-        // DOWN at where the drop will land.
+        // Drop hint: the SAME accent highlight the drop targets use, pinned to
+        // the bottom of the column at about two card heights, fading upward —
+        // a quiet "your drop lands below this fold" cue. No text, no arrow.
         <div
-          className="pointer-events-none absolute bottom-[4px] left-[22px] right-[36px] z-40 rounded-[3.333px] h-[170px] flex flex-col items-center justify-center gap-[10px]"
+          data-drop-beacon={bandIndicator.list}
+          className="pointer-events-none absolute bottom-[4px] left-[22px] right-[36px] z-40 rounded-[3.333px] h-[118px]"
           style={{
-            backgroundColor: 'var(--app-bg)',
-            boxShadow: '0 0 22px rgb(from var(--app-accent) r g b / 0.35)',
+            background: 'linear-gradient(to bottom, transparent, rgb(from var(--app-accent) r g b / 0.1) 45%, rgb(from var(--app-accent) r g b / 0.16))',
           }}
-        >
-          <div className="absolute inset-0 rounded-[3.333px]" style={{ backgroundColor: 'rgb(from var(--app-accent) r g b / 0.1)' }} />
-          <span className="relative font-['Univers_BQ:55_Regular',sans-serif] text-[14px] text-[var(--app-accent)]">{bandIndicator.label}</span>
-          {/* DeadlineArrow geometry (18x12 line + solid head), turned vertical. */}
-          <svg className="relative" width="12" height="18" viewBox="0 0 12 18" fill="none">
-            <line x1="6" y1="0" x2="6" y2="14" style={{ stroke: 'var(--app-accent)' }} strokeWidth="1" />
-            <polygon points="2,14 10,14 6,18" style={{ fill: 'var(--app-accent)' }} />
-          </svg>
-        </div>
+        />
       )}
       {hasOverflow && (
         <>
@@ -2175,7 +2165,7 @@ function SectionDroppable({ id, children }: { id: string; children: React.ReactN
     <div
       ref={setNodeRef}
       className="min-h-[37px] w-full pb-[37px] rounded-[3px] transition-colors duration-200 ease-in-out"
-      style={taskOver ? { backgroundColor: 'rgba(255, 255, 255, 0.07)' } : undefined}
+      style={taskOver ? { backgroundColor: 'rgb(from var(--app-accent) r g b / 0.1)' } : undefined}
     >
       {children}
     </div>
@@ -3352,7 +3342,7 @@ function Proj2ColumnDroppable({ listId, children }: { listId: ListId; children: 
     <div
       ref={setNodeRef}
       className="flex-1 min-w-[280px] flex flex-col min-h-0 overflow-hidden transition-colors duration-150"
-      style={projectHover ? { backgroundColor: 'rgba(255, 255, 255, 0.07)' } : undefined}
+      style={projectHover ? { backgroundColor: 'rgb(from var(--app-accent) r g b / 0.1)' } : undefined}
     >
       {children}
     </div>
@@ -4079,7 +4069,7 @@ function CalendarDayDroppable({ id, children, isEmpty, className = '', slotHeigh
     <div
       ref={setNodeRef}
       className={`${isEmpty ? 'min-h-[37px]' : ''} ${className} rounded-[3px] transition-colors duration-200 ease-in-out`}
-      style={taskOver ? { backgroundColor: 'rgba(255, 255, 255, 0.07)' } : undefined}
+      style={taskOver ? { backgroundColor: 'rgb(from var(--app-accent) r g b / 0.1)' } : undefined}
     >
       {children}
       {/* Empty band: when a same-category drag hovers here (category-lock has already routed
