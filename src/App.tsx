@@ -5745,7 +5745,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
       <div className="flex-1 min-h-0 overflow-x-hidden">
         <div className="grid grid-cols-4 gap-x-5 h-full">
           {/* COLUMN 1 — config: version, ordering, shortcuts, case. */}
-          <div className="min-w-0 h-full"><CustomScroll innerClassName="flex flex-col gap-[34px] pt-[2px] pb-[106px]">
+          <div className="min-w-0 h-full flex flex-col"><CustomScroll innerClassName="flex flex-col gap-[34px] pt-[2px] pb-[106px]">
             <div>
               {sectionTitle('About')}
               <div className="px-[35px] pt-[4px] flex flex-col gap-2 text-[13px]">
@@ -5834,7 +5834,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
           </CustomScroll></div>
           {/* COLUMN 2 — people & clients. (Members/account management lives on
               the Team page now — click your avatar in the nav rail.) */}
-          <div className="min-w-0 h-full"><CustomScroll innerClassName="flex flex-col gap-[34px] pt-[2px] pb-[106px]">
+          <div className="min-w-0 h-full flex flex-col"><CustomScroll innerClassName="flex flex-col gap-[34px] pt-[2px] pb-[106px]">
             <div>
               {sectionTitle('People', <AddPlus onClick={onAddPerson} />)}
               <div className="pt-[4px]">
@@ -5871,7 +5871,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
           </CustomScroll></div>
 
           {/* COLUMN 3 — Trash. */}
-          <div className="min-w-0 h-full"><CustomScroll innerClassName="flex flex-col gap-[34px] pt-[2px] pb-[106px]">
+          <div className="min-w-0 h-full flex flex-col"><CustomScroll innerClassName="flex flex-col gap-[34px] pt-[2px] pb-[106px]">
             <div>
               {sectionTitle('Trash', <span className="text-[#666] text-[12px]">{trashedTasks.length}</span>)}
               <div className="pt-[4px]">
@@ -5897,7 +5897,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
             </div>
           </CustomScroll></div>
           {/* COLUMN 4 — Completed & collapsible Debug. */}
-          <div className="min-w-0 h-full"><CustomScroll innerClassName="flex flex-col gap-[34px] pt-[2px] pb-[106px]">
+          <div className="min-w-0 h-full flex flex-col"><CustomScroll innerClassName="flex flex-col gap-[34px] pt-[2px] pb-[106px]">
             <div>
               {sectionTitle('Completed', <span className="text-[#666] text-[12px]">{completedTasks.length}</span>)}
               <div className="pt-[4px]">
