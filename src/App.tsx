@@ -5903,20 +5903,6 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
               the Team page now — click your avatar in the nav rail.) */}
           <div className="min-w-0 h-full flex flex-col"><CustomScroll innerClassName="flex flex-col gap-[37px] pb-[37px]">
             <div>
-              {sectionTitle('People', <AddPlus onClick={onAddPerson} />)}
-              <div>
-                {people.map((p) => (
-                  <SettingsRow key={p.id}>
-                    <span className="inline-flex items-baseline min-w-0">
-                      <EditableText value={p.name} onChange={(v) => onRenamePerson(p.id, v)} className={`${bodyFont} text-white`} autoFocus={p.id === newId} placeholder="New Person" />
-                      {p.short && (<><span className="w-[6px]" /><ShortInBrackets value={p.short} onChange={(v) => onRenamePersonShort(p.id, v)} /></>)}
-                    </span>
-                    <TrashBtn onClick={() => onDeletePerson(p.id)} />
-                  </SettingsRow>
-                ))}
-              </div>
-            </div>
-            <div>
               {sectionTitle('Clients Naming', <AddPlus onClick={onAddClient} />)}
               <div>
                 {clients.map((c) => (
@@ -7867,6 +7853,9 @@ export default function App() {
   const [focusClientId, setFocusClientId] = useState<string | null>(null);
   // Focus-page live search query — filters the day columns + the Milestones column.
   const [focusSearch, setFocusSearch] = useState('');
+  // Assignees filter (Focus left column): selected shorts. Intersection
+  // semantics — with ['P','B'] selected, only tasks assigned to BOTH show.
+  const [assigneeFilter, setAssigneeFilter] = useState<string[]>([]);
   // Milestone filter — clicking a milestone (Milestones column or a "Coming Up" card) makes
   // IT the active filter: the milestone row highlights with an × (same visual language as the
   // client/project filter) and the day columns narrow to its project — or, when it has no
@@ -9660,14 +9649,18 @@ export default function App() {
   const focusStripCells = useMemo(() => {
     const anchor = new Date();
     anchor.setHours(0, 0, 0, 0);
+    // Assignees filter: intersection — every selected short must be on the task.
+    const base = assigneeFilter.length
+      ? calendarTasks.filter((t) => assigneeFilter.every((s) => t.assignees.includes(s)))
+      : calendarTasks;
     // 9-day horizon: Today (0) + Tomorrow (1) + the "Next" column's week (2..8).
-    return computeCalendarDistribution(calendarTasks, anchor, 9, listSequence, projects, clients, sortByCP, 60, 30);
+    return computeCalendarDistribution(base, anchor, 9, listSequence, projects, clients, sortByCP, 60, 30);
     // sortTick is a REQUIRED dep, not noise: the started-hold (STARTED_GRACE_MS) is time-based,
     // so the distribution has to be recomputed when the clock crosses it. toggleTask pulses
     // sortTick at 15.1s and the 60s interval backstops it. Without this the memo only ever
     // re-ran when `tasks` changed, so a started task sat still until some unrelated edit.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [calendarTasks, listSequence, projects, clients, sortByCP, sortTick]);
+  }, [calendarTasks, assigneeFilter, listSequence, projects, clients, sortByCP, sortTick]);
 
   // Settings → Trash column: every soft-deleted task (newest first by trashedAt). Personal
   // scoping still applies — other users don't see your trashed Personal items.
@@ -10776,7 +10769,7 @@ export default function App() {
             </div>
           );
           const focusMilestonesHeader = (
-            <div className="group shrink-0 h-[37px] flex items-center gap-2 px-[31px]">
+            <div className="group shrink-0 h-[37px] mb-[12px] flex items-center gap-2 px-[31px]">
               <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">Milestones</p>
               <button type="button" onClick={() => { const id = `task-${Date.now()}`; const ms: Task = { id, title: '', type: 'scheduled', assignees: currentUserShort ? [currentUserShort] : [], completed: false, list: 'work', section: 'today', deadline: todayISO(), order: 0, createdAt: Date.now(), ...(focusProjectId ? { projectId: focusProjectId } : focusClientId ? { clientId: focusClientId } : {}) }; setTasks((prev) => [...prev, ms]); setNewId(id); openEdit(ms); }} className="opacity-0 group-hover:opacity-100 text-[#656464] hover:text-white transition-opacity" aria-label="Add milestone"><Plus size={14} /></button>
             </div>
@@ -10785,7 +10778,7 @@ export default function App() {
           // ProjectsHeaderDropZone carries a 74px margin meant for the split column, which would
           // blow a double gap here. Clicking it still clears the active filter.
           const focusClientsHeader = (
-            <div onClick={focusClearFilter} className={`shrink-0 h-[37px] flex items-center gap-2 px-[31px] ${focusClearFilter ? 'cursor-pointer' : ''}`}>
+            <div onClick={focusClearFilter} className={`shrink-0 h-[37px] mb-[12px] flex items-center gap-2 px-[31px] ${focusClearFilter ? 'cursor-pointer' : ''}`}>
               <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">Clients + Projects</p>
             </div>
           );
@@ -10885,6 +10878,32 @@ export default function App() {
                     <div className="shrink-0" style={{ height: stackGap }} aria-hidden />
                     {focusClientsHeader}
                     {focusClientsList}
+                    <div className="shrink-0" style={{ height: stackGap }} aria-hidden />
+                    {/* Assignees filter — click a person to see only their tasks in the
+                        three day columns; multiple selected = tasks carrying ALL of
+                        them. Clicking the header clears the whole filter. */}
+                    <div
+                      onClick={assigneeFilter.length ? () => setAssigneeFilter([]) : undefined}
+                      className={`shrink-0 h-[37px] mb-[12px] flex items-center gap-2 px-[31px] ${assigneeFilter.length ? 'cursor-pointer' : ''}`}
+                    >
+                      <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">Assignees</p>
+                      {assigneeFilter.length > 0 && <X size={14} className="text-[#a8a8a8]" />}
+                    </div>
+                    {people.map((p) => {
+                      const active = assigneeFilter.includes(p.short);
+                      return (
+                        <button
+                          key={p.id}
+                          type="button"
+                          onClick={() => setAssigneeFilter((prev) => (prev.includes(p.short) ? prev.filter((s) => s !== p.short) : [...prev, p.short]))}
+                          className={`group shrink-0 h-[37px] w-full text-left box-border flex flex-row gap-2 items-center px-[31px] transition-colors ${active ? '' : 'hover:bg-white/[0.03]'}`}
+                        >
+                          <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis ${active ? 'text-white' : 'text-[#656464]'}`}>{p.name || '(unnamed)'}</span>
+                          <span className={`inline-flex items-center px-[8px] py-[1px] rounded-full ${active ? 'bg-[var(--app-accent)] text-white' : 'bg-[#151412] text-[#656464]'} text-[12px]`}>{p.short}</span>
+                          {active && <X size={14} className="ml-auto text-[#a8a8a8]" />}
+                        </button>
+                      );
+                    })}
                     <div className="shrink-0" style={{ height: stackGap }} aria-hidden />
                   </div>
                 )}
