@@ -737,32 +737,41 @@ function CustomScroll({
       // boundary is.
       let to = from;
       let best = Infinity;
-      const consider = (candidate: number) => {
+      // A candidate outside the scroll range is UNREACHABLE and must be dropped,
+      // not clamped. Clamping quietly turned every out-of-range candidate into
+      // maxScroll, which is why the bottom of a column kept resting with its top
+      // card sliced by the label: maxScroll is wherever the content happens to
+      // end, and that is almost never a card boundary. The tail below supplies
+      // the room to reach a real one instead.
+      const consider = (candidate: number, force = false) => {
+        if (!force && (candidate < -0.5 || candidate > maxScroll + 0.5)) return;
         const clamped = Math.max(0, Math.min(maxScroll, candidate));
         const d = Math.abs(clamped - from);
         if (d < best) { best = d; to = clamped; }
       };
-      consider(0);
-      consider(maxScroll);
+      // The very top IS a legal rest — the first category label lives there.
+      // The very bottom is deliberately NOT one.
+      consider(0, true);
       // Cards, Add placeholders and client sub-labels all sit on the baseline,
       // so each is a legal rest. Category band headers are deliberately EXCLUDED:
       // they are `sticky top-0`, so once scrolled past, their rect reports the
       // container's own top and every one of them would look like a boundary
       // 4px away — a permanent phantom that would drag the column on every settle.
-      for (const box of el.querySelectorAll<HTMLElement>('[data-cal-card], [data-add-card], [data-group-name]')) {
-        if (box.getBoundingClientRect().height < 1) continue;   // group markers can be zero-height
+      // TASKS only. Resting on a sub-label would still leave the eye on a
+      // heading rather than work, and the sticky bar already names the group.
+      for (const box of el.querySelectorAll<HTMLElement>('[data-cal-card], [data-add-card]')) {
         consider(from + (box.getBoundingClientRect().top - 4 - restLine));
       }
       // Nothing card-shaped in this column (Settings, the filter panel) → the
       // nearest candidate is an extreme, so this correctly no-ops mid-scroll.
       //
-      // The 34px ceiling keeps this a SETTLE rather than a jump. A within-slot
-      // correction is never more than half a slot (30 on the calendar's 60,
-      // 18.5 on focus's 37), so the cap never blocks a real snap — it only
-      // declines the blank stretch at a category break, where the nearest edge
-      // can be 45px+ away and yanking the view there reads as a lurch. Resting
-      // in that gap shows empty space, not a sliced card, so it is harmless.
-      if (best === Infinity || best < 0.5 || best > 45) return;
+      // NO distance ceiling. Earlier versions capped the correction to keep it a
+      // "settle rather than a jump", but that cap declined the only two states
+      // worth fixing: a card left sliced by the sticky label, and a rest inside
+      // the gap between categories, where the column simply froze mid-nothing.
+      // A large bound remains purely as a sanity guard against a degenerate
+      // layout, not as a style choice.
+      if (best === Infinity || best < 0.5 || best > 400) return;
       if (typeof document !== 'undefined' && document.hidden) { el.scrollTop = to; return; }
       const t0 = performance.now();
       const step = (now: number) => {
@@ -851,7 +860,7 @@ function CustomScroll({
             end makes that upward snap reachable. Only when the column already
             overflows — adding it unconditionally would manufacture a scrollbar
             on columns that fit. */}
-        {hasOverflow && <div style={{ height: CAL_SLOT + GRID }} aria-hidden />}
+        {hasOverflow && <div style={{ height: CAL_SLOT * 2 + GRID }} aria-hidden />}
       </div>
       {/* Sticky label overlay — pinned at the top of the column, crossfades date
           and category labels by opacity as the user scrolls. Inert if the
@@ -1231,14 +1240,24 @@ export function FilterGlyph() {
   return <Filter size={12} className="shrink-0 text-[#656464]" aria-hidden />;
 }
 
-export function DeadlineArrow({ dim = false, small = false, color }: { dim?: boolean; small?: boolean; color?: string }) {
+// A completed card speaks with ONE voice. Previously the title dropped to gray
+// while the meta, the deadline and the arrows kept their Today purple, so a
+// finished card came out half-and-half on desktop AND phone. Everything on a
+// finished card now takes this single tint: on a Today card a faint wash of the
+// accent — brighter than the card's own 10% ground so it stays readable, dim
+// enough to read as done — and the neutral gray everywhere else. Derived from
+// the accent variable, so it follows the colour picker on every surface.
+export const doneTint = (isTodayCard: boolean) =>
+  (isTodayCard ? 'rgb(from var(--app-accent) r g b / 0.55)' : '#383838');
+
+export function DeadlineArrow({ dim = false, small = false, color, dimColor = '#383838' }: { dim?: boolean; small?: boolean; color?: string; dimColor?: string }) {
   // Custom inline SVG so we can shorten the LINE while keeping the arrowhead size and the
   // line's stroke thickness constant. `small` (responsive density 3+) cuts the line length
   // by ~50% (line goes from x=0..14 → x=7..14). Total wrapper width drops 18 → 11.
   // -mt-[2px] aligns the icon to the text's cap-to-baseline band, matching TaskCheckbox.
   // `dim` mirrors the muted palette used for completed tasks.
   // `color` overrides the resting tone (milestone purple etc.); dim always wins.
-  const fill = dim ? '#383838' : (color || '#656464');
+  const fill = dim ? dimColor : (color || '#656464');
   const wrapW = small ? 11 : 18;
   // Coordinates inside a virtual 18×12 grid: arrowhead at right, line on its left.
   const lineStart = small ? 7 : 0;
@@ -3780,7 +3799,7 @@ function ResourceDeleteModal({
   );
 }
 
-function EditableText({ value, onChange, className, autoFocus = false, placeholder, onEditingChange, onDiscardIfEmpty, onEnter }: { value: string; onChange: (v: string) => void; className?: string; autoFocus?: boolean; placeholder?: string; onEditingChange?: (editing: boolean) => void; onDiscardIfEmpty?: () => void; onEnter?: () => void }) {
+function EditableText({ value, onChange, className, autoFocus = false, placeholder, onEditingChange, onDiscardIfEmpty, onEnter, style, placeholderColor }: { value: string; onChange: (v: string) => void; className?: string; autoFocus?: boolean; placeholder?: string; onEditingChange?: (editing: boolean) => void; onDiscardIfEmpty?: () => void; onEnter?: () => void; style?: React.CSSProperties; placeholderColor?: string }) {
   const [editing, setEditingState] = useState(autoFocus);
   const setEditing = (v: boolean) => { setEditingState(v); onEditingChange?.(v); };
   useEffect(() => { if (autoFocus) onEditingChange?.(true); }, []);
@@ -3832,8 +3851,8 @@ function EditableText({ value, onChange, className, autoFocus = false, placehold
         if (e.key === 'Escape') { e.preventDefault(); (e.currentTarget as HTMLSpanElement).textContent = value; setEditing(false); }
       }}
       className={`outline-none cursor-text ${className || ''}`}
-      style={value ? undefined : { minWidth: '1px' }}
-    >{value || (placeholder && !editing ? <span className="text-[#383838]">{placeholder}</span> : null)}</span>
+      style={{ ...(value ? null : { minWidth: '1px' }), ...(style || null) }}
+    >{value || (placeholder && !editing ? <span className="text-[#383838]" style={placeholderColor ? { color: placeholderColor } : undefined}>{placeholder}</span> : null)}</span>
   );
 }
 
@@ -4894,6 +4913,11 @@ function CalendarCardBody({ task, projects, clients, taskOrder = 'ptc', isTodayC
   const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID || task.list === 'personal';
   const titleColor = task.completed ? 'text-[#383838]' : isScheduled ? 'text-[var(--app-accent)]' : isTodayCard ? 'text-white' : (isNext || isFuture) ? 'text-[#a8a8a8]' : 'text-white';
   const metaColor = (isScheduled || isTodayCard) ? 'text-[var(--app-accent)]' : 'text-[#656464]';
+  // Same single tint the live card uses — see doneTint. Without this the ghost
+  // reverts to half-gray the instant you lift a completed card.
+  const done = task.completed;
+  const doneCol = doneTint(isTodayCard);
+  const doneStyle = done ? { color: doneCol } : undefined;
   // Whether the client lives ON the first row (combined with project per the slot helper) —
   // applies to 'cpt' and 'tcp' modes where client + project sit adjacent. In 'ptc' the client
   // stays on the second row alongside assignees + date (legacy two-row calendar layout).
@@ -4909,17 +4933,17 @@ function CalendarCardBody({ task, projects, clients, taskOrder = 'ptc', isTodayC
       <div className={`flex flex-row items-center gap-[10px] ${stacked ? 'h-[22px] shrink-0' : ''}`}>
         {!isScheduled && (
           <div className="shrink-0 flex items-center justify-center">
-            <TaskCheckbox completed={task.completed} started={task.started} onToggle={() => {}} accent={isTodayCard ? 'var(--app-accent)' : undefined} />
+            <TaskCheckbox completed={task.completed} started={task.started} onToggle={() => {}} accent={done ? doneCol : isTodayCard ? 'var(--app-accent)' : undefined} />
           </div>
         )}
-        <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleColor}`}>{task.title}</span>
+        <span style={doneStyle} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleColor}`}>{task.title}</span>
       </div>
       <div className={`flex flex-row items-center gap-[6px] ${stacked ? 'h-[22px] shrink-0' : ''}`}>
-        {client && project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap text-[#656464]`}>{client.short}<Arrowhead dim={task.completed} />{project.name}</p>}
-        {client && !project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${metaColor}`}>{client.short}</p>}
-        {!client && project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap text-[#656464]`}>{project.name}</p>}
-        {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={(isScheduled || isTodayCard) ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} />)}
-        {task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${(isScheduled || isTodayCard) ? 'text-[var(--app-accent)]' : isLateDeadline(task.deadline) ? 'text-white' : 'text-[#656464]'}`}>{formatDeadline(task.deadline)}</p>}
+        {client && project && <p style={doneStyle} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap text-[#656464]`}>{client.short}<Arrowhead color={done ? doneCol : undefined} dim={task.completed} />{project.name}</p>}
+        {client && !project && <p style={doneStyle} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${metaColor}`}>{client.short}</p>}
+        {!client && project && <p style={doneStyle} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap text-[#656464]`}>{project.name}</p>}
+        {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={(isScheduled || isTodayCard) ? 'scheduled' : 'todo'} hollow={isPersonal} dimColor={done ? doneCol : undefined} dim={task.completed} />)}
+        {task.deadline && <p style={doneStyle} className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${(isScheduled || isTodayCard) ? 'text-[var(--app-accent)]' : isLateDeadline(task.deadline) ? 'text-white' : 'text-[#656464]'}`}>{formatDeadline(task.deadline)}</p>}
       </div>
     </div>
   );
@@ -5002,6 +5026,16 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
   // because its section is still 'today'. Scheduled/completed/category-dim still win above.
   const titleColor = categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : isScheduled ? 'text-[var(--app-accent)]' : isTodayCard ? 'text-white' : 'text-[#a8a8a8]';
   const metaColor = categoryDimmed ? DIM : (isScheduled || isTodayCard) ? 'text-[var(--app-accent)]' : 'text-[#656464]';
+  // Finished card → ONE tint for every glyph on it. Inline, so it beats whatever
+  // Tailwind colour the element already carries. categoryDimmed still wins: that
+  // is a transient drag state, not the card's own condition.
+  const done = task.completed && !categoryDimmed;
+  const doneCol = doneTint(isTodayCard);
+  const doneStyle = done ? { color: doneCol } : undefined;
+  // A brand-new (still empty) task on a Today card showed its "New Task" dummy
+  // line in the global gray, the one neutral thing left on a purple card.
+  // Feed the same faint accent to the placeholder rule.
+  const placeholderColor = isTodayCard && !categoryDimmed ? doneTint(true) : undefined;
   // Hover controls (+ / trash): on a TODAY card they read purple to match the wash when revealed
   // on card-hover, then flip white when the pointer is directly over the icon. Elsewhere: gray → white.
   const iconColor = isTodayCard && !categoryDimmed ? 'text-[var(--app-accent)]' : 'text-[#5e5e5e]';
@@ -5015,9 +5049,10 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
   const afterTitleSlots = cpSlots.slice(titleSlotIdx + 1);
   const renderMetaSlot = (slot: TaskMetaSlot, key: string) => {
     const cls = `font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : metaColor}`;
-    if (slot === 'cp' && client?.short && project?.name) return <p key={key} className={cls}>{client.short}<Arrowhead dim={task.completed || categoryDimmed} tone={isTodayCard ? 'milestone' : 'default'} color={undefined} />{project.name}</p>;
-    if (slot === 'client' && client?.short) return <p key={key} className={cls}>{client.short}</p>;
-    if (slot === 'project' && project?.name) return <p key={key} className={cls}>{project.name}</p>;
+    const st = doneStyle;
+    if (slot === 'cp' && client?.short && project?.name) return <p key={key} style={st} className={cls}>{client.short}<Arrowhead color={done ? doneCol : undefined} dim={task.completed || categoryDimmed} tone={isTodayCard ? 'milestone' : 'default'} color={undefined} />{project.name}</p>;
+    if (slot === 'client' && client?.short) return <p key={key} style={st} className={cls}>{client.short}</p>;
+    if (slot === 'project' && project?.name) return <p key={key} style={st} className={cls}>{project.name}</p>;
     return null;
   };
   // Source-collapse: outer wrapper uses max-height (CSS can't transition from auto, but it CAN
@@ -5046,7 +5081,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
         <div className={`flex flex-row items-center gap-[10px] ${singleLine ? 'min-w-0 shrink' : stacked ? 'w-full pr-5 h-[22px] shrink-0' : 'w-full pr-5 h-[35px] shrink-0'}`}>
           {!isScheduled && (
             <div onPointerDown={(e) => e.stopPropagation()} className="shrink-0 flex items-center justify-center">
-              <TaskCheckbox completed={task.completed} started={task.started} onToggle={onToggle} accent={isTodayCard && !categoryDimmed ? 'var(--app-accent)' : undefined} />
+              <TaskCheckbox completed={task.completed} started={task.started} onToggle={onToggle} accent={done ? doneCol : isTodayCard && !categoryDimmed ? 'var(--app-accent)' : undefined} />
             </div>
           )}
           {/* TITLE HAS PRIORITY over everything sharing its row. Two separate competitions:
@@ -5081,6 +5116,8 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
               // rapid-entry chain died after one task.
               onEnter={onAddSibling}
               className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleColor}`}
+              style={doneStyle}
+              placeholderColor={placeholderColor}
             />
           </div>
           {/* + hugs the END OF THE TITLE TEXT (not the card's right edge — parked out there
@@ -5119,7 +5156,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
             {afterTitleSlots.map((s, i) => renderMetaSlot(s, `at-${i}`))}
             {/* Deadline arrow — the same glyph list view puts before dates (small variant for
                 the tighter card meta). Milestones get it too, tinted milestone purple. */}
-            {task.deadline && <DeadlineArrow dim={task.completed || (categoryDimmed && !isTodayCard)} color={categoryDimmed ? undefined : (isScheduled || isTodayCard) ? 'var(--app-accent)' : undefined} />}
+            {task.deadline && <DeadlineArrow dim={task.completed || (categoryDimmed && !isTodayCard)} dimColor={done ? doneCol : undefined} color={categoryDimmed ? undefined : (isScheduled || isTodayCard) ? 'var(--app-accent)' : undefined} />}
             {/* Overdue dates render WHITE (red read as alarmist next to the purple wash).
                 The date chip is interactive: dblclick kicks it +1 day; right-click opens the
                 mini date menu. pointer-down stays local so pressing the date never starts a drag. */}
@@ -5129,6 +5166,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
                 onDoubleClick={onRescheduleDate ? (e) => { e.stopPropagation(); onRescheduleDate('shiftForward'); } : undefined}
                 onContextMenu={onRescheduleDate ? (e) => { e.preventDefault(); e.stopPropagation(); setDateMenu({ x: e.clientX, y: e.clientY }); } : undefined}
                 className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${onRescheduleDate ? 'cursor-pointer' : ''} ${categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : isScheduled ? 'text-[var(--app-accent)]' : isLateDeadline(task.deadline) ? 'text-white' : isTodayCard ? 'text-[var(--app-accent)]' : 'text-[#656464]'}`}
+                style={doneStyle}
               >
                 {formatDeadline(task.deadline)}
               </p>
@@ -5138,7 +5176,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
                 roll-off linger ~1s then fade out over 500ms (asymmetric group-hover transition). */}
             {task.assignees.length > 0 && (
               <span className="flex flex-row items-center gap-[6px] linger-reveal">
-                {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={(isScheduled || isTodayCard) ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed || categoryDimmed} dimColor={'#383838'} />)}
+                {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={(isScheduled || isTodayCard) ? 'scheduled' : 'todo'} hollow={isPersonal} dimColor={done ? doneCol : undefined} dim={task.completed || categoryDimmed} dimColor={'#383838'} />)}
               </span>
             )}
             {/* One-line layout: the + is the LAST item in the content lineup — right after the

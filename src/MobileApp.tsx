@@ -49,7 +49,7 @@ import { LIST_TITLES, LISTS, PERSONAL_CLIENT_ID, formatDeadline, isLateDeadline,
 import { useMembership, projectAllowed } from './auth';
 import {
   computeCalendarDistribution, makeCpCompare, TaskCheckbox, Arrowhead, DeadlineArrow,
-  addDaysToDate, dateToISO, useSharedTheme,
+  addDaysToDate, dateToISO, useSharedTheme, doneTint,
 } from './App';
 
 // ── Shared module state ───────────────────────────────────────────────────────
@@ -102,6 +102,13 @@ function MobileCardBody({ task, projects, clients, isTodayCard }: {
   const isScheduled = task.type === 'scheduled';
   const titleColor = task.completed ? 'text-[#383838]' : isScheduled ? 'text-[var(--app-accent)]' : isTodayCard ? 'text-white' : 'text-[#a8a8a8]';
   const metaColor = (isScheduled || isTodayCard) ? 'text-[var(--app-accent)]' : 'text-[#656464]';
+  // A finished card speaks with ONE voice, exactly as on the desktop. The title
+  // used to drop to gray while metaColor kept its Today purple, so completing a
+  // task on the phone left the card half purple, half gray. doneTint is shared
+  // with App.tsx so the two surfaces can't drift apart again.
+  const done = task.completed;
+  const doneCol = doneTint(isTodayCard);
+  const doneStyle = done ? { color: doneCol } : undefined;
 
   // ONE line by default; drop to two ONLY when the content genuinely doesn't fit. An invisible
   // single-line probe with the exact same content measures overflow (scrollWidth > clientWidth);
@@ -126,9 +133,9 @@ function MobileCardBody({ task, projects, clients, isTodayCard }: {
           the same way the date and assignee badges already do. The combined and project-only
           forms used to hardcode #656464, which is why Today's client/project stayed grey while
           everything else on the card turned purple. The arrowhead between them follows too. */}
-      {client && project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap shrink-0 ${metaColor}`}>{client.short}<Arrowhead dim={task.completed} color={isTodayCard && !task.completed ? 'var(--app-accent)' : undefined} />{project.name}</p>}
-      {client && !project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap shrink-0 ${metaColor}`}>{client.short}</p>}
-      {!client && project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap shrink-0 ${metaColor}`}>{project.name}</p>}
+      {client && project && <p style={doneStyle} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap shrink-0 ${metaColor}`}>{client.short}<Arrowhead dim={task.completed} color={done ? doneCol : isTodayCard && !task.completed ? 'var(--app-accent)' : undefined} />{project.name}</p>}
+      {client && !project && <p style={doneStyle} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap shrink-0 ${metaColor}`}>{client.short}</p>}
+      {!client && project && <p style={doneStyle} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap shrink-0 ${metaColor}`}>{project.name}</p>}
       {/* Assignee initials are deliberately NOT rendered on the phone — it's a single-user
           surface and the circles just crowded a narrow row. `assignees` is untouched in the
           data; it still drives personal-task privacy and shows on the desktop. */}
@@ -138,18 +145,18 @@ function MobileCardBody({ task, projects, clients, isTodayCard }: {
           phone row it reads high, so nudge it back down to sit on the date's baseline. */}
       {task.deadline && (
         <span className="inline-flex shrink-0" style={{ transform: 'translateY(3px)' }}>
-          <DeadlineArrow small dim={task.completed} color={(isScheduled || isTodayCard) ? 'var(--app-accent)' : undefined} />
+          <DeadlineArrow small dim={task.completed} dimColor={done ? doneCol : undefined} color={(isScheduled || isTodayCard) ? 'var(--app-accent)' : undefined} />
         </span>
       )}
-      {task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap shrink-0 ${(isScheduled || isTodayCard) ? 'text-[var(--app-accent)]' : isLateDeadline(task.deadline) ? 'text-white' : 'text-[#656464]'}`}>{formatDeadline(task.deadline)}</p>}
+      {task.deadline && <p style={doneStyle} className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap shrink-0 ${(isScheduled || isTodayCard) ? 'text-[var(--app-accent)]' : isLateDeadline(task.deadline) ? 'text-white' : 'text-[#656464]'}`}>{formatDeadline(task.deadline)}</p>}
     </>
   );
   const checkbox = !isScheduled && (
     <div className="shrink-0 flex items-center justify-center">
-      <TaskCheckbox completed={task.completed} started={task.started} onToggle={() => {}} accent={isTodayCard ? 'var(--app-accent)' : undefined} />
+      <TaskCheckbox completed={task.completed} started={task.started} onToggle={() => {}} accent={done ? doneCol : isTodayCard ? 'var(--app-accent)' : undefined} />
     </div>
   );
-  const title = <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleColor}`}>{task.title || 'New Task'}</span>;
+  const title = <span style={doneStyle} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleColor}`}>{task.title || 'New Task'}</span>;
 
   return (
     <div className="relative pl-[12px] pr-[40px] py-[8px] overflow-hidden h-full flex flex-col justify-center gap-[2px]">

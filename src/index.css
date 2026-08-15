@@ -116,7 +116,10 @@ html, body, div, p, span, button, input, textarea, select, label, a, li, td, th,
    stays visible inside the editable cursor while the user hasn't typed anything yet. */
 [data-placeholder]:empty:before {
   content: attr(data-placeholder);
-  color: #383838;
+  /* Themeable so a Today card can hand it a faint accent instead of gray — a
+     brand-new task on Today was the only thing on that card still reading
+     neutral. Everything else falls back to the same gray as before. */
+  color: var(--placeholder-color, #383838);
   pointer-events: none;
 }
 
