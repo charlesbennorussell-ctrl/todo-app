@@ -1,7 +1,7 @@
 import { Fragment, memo, useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect, createContext, useContext } from 'react';
 import { flushSync } from 'react-dom';
 import { motion, AnimatePresence } from 'motion/react';
-import { Plus, X, List, FolderTree, SlidersHorizontal as SettingsIcon, Folder, Trash2, Calendar as CalendarIcon, ChevronLeft, ChevronRight, ArrowUp, LayoutDashboard, SquareKanban, Heart, FileText, Search, ExternalLink } from 'lucide-react';
+import { Plus, X, List, FolderTree, SlidersHorizontal as SettingsIcon, Folder, Trash2, Calendar as CalendarIcon, ChevronLeft, ChevronRight, ArrowUp, LayoutDashboard, SquareKanban, Heart, FileText, Search, ExternalLink, Filter } from 'lucide-react';
 // Material Symbols — only the Calendar nav icon stayed Material (the rest reverted to Lucide).
 import { MdOutlineCalendarMonth } from 'react-icons/md';
 import { createPortal } from 'react-dom';
@@ -467,17 +467,18 @@ export const CARD_H_TWO = GRID * 2 - 4;   // 70 → pitch 74 = 2 units (literal 
 // padding: gap from one card's bottom to the next card's top is simply the
 // card's own margin (4) + the label unit (37) = 41, on grid either way.
 export function bandSpacing(_oneRow: boolean) {
-  // A CATEGORY label occupies exactly one unit and nothing more — no air above
-  // it. (A stint with pt: GRID here put a blank unit above every label in
-  // Focus, which the categories don't need.)
-  return { pt: 0, mb: 0, slot: GRID };
+  // A CATEGORY break is the LOUD one: a blank unit, then the label unit at the
+  // bottom of it — a double space with the label on the lower segment. The
+  // FIRST band in a column skips this (see the callers): a blank unit at the
+  // very top of a column is just dead air, not a separator.
+  return { pt: GRID, mb: 0, slot: GRID * 2 };
 }
 
-// A CLIENT sub-break inside the Next column is the one place that needs more:
-// one blank unit, then the label unit at the BOTTOM of it, sitting directly
-// above its own cards. That reads as a level change rather than a new category.
+// A CLIENT sub-section inside a category is the QUIET one: just its label, no
+// blank unit above. Sub-breaks have to read as a level BELOW a category break,
+// so the category always wins the larger gap.
 export function subBandSpacing() {
-  return { pt: GRID, mb: 0, slot: GRID * 2 };
+  return { pt: 0, mb: 0, slot: GRID };
 }
 
 // ── The CALENDAR page's own vertical grid ──────────────────────────────────
@@ -1087,6 +1088,14 @@ export function NavArrow({ dir, onClick, label, className = '' }: { dir: 'left' 
       </svg>
     </button>
   );
+}
+
+// Marks a heading in the Focus left column as a FILTER control (Milestones,
+// Clients + Projects, Assignees) — the three headings look like plain labels
+// otherwise, so nothing said they were clickable filters. Quiet grey: the
+// label stays the loud element, the funnel just classifies it.
+export function FilterGlyph() {
+  return <Filter size={12} className="shrink-0 text-[#656464]" aria-hidden />;
 }
 
 export function DeadlineArrow({ dim = false, small = false, color }: { dim?: boolean; small?: boolean; color?: string }) {
@@ -2176,6 +2185,7 @@ function ProjectsHeaderDropZone({ onClearFilter }: { onClearFilter?: () => void 
       className={`shrink-0 group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px] transition-colors ${onClearFilter ? 'cursor-pointer' : ''} ${isOver ? 'bg-[var(--app-accent)]/20' : ''}`}
       style={{ marginBottom: SPACING.dcr }}
     >
+      <FilterGlyph />
       <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white whitespace-nowrap">Clients + Projects{isOver ? ' — drop to un-nest' : ''}</p>
     </div>
   );
@@ -5210,6 +5220,7 @@ function WeekCalendarMode({
         {days.map((d, i) => {
           const iso = dateToISO(d);
           const isToday = iso === todayIso;
+          let renderedBands = 0;
           return (
             <CalendarColumnDroppable key={iso} date={iso}>
               <div className={`shrink-0 h-[37px] flex items-center gap-2 px-[16px] mb-[74px] ${isToday ? 'text-[var(--app-accent)]' : (d.getDay() === 0 || d.getDay() === 6 ? 'text-[#656464]' : 'text-white')}`}>
@@ -5225,6 +5236,11 @@ function WeekCalendarMode({
               {/* Milestones for this day are pinned above their respective category band (Work,
                   Projects, Admin) inside the list-loop below — no longer rendered as a standalone
                   block above all bands. */}
+              {/* `renderedBands` counts what actually made it to the screen: the
+                  weekend rule below can drop Work/Admin entirely, and the first
+                  VISIBLE band must open flush — a blank unit at the top of a
+                  column is dead air, not a separator. Safe as a plain counter:
+                  Array.map runs in order, and it is re-seeded per column. */}
               {listSequence.map((listId) => {
                 const label = LIST_TITLES[listId];
                 const bucket = tasksForCell(listId, d);
@@ -5243,6 +5259,8 @@ function WeekCalendarMode({
                   return t.list === listId;
                 });
                 if (isWeekend && listId !== 'projects' && listId !== 'personal' && bucket.length === 0 && dayMilestones.length === 0 && !isAnyDragging) return null;
+                const isFirstBand = renderedBands === 0;
+                renderedBands += 1;
                 // Displacement math (mirrors getAnimationProps in list view):
                 //  - If active and over are BOTH in this bucket: cards strictly between them slide by ï¿½slotH.
                 //  - If active is in a DIFFERENT bucket and over is in this bucket: the over-index card gets
@@ -5262,7 +5280,7 @@ function WeekCalendarMode({
                     isEmpty={bucket.length === 0 && dayMilestones.length === 0}
                     slotHeight={activeSlotHeight}
                     className=""
-                    style={{ paddingTop: bandGap.pt }}
+                    style={{ paddingTop: isFirstBand ? 0 : CAL_SLOT }}
                     header={(
                       <div data-band-list={listId} className="group/band h-[56px] mb-[4px] pb-[6px] px-[16px] flex flex-col justify-end sticky top-0 z-10 bg-[var(--app-bg)]">
                         <div className="h-[22px] flex items-center gap-2">
@@ -5382,7 +5400,7 @@ function WeekCalendarMode({
                     {overflowMilestones.map((t) => renderMilestoneCard({ key: t.id, task: t, showDate: true }))}
                   </div>
                 )}
-                {listSequence.map((listId) => {
+                {listSequence.map((listId, bandIdx) => {
                   const label = LIST_TITLES[listId];
                   const bucket = nwBucketFor(listId);
                   const items = bucket.map((t) => t.id);
@@ -5430,7 +5448,7 @@ function WeekCalendarMode({
                       isEmpty={bucket.length === 0 && bandMilestones.length === 0}
                       slotHeight={activeSlotHeight}
                       className=""
-                      style={{ paddingTop: bandGap.pt }}
+                      style={{ paddingTop: bandIdx === 0 ? 0 : CAL_SLOT }}
                       header={(
                         <NextBandHeader
                           stacked
@@ -5456,7 +5474,9 @@ function WeekCalendarMode({
                                 Group 0 needs no inline label — the sticky bar already says
                                 "Work: <that client>". Later groups get their own name, one
                                 card-slot of air above it. */}
-                            <div data-group-name={g.name} style={gi === 0 ? undefined : { paddingTop: CAL_SLOT }}>
+                            {/* Client sub-section: label only, no blank unit — the louder
+                                gap belongs to the category break above. */}
+                            <div data-group-name={g.name}>
                               {gi > 0 && (
                                 <div className="h-[56px] mb-[4px] pb-[6px] px-[16px] flex flex-col justify-end">
                                   {/* Breadcrumb — see the focus column's note. */}
@@ -11093,6 +11113,7 @@ export default function App() {
           );
           const focusMilestonesHeader = (
             <div className="group shrink-0 h-[37px] mb-[37px] flex items-center gap-2 px-[31px]">
+              <FilterGlyph />
               <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">Milestones</p>
               <button type="button" onClick={() => { const id = `task-${Date.now()}`; const ms: Task = { id, title: '', type: 'scheduled', assignees: currentUserShort ? [currentUserShort] : [], completed: false, list: 'work', section: 'today', deadline: todayISO(), order: 0, createdAt: Date.now(), ...(focusProjectId ? { projectId: focusProjectId } : focusClientId ? { clientId: focusClientId } : {}) }; setTasks((prev) => [...prev, ms]); setNewId(id); openEdit(ms); }} className="opacity-0 group-hover:opacity-100 text-[#656464] hover:text-white transition-opacity" aria-label="Add milestone"><Plus size={14} /></button>
             </div>
@@ -11102,6 +11123,7 @@ export default function App() {
           // blow a double gap here. Clicking it still clears the active filter.
           const focusClientsHeader = (
             <div onClick={focusClearFilter} className={`shrink-0 h-[37px] mb-[37px] flex items-center gap-2 px-[31px] ${focusClearFilter ? 'cursor-pointer' : ''}`}>
+              <FilterGlyph />
               <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">Clients + Projects</p>
             </div>
           );
@@ -11210,6 +11232,7 @@ export default function App() {
                       onClick={assigneeFilter.length ? () => setAssigneeFilter([]) : undefined}
                       className={`shrink-0 h-[37px] mb-[37px] flex items-center gap-2 px-[31px] ${assigneeFilter.length ? 'cursor-pointer' : ''}`}
                     >
+                      <FilterGlyph />
                       <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">Assignees</p>
                       {assigneeFilter.length > 0 && <X size={14} className="text-[#a8a8a8]" />}
                     </div>
@@ -11384,7 +11407,7 @@ export default function App() {
                   const stripAnchor = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; })();
                   // One band block (label + cards) per CAL_LIST, aggregated over the
                   // column's iso set. Mirrors WeekCalendarMode's per-day band rendering.
-                  const dayBands = (isos: string[], colKey: string, section: SectionId) => listSequence.map((listId) => {
+                  const dayBands = (isos: string[], colKey: string, section: SectionId) => listSequence.map((listId, bandIdx) => {
                     const bandLabel = LIST_TITLES[listId];
                     const isoSet = new Set(isos);
                     // Filter helper — project narrows to one, else client narrows to all its tasks.
@@ -11431,7 +11454,7 @@ export default function App() {
                     // category on ANY day — the label carries a hover-reveal +. Empty bands
                     // are just the quiet grey label until you hover.
                     return (
-                      <div key={`${colKey}-${listId}`} style={{ paddingTop: bandSpacing(cardRows === 1).pt }}>
+                      <div key={`${colKey}-${listId}`} style={{ paddingTop: bandIdx === 0 ? 0 : bandSpacing(cardRows === 1).pt }}>
                         {/* Band label — same treatment as the calendar's in-column
                             category labels (grey, 26px row, 16px inset) + hover +.
                             mb mirrors the container's pt so the label sits centered
@@ -11497,6 +11520,8 @@ export default function App() {
                                   {/* Marker the sticky header reads; group 0 needs no inline
                                       label because the header already names it. */}
                                   <div data-group-name={g.name} style={gi === 0 ? undefined : { paddingTop: subBandSpacing().pt }}>
+                                    {/* subBandSpacing().pt is 0 — a client label is just its own
+                                        slot. The blank unit belongs to the category break above. */}
                                     {gi > 0 && (
                                       <div className="h-[37px] px-[16px] flex items-center">
                                         {/* Full breadcrumb, not just the client: in a long category
@@ -11537,6 +11562,8 @@ export default function App() {
                                         insertionGap={insertionGap}
                                         taskOrder={taskOrder}
                                         autoFocusEdit={t.id === newId}
+                                        hideClient={listId !== 'personal'}
+                                        hideProject={listId === 'personal'}
                                       />
                                     );
                                   })}

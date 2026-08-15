@@ -23,7 +23,12 @@
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black" />
     <meta name="apple-mobile-web-app-title" content="Ctrl-Project" />
-    <link rel="apple-touch-icon" href="/todo-app/icons/icon-192.png" />
+    <!-- iOS renders apple-touch-icon at 180 and applies its own rounded-rect
+         mask (no meaningful crop), so this one is full-bleed artwork. -->
+    <link rel="apple-touch-icon" sizes="180x180" href="/todo-app/icons/apple-touch-icon.png" />
+    <link rel="icon" type="image/png" sizes="32x32" href="/todo-app/icons/favicon-32.png" />
+    <link rel="icon" type="image/png" sizes="16x16" href="/todo-app/icons/favicon-16.png" />
+    <link rel="icon" href="/todo-app/favicon.ico" sizes="any" />
     <link rel="manifest" href="/todo-app/manifest.webmanifest" />
   </head>
   <body>
