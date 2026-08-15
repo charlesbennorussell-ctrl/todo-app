@@ -2310,7 +2310,7 @@ function AddModal({
               <div className="flex items-center justify-between bg-[#1f1f1f] rounded-md px-3 py-2">
                 <div className="flex flex-col">
                   <span className={`text-[14px] ${isMilestone ? 'text-[var(--app-accent)]' : 'text-white'}`}>Milestone</span>
-                  <span className="text-[#666] text-[12px]">No checkbox Â· pinned to top of its column</span>
+                  <span className="text-[#474747] text-[12px]">No checkbox Â· pinned to top of its column</span>
                 </div>
                 <MilestoneToggle value={isMilestone} onChange={setIsMilestone} />
               </div>
@@ -5286,9 +5286,9 @@ function AccountSection({ people, currentUserShort, onSetCurrentUser, sectionTit
     return (
       <div>
         {sectionTitle('I am (temporary — becomes login)')}
-        <div className="px-[31px] pt-[4px] flex flex-wrap gap-2">
+        <div className="px-[31px] flex flex-wrap gap-2">
           {people.map((p) => { const active = p.short === currentUserShort; return (<button key={p.id} type="button" onClick={() => onSetCurrentUser(p.short)} className={`px-3 py-1 rounded-full text-[13px] transition-colors ${active ? 'bg-[#7363FF] text-white' : 'bg-[#1f1f1f] text-[#ccc] hover:bg-[#333]'}`}>{p.name || '(unnamed)'} <span className="opacity-70">({p.short || '?'})</span></button>); })}
-          {people.length === 0 && <span className="text-[#666] text-[12px]">Add a person first.</span>}
+          {people.length === 0 && <span className="text-[#474747] text-[12px]">Add a person first.</span>}
         </div>
       </div>
     );
@@ -5299,7 +5299,7 @@ function AccountSection({ people, currentUserShort, onSetCurrentUser, sectionTit
   return (
     <div>
       {sectionTitle('Account')}
-      <div className="px-[31px] pt-[4px] flex flex-col gap-[10px] items-start">
+      <div className="px-[31px] flex flex-col gap-[10px] items-start">
         <span className="text-[13px] text-[#656464]">
           Signed in as <span className="text-white">{membership.email}</span> ({membership.person_short})
         </span>
@@ -5458,29 +5458,29 @@ function TeamMode({ projects, people, currentUserShort, onSetCurrentUser }: {
   return (
     <div className="h-full flex flex-col" style={{ paddingTop: SPACING.topMargin, paddingBottom: 12 }}>
       <div className="shrink-0"><TopHeader viewName="Team" /></div>
-      <div className="flex-1 min-h-0 grid grid-cols-3 gap-x-5">
+      <div className="flex-1 min-h-0 grid grid-cols-3 gap-0">
         {/* COLUMN 1 — You. */}
-        <div className="min-w-0 h-full overflow-y-auto pt-[2px] pb-[106px]">
+        <div className="min-w-0 h-full flex flex-col"><CustomScroll innerClassName="flex flex-col gap-[37px] pb-[37px]">
           <AccountSection people={people} currentUserShort={currentUserShort} onSetCurrentUser={onSetCurrentUser} sectionTitle={sectionTitle} />
           {!membership && (
             <p className="px-[35px] pt-[10px] text-[#666] text-[13px] whitespace-normal">
               Sign-in isn't enabled in this build — membership and invites appear once the auth gate is on.
             </p>
           )}
-        </div>
+        </CustomScroll></div>
         {/* COLUMN 2 — Members roster. */}
-        <div className="min-w-0 h-full overflow-y-auto pt-[2px] pb-[106px]">
+        <div className="min-w-0 h-full flex flex-col"><CustomScroll innerClassName="flex flex-col gap-[37px] pb-[37px]">
           {membership && (
             <div>
               {sectionTitle('Members')}
-              <div className="pt-[4px] flex flex-col">
+              <div className="flex flex-col">
         {members.map((m) => {
           const isSelf = m.user_id === membership.user_id;
           const editing = editingMember === m.user_id;
           const acc = (m.project_access ?? { mode: 'all' }) as { mode: 'all' | 'selected'; projectIds?: string[] };
           return (
             <div key={m.user_id}>
-              <div className="group h-[34px] w-full box-border flex flex-row gap-2 items-center px-[31px] hover:bg-white/[0.03]">
+              <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px] hover:bg-white/[0.03]">
                 <span className={`${bodyFont} text-white truncate`}>{m.display_name}</span>
                 <span className={`${bodyFont} text-[#656464] text-[12px]`}>({m.person_short})</span>
                 <span className={`px-2 py-[1px] rounded-full text-[11px] ${m.role === 'admin' ? 'bg-[#7363FF]/20 text-[var(--app-accent)]' : 'bg-white/[0.06] text-[#a8a8a8]'}`}>
@@ -5499,7 +5499,7 @@ function TeamMode({ projects, people, currentUserShort, onSetCurrentUser }: {
                 )}
               </div>
               {editing && isAdmin && (
-                <div className="px-[31px] py-[8px] flex flex-col gap-[10px] bg-white/[0.02] rounded-[6px] mx-[20px] mb-[6px]">
+                <div className="px-[10px] py-[8px] flex flex-col gap-[10px] bg-white/[0.03] rounded-[3.333px] mx-[6px] mb-[4px]">
                   <div className={`${bodyFont} text-[12px] text-[#656464]`}>{m.email}</div>
                   <div className="flex flex-row flex-wrap gap-2 items-center">
                     <span className={`${bodyFont} text-[12px] text-[#656464] w-[52px]`}>Role</span>
@@ -5568,15 +5568,15 @@ function TeamMode({ projects, people, currentUserShort, onSetCurrentUser }: {
                     Couldn't load members ({rosterError}). <button type="button" className="text-[var(--app-accent)] hover:text-white transition-colors" onClick={() => void refresh()}>Retry</button>
                   </p>
                 )}
-                {msg && <p className="px-[31px] pt-[4px] text-[var(--app-accent)] text-[12px] whitespace-normal">{msg}</p>}
+                {msg && <p className="px-[31px] text-[var(--app-accent)] text-[12px] whitespace-normal">{msg}</p>}
               </div>
             </div>
           )}
-        </div>
+        </CustomScroll></div>
         {/* COLUMN 3 — Invites (admin only). The form is always visible: creating
             an invite is a standalone act — you get a link to send however you
             like, and NOTHING joins the team until someone actually redeems it. */}
-        <div className="min-w-0 h-full overflow-y-auto pt-[2px] pb-[106px]">
+        <div className="min-w-0 h-full flex flex-col"><CustomScroll innerClassName="flex flex-col gap-[37px] pb-[37px]">
           {membership && isAdmin && (
             <div>
               {sectionTitle('Invite')}
@@ -5652,7 +5652,7 @@ function TeamMode({ projects, people, currentUserShort, onSetCurrentUser }: {
               )}
             </div>
           )}
-        </div>
+        </CustomScroll></div>
       </div>
     </div>
   );
@@ -5739,7 +5739,9 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
     return [cli?.short, proj?.name].filter(Boolean).join(' › ');
   };
   const dayHeader = (label: string) => (
-    <div className="px-[31px] pt-[10px] pb-[3px] text-[11px] uppercase tracking-wide text-[#5e5e5e]">{label}</div>
+    <div className="h-[26px] mb-[18px] px-[31px] flex items-center sticky top-0 z-10 bg-[var(--app-bg)]">
+      <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap text-[#5e5e5e]">{label}</p>
+    </div>
   );
 
   return (
@@ -5748,12 +5750,12 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
       {/* Each column scrolls INDEPENDENTLY — a long Trash list no longer drags
           the config column off-screen with it. */}
       <div className="flex-1 min-h-0 overflow-x-hidden">
-        <div className="grid grid-cols-4 gap-x-5 h-full">
+        <div className="grid grid-cols-4 gap-0 h-full">
           {/* COLUMN 1 — config: version, ordering, shortcuts, case. */}
-          <div className="min-w-0 h-full flex flex-col"><CustomScroll innerClassName="flex flex-col gap-[34px] pt-[2px] pb-[106px]">
+          <div className="min-w-0 h-full flex flex-col"><CustomScroll innerClassName="flex flex-col gap-[37px] pb-[37px]">
             <div>
               {sectionTitle('About')}
-              <div className="px-[35px] pt-[4px] flex flex-col gap-2 text-[13px]">
+              <div className="px-[31px] flex flex-col gap-2 text-[13px]">
                 {(() => {
                   const buildDate = new Date(__BUILD_TIME__);
                   const ageMs = Date.now() - buildDate.getTime();
@@ -5775,14 +5777,14 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
             </div>
             <div>
               {sectionTitle('Colors')}
-              <div className="px-[35px] pt-[4px] flex flex-col gap-3">
+              <div className="px-[31px] flex flex-col gap-3">
                 <ThemeColorPicker varName="--app-bg" storageKey="app-bg" label="Background" fallback="#1c1b19" themeKey="bg" />
                 <ThemeColorPicker varName="--app-accent" storageKey="app-accent" label="Accent" fallback="#8465ff" themeKey="accent" />
               </div>
             </div>
             <div>
               {sectionTitle('Task Order')}
-              <div className="px-[31px] pt-[4px] flex flex-col gap-2">
+              <div className="px-[31px] flex flex-col gap-2">
                 {([{ id: 'cpt' as TaskOrder, parts: ['Client - Project', 'Task'] as const }, { id: 'ptc' as TaskOrder, parts: ['Project', 'Task', 'Client'] as const }, { id: 'tcp' as TaskOrder, parts: ['Task', 'Client - Project'] as const }]).map((opt) => {
                   const active = taskOrder === opt.id;
                   return (
@@ -5795,7 +5797,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
             </div>
             <div>
               {sectionTitle('Section Sequence')}
-              <div className="px-[31px] pt-[4px] flex flex-col gap-2">
+              <div className="px-[31px] flex flex-col gap-2">
                 {listSequence.map((l, i) => (
                   <div key={l} className="flex flex-row items-center gap-3 h-[26px]">
                     <span className="text-[13px] text-white w-[90px]">{LIST_TITLES[l]}</span>
@@ -5807,18 +5809,18 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
             </div>
             <div>
               {sectionTitle('Quick Window Shortcut')}
-              <div className="px-[31px] pt-[4px] flex flex-col gap-2 items-start"><PipShortcutSetting /></div>
+              <div className="px-[31px] flex flex-col gap-2 items-start"><PipShortcutSetting /></div>
             </div>
             <div>
               {sectionTitle('Title Case Auto-Correct')}
-              <div className="px-[31px] pt-[4px] flex flex-row gap-4">
+              <div className="px-[31px] flex flex-row gap-4">
                 <button type="button" onClick={() => onSetCaseMode('off')} className={`text-[13px] transition-colors ${caseMode === 'off' ? 'text-[var(--app-accent)] font-bold' : 'text-[#656464] hover:text-white'}`}>Off</button>
                 <button type="button" onClick={() => onSetCaseMode('title')} className={`text-[13px] transition-colors ${caseMode === 'title' ? 'text-[var(--app-accent)] font-bold' : 'text-[#656464] hover:text-white'}`}>On</button>
               </div>
             </div>
             <div>
               {sectionTitle('Card Layout')}
-              <div className="px-[31px] pt-[4px] flex flex-col gap-1">
+              <div className="px-[31px] flex flex-col gap-1">
                 <div className="flex flex-row gap-4">
                   <button type="button" onClick={() => onSetCardRows(2)} className={`text-[13px] transition-colors ${cardRows === 2 ? 'text-[var(--app-accent)] font-bold' : 'text-[#656464] hover:text-white'}`}>Two rows</button>
                   <button type="button" onClick={() => onSetCardRows(1)} className={`text-[13px] transition-colors ${cardRows === 1 ? 'text-[var(--app-accent)] font-bold' : 'text-[#656464] hover:text-white'}`}>One row</button>
@@ -5828,7 +5830,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
             </div>
             <div>
               {sectionTitle('Sort by Client / Project')}
-              <div className="px-[31px] pt-[4px] flex flex-col gap-1">
+              <div className="px-[31px] flex flex-col gap-1">
                 <div className="flex flex-row gap-4">
                   <button type="button" onClick={() => onSetSortByCP(false)} className={`text-[13px] transition-colors ${!sortByCP ? 'text-[var(--app-accent)] font-bold' : 'text-[#656464] hover:text-white'}`}>Off</button>
                   <button type="button" onClick={() => onSetSortByCP(true)} className={`text-[13px] transition-colors ${sortByCP ? 'text-[var(--app-accent)] font-bold' : 'text-[#656464] hover:text-white'}`}>On</button>
@@ -5839,10 +5841,10 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
           </CustomScroll></div>
           {/* COLUMN 2 — people & clients. (Members/account management lives on
               the Team page now — click your avatar in the nav rail.) */}
-          <div className="min-w-0 h-full flex flex-col"><CustomScroll innerClassName="flex flex-col gap-[34px] pt-[2px] pb-[106px]">
+          <div className="min-w-0 h-full flex flex-col"><CustomScroll innerClassName="flex flex-col gap-[37px] pb-[37px]">
             <div>
               {sectionTitle('People', <AddPlus onClick={onAddPerson} />)}
-              <div className="pt-[4px]">
+              <div>
                 {people.map((p) => (
                   <SettingsRow key={p.id}>
                     <span className="inline-flex items-baseline min-w-0">
@@ -5856,7 +5858,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
             </div>
             <div>
               {sectionTitle('Clients', <AddPlus onClick={onAddClient} />)}
-              <div className="pt-[4px]">
+              <div>
                 {clients.map((c) => (
                   c.id === PERSONAL_CLIENT_ID ? (
                     <SettingsRow key={c.id}><span className={`${bodyFont} text-[#656464]`}>Personal</span></SettingsRow>
@@ -5876,10 +5878,10 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
           </CustomScroll></div>
 
           {/* COLUMN 3 — Trash. */}
-          <div className="min-w-0 h-full flex flex-col"><CustomScroll innerClassName="flex flex-col gap-[34px] pt-[2px] pb-[106px]">
+          <div className="min-w-0 h-full flex flex-col"><CustomScroll innerClassName="flex flex-col gap-[37px] pb-[37px]">
             <div>
-              {sectionTitle('Trash', <span className="text-[#666] text-[12px]">{trashedTasks.length}</span>)}
-              <div className="pt-[4px]">
+              {sectionTitle('Trash', <span className="text-[#474747] text-[12px]">{trashedTasks.length}</span>)}
+              <div>
                 {trashedTasks.length === 0 && <p className="px-[35px] text-[#666] text-[13px]">Empty.</p>}
                 {groupByDay(trashedTasks, (t) => t.trashedAt).map((g) => (
                   <Fragment key={g.key}>
@@ -5887,7 +5889,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
                     {g.items.map((t) => {
                       const ctx = metaOf(t);
                       return (
-                        <div key={t.id} className="group h-[34px] w-full box-border flex flex-row gap-2 items-center px-[31px] hover:bg-white/[0.03] overflow-hidden">
+                        <div key={t.id} className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px] hover:bg-white/[0.03] overflow-hidden">
                           {ctx && <p className={`${bodyFont} text-[#656464] shrink-0`}>{ctx}</p>}
                           {ctx && <Arrowhead />}
                           <span className={`${bodyFont} text-[#656464] truncate`}>{t.title || '(untitled)'}</span>
@@ -5902,10 +5904,10 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
             </div>
           </CustomScroll></div>
           {/* COLUMN 4 — Completed & collapsible Debug. */}
-          <div className="min-w-0 h-full flex flex-col"><CustomScroll innerClassName="flex flex-col gap-[34px] pt-[2px] pb-[106px]">
+          <div className="min-w-0 h-full flex flex-col"><CustomScroll innerClassName="flex flex-col gap-[37px] pb-[37px]">
             <div>
-              {sectionTitle('Completed', <span className="text-[#666] text-[12px]">{completedTasks.length}</span>)}
-              <div className="pt-[4px]">
+              {sectionTitle('Completed', <span className="text-[#474747] text-[12px]">{completedTasks.length}</span>)}
+              <div>
                 {completedTasks.length === 0 && <p className="px-[35px] text-[#666] text-[13px]">Nothing checked off yet.</p>}
                 {groupByDay(completedTasks, (t) => t.completedAt).map((g) => (
                   <Fragment key={g.key}>
@@ -5913,7 +5915,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
                     {g.items.map((t) => {
                       const ctx = metaOf(t);
                       return (
-                        <div key={t.id} className="group h-[34px] w-full box-border flex flex-row gap-2 items-center px-[31px] hover:bg-white/[0.03] overflow-hidden">
+                        <div key={t.id} className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px] hover:bg-white/[0.03] overflow-hidden">
                           <TaskCheckbox completed={t.completed} started={t.started} onToggle={() => onToggleTask(t.id)} />
                           {ctx && <p className={`${bodyFont} text-[#656464] shrink-0`}>{ctx}</p>}
                           {ctx && <Arrowhead />}
@@ -5930,11 +5932,11 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
                 <p className="font-['NB_International:Regular',sans-serif] text-[#a8a8a8] group-hover:text-white transition-colors text-[14.333px]">{showDebug ? '▾' : '▸'} Debug</p>
               </button>
               {showDebug && (
-                <div className="flex flex-col gap-[34px] pt-[4px]">
+                <div className="flex flex-col gap-[37px]">
                   {/* Account moved to the Team page (click your avatar in the nav). */}
                   <div>
                     {sectionTitle('Maintenance')}
-                    <div className="px-[31px] pt-[4px] flex flex-col gap-2 items-start">
+                    <div className="px-[31px] flex flex-col gap-2 items-start">
                       <button type="button" onClick={() => { const n = onPurgeEmptyProjects(); setPurgeMsg(n > 0 ? `Removed ${n} empty project${n === 1 ? '' : 's'}.` : 'No empty projects found.'); }} className="text-[13px] text-[#656464] hover:text-white transition-colors">Clean up empty projects</button>
                       <button type="button" onClick={() => { if (closedOutIds) { const n = onRemoveProjectsByIds(closedOutIds); setPurgeMsg(`Removed ${n} closed-out project${n === 1 ? '' : 's'}.`); setClosedOutIds(null); return; } const list = onListClosedOutProjects(); if (!list.length) { setPurgeMsg('No closed-out projects.'); return; } setClosedOutIds(list.map((p) => p.id)); setPurgeMsg(`${list.length} with no tasks: ${list.map((p) => p.name).join(', ')}. Click again to remove.`); }} className={`text-[13px] transition-colors ${closedOutIds ? 'text-[var(--app-accent)] font-bold' : 'text-[#656464] hover:text-white'}`}>{closedOutIds ? `Confirm — remove ${closedOutIds.length}` : 'Remove closed-out projects'}</button>
                       <button type="button" onClick={() => setStragglers((cur) => (cur ? null : onListStragglerProjects()))} className="text-[13px] text-[#656464] hover:text-white transition-colors">{stragglers ? 'Hide straggler projects' : 'Manage straggler projects (no client)'}</button>
@@ -5946,7 +5948,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
                   </div>
                   <div>
                     {sectionTitle('Local Backup')}
-                    <div className="px-[31px] pt-[4px] flex flex-col gap-2"><BackupSection liveBackupAt={liveBackupAt} dailyBackupAt={dailyBackupAt} onDownload={onDownloadBackup} onRestoreFromFile={onRestoreFromFile} onRestoreFromSlot={onRestoreFromSlot} /></div>
+                    <div className="px-[31px] flex flex-col gap-2"><BackupSection liveBackupAt={liveBackupAt} dailyBackupAt={dailyBackupAt} onDownload={onDownloadBackup} onRestoreFromFile={onRestoreFromFile} onRestoreFromSlot={onRestoreFromSlot} /></div>
                   </div>
                 </div>
               )}
