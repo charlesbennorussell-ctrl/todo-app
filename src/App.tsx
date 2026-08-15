@@ -5237,7 +5237,7 @@ function WeekCalendarMode({
                     very top — a read-only look-ahead, same as before. */}
                 {overflowMilestones.length > 0 && (
                   <div className="mb-[37px]">
-                    <div className="h-[20px] px-[16px] flex items-center mb-[6px]">
+                    <div className="h-[37px] px-[16px] flex items-center">
                       <p className={`${bodyFont} text-[#5e5e5e]`}>Coming Up</p>
                     </div>
                     {overflowMilestones.map((t) => <MilestoneCard key={t.id} task={t} showDate />)}
@@ -5964,7 +5964,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
     return [cli?.short, proj?.name].filter(Boolean).join(' › ');
   };
   const dayHeader = (label: string) => (
-    <div className="h-[26px] mb-[18px] px-[31px] flex items-center sticky top-0 z-10 bg-[var(--app-bg)]">
+    <div className="h-[37px] px-[31px] flex items-center sticky top-0 z-10 bg-[var(--app-bg)]">
       <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap text-[#5e5e5e]">{label}</p>
     </div>
   );
@@ -10909,7 +10909,9 @@ export default function App() {
           // (The day column's date→Work spacer is 74px, but Search sits in a 37px row whose text
           // centres 12px lower than Work's 20px band label, so the gap is pulled in 12px.) The
           // SAME 62px is then used between EVERY section, so the whole column shares one rhythm.
-          const stackGap = 62;
+          // Section spacer: ONE blank unit. 62px was 1.68 units, which walked
+          // every block below it off the baseline.
+          const stackGap = GRID;
           // The side column is ALWAYS one stacked flow: Search, then Milestones, then Clients +
           // Projects, scrolling as a unit when it outgrows the window. It used to snap to a
           // two-column split once it would overflow, but that reflow was the problem — the layout
@@ -10927,7 +10929,7 @@ export default function App() {
             </div>
           );
           const focusMilestonesHeader = (
-            <div className="group shrink-0 h-[37px] mb-[12px] flex items-center gap-2 px-[31px]">
+            <div className="group shrink-0 h-[37px] mb-[37px] flex items-center gap-2 px-[31px]">
               <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">Milestones</p>
               <button type="button" onClick={() => { const id = `task-${Date.now()}`; const ms: Task = { id, title: '', type: 'scheduled', assignees: currentUserShort ? [currentUserShort] : [], completed: false, list: 'work', section: 'today', deadline: todayISO(), order: 0, createdAt: Date.now(), ...(focusProjectId ? { projectId: focusProjectId } : focusClientId ? { clientId: focusClientId } : {}) }; setTasks((prev) => [...prev, ms]); setNewId(id); openEdit(ms); }} className="opacity-0 group-hover:opacity-100 text-[#656464] hover:text-white transition-opacity" aria-label="Add milestone"><Plus size={14} /></button>
             </div>
@@ -10936,7 +10938,7 @@ export default function App() {
           // ProjectsHeaderDropZone carries a 74px margin meant for the split column, which would
           // blow a double gap here. Clicking it still clears the active filter.
           const focusClientsHeader = (
-            <div onClick={focusClearFilter} className={`shrink-0 h-[37px] mb-[12px] flex items-center gap-2 px-[31px] ${focusClearFilter ? 'cursor-pointer' : ''}`}>
+            <div onClick={focusClearFilter} className={`shrink-0 h-[37px] mb-[37px] flex items-center gap-2 px-[31px] ${focusClearFilter ? 'cursor-pointer' : ''}`}>
               <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">Clients + Projects</p>
             </div>
           );
@@ -11043,7 +11045,7 @@ export default function App() {
                         them. Clicking the header clears the whole filter. */}
                     <div
                       onClick={assigneeFilter.length ? () => setAssigneeFilter([]) : undefined}
-                      className={`shrink-0 h-[37px] mb-[12px] flex items-center gap-2 px-[31px] ${assigneeFilter.length ? 'cursor-pointer' : ''}`}
+                      className={`shrink-0 h-[37px] mb-[37px] flex items-center gap-2 px-[31px] ${assigneeFilter.length ? 'cursor-pointer' : ''}`}
                     >
                       <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">Assignees</p>
                       {assigneeFilter.length > 0 && <X size={14} className="text-[#a8a8a8]" />}
@@ -11372,8 +11374,8 @@ export default function App() {
                       <CustomScroll bandIndicator={activeTask ? { list: activeTask.list, label: LIST_TITLES[activeTask.list] } : null}>
                         {/* Next column only: upcoming milestones beyond the window, featured up top. */}
                         {col.section === 'next' && comingUpMilestones.length > 0 && (
-                          <div className="mb-[24px]">
-                            <div className="h-[20px] px-[16px] flex items-center mb-[6px]">
+                          <div className="mb-[37px]">
+                            <div className="h-[37px] px-[16px] flex items-center">
                               <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap text-[#5e5e5e]">Coming Up</p>
                             </div>
                             {/* Same purple-tint two-line card the calendar's Coming Up uses.
