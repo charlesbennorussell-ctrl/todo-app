@@ -51,9 +51,10 @@ jobs:
           # A real table read, not just the REST root: this reaches POSTGRES,
           # which is the thing that actually goes idle. RLS may return an empty
           # array for the anon role — that still proves the database answered.
+          # members' primary key is user_id (there is no `id` column).
           DB=$(curl -s -o /tmp/db.out -w '%{http_code}' --max-time 30 \
                  -H "apikey: ${ANON_KEY}" \
-                 "${PROJECT}/rest/v1/members?select=id&limit=1")
+                 "${PROJECT}/rest/v1/members?select=user_id&limit=1")
           echo "REST/postgres -> HTTP ${DB}  $(head -c 200 /tmp/db.out)"
 
           # GoTrue liveness. Auth is the half that bricks sign-in, and it has
