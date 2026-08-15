@@ -816,6 +816,15 @@ export default function MobileApp() {
   // it in the same tick, before that task exists in `tasks`. Looking it up live resolves on the
   // next render, and also keeps the sheet in sync if the task changes underneath it.
   const [sheetTaskId, setSheetTaskId] = useState<string | null>(null);
+  // True when the sheet was opened by CREATING a task (band +, ADD card, card +),
+  // as opposed to tapping an existing card. Drives straight-into-typing: the
+  // title field focuses itself and iOS raises the keyboard, because naming the
+  // thing is always the first move after making it.
+  const [sheetAutoFocus, setSheetAutoFocus] = useState(false);
+  // Every "create" entry point goes through here so the flag can't drift out of
+  // sync with the sheet it belongs to.
+  const openNewTaskSheet = useCallback((id: string) => { setSheetAutoFocus(true); setSheetTaskId(id); }, []);
+  const openTaskSheet = useCallback((id: string) => { setSheetAutoFocus(false); setSheetTaskId(id); }, []);
   // Which band label has its "+" disclosed, keyed "<section>:<listId>". One at a time.
   // (band + buttons are always visible now — the tap-to-reveal disclosure state is gone)
   // Task currently open in the FULL panel for editing (from the card sheet's "Edit").
@@ -915,17 +924,17 @@ export default function MobileApp() {
             {PANES.map((p, i) => (
               <PaneDroppable key={p.section} id={`mpane:${i}`} width={w}>
                 {bandsByPane[i].map(({ listId, cellId, tasks: bandTasks }) => (
-                  <div key={`${p.section}-${listId}`} className={bandTasks.length > 0 ? 'pb-[20px]' : 'pb-[10px]'}>
+                  <div key={`${p.section}-${listId}`} className={bandTasks.length > 0 ? 'pt-[7px]' : 'pt-[5px]'}>
                     {/* Label vertically centered; the + is ALWAYS visible (tap-to-reveal made it
                         undiscoverable) and sits in a 44px touch box with the same right-edge
                         geometry as the cards' + (card mx-10 + right-0 w-44 → icon center 32px
                         from the pane edge), so the column of pluses lines up. */}
-                    <div className="h-[28px] pl-[20px] flex items-center sticky top-0 z-10 bg-[var(--app-bg)]">
+                    <div className={`h-[28px] ${bandTasks.length > 0 ? 'mb-[13px]' : 'mb-[5px]'} pl-[20px] flex items-center sticky top-0 z-10 bg-[var(--app-bg)]`}>
                       <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap text-[#5e5e5e]">{LIST_TITLES[listId]}</p>
                       <button
                         type="button"
                         aria-label={`Add ${LIST_TITLES[listId]} task`}
-                        onClick={() => setSheetTaskId(createTask({ title: '', list: listId, section: p.section }))}
+                        onClick={() => openNewTaskSheet(createTask({ title: '', list: listId, section: p.section }))}
                         className="ml-auto w-[44px] mr-[10px] self-stretch flex items-center justify-center text-[#5e5e5e]"
                       ><Plus size={15} /></button>
                     </div>
@@ -940,8 +949,8 @@ export default function MobileApp() {
                             clients={clients}
                             isTodayCard={i === 0}
                             onToggle={() => toggleTask(t.id)}
-                            onOpen={() => setSheetTaskId(t.id)}
-                            onAddSibling={() => setSheetTaskId(addSibling(t))}
+                            onOpen={() => openTaskSheet(t.id)}
+                            onAddSibling={() => openNewTaskSheet(addSibling(t))}
                           />
                         ))}
                       </SortableContext>
@@ -951,7 +960,7 @@ export default function MobileApp() {
                       {bandTasks.length === 0 && !activeTask && (
                         <button
                           type="button"
-                          onClick={() => setSheetTaskId(createTask({ title: '', list: listId, section: p.section }))}
+                          onClick={() => openNewTaskSheet(createTask({ title: '', list: listId, section: p.section }))}
                           className="mx-[10px] mb-[5px] min-h-[44px] w-[calc(100%-20px)] rounded-[3.333px] bg-white/[0.03] flex flex-row items-center justify-center gap-[6px]"
                         >
                           <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[13px] tracking-[0.08em] text-[#4a4a4a]">ADD</span>
@@ -1021,6 +1030,7 @@ export default function MobileApp() {
         {liveSheetTask && (
           <TaskSheet
             task={liveSheetTask}
+            autoFocusTitle={sheetAutoFocus}
             projects={projects}
             clients={clients}
             isos={isos}
@@ -1217,8 +1227,10 @@ function DayTab({ idx, label, active, dragging, onTap }: { idx: number; label: s
   );
 }
 
-function TaskSheet({ task, projects, clients, isos, anchor, onRename, onMove, onDelete, onEdit, onClose }: {
+function TaskSheet({ task, projects, clients, isos, anchor, autoFocusTitle, onRename, onMove, onDelete, onEdit, onClose }: {
   task: Task; projects: Project[]; clients: Client[]; isos: string[]; anchor: Date;
+  /** Sheet was opened by creating this task → focus the title and raise the keyboard. */
+  autoFocusTitle?: boolean;
   onRename: (title: string) => void; onMove: (paneIdx: number) => void; onDelete: () => void;
   /** Hand off to the full task panel, pre-filled with this task. */
   onEdit: () => void;
@@ -1227,6 +1239,43 @@ function TaskSheet({ task, projects, clients, isos, anchor, onRename, onMove, on
   const [title, setTitle] = useState(task.title);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const commit = () => { if (title.trim() !== task.title) onRename(title.trim()); };
+  const titleRef = useRef<HTMLInputElement | null>(null);
+
+  // Straight into typing on a freshly created task. useLayoutEffect (not a
+  // timeout) keeps the focus() inside the tap's own call stack, which is what
+  // iOS requires before it will raise the keyboard — a deferred focus gets the
+  // caret but no keyboard.
+  useLayoutEffect(() => {
+    if (!autoFocusTitle) return;
+    titleRef.current?.focus();
+  }, [autoFocusTitle]);
+
+  // Swipe UP anywhere on the sheet's lower controls (day chips + Edit/Delete/
+  // Done row) = the Edit button. Pulling the bar upward to expand into the full
+  // panel is the gesture the layout already suggests. Taps are untouched: we
+  // only act past a decisive vertical threshold, and never when the gesture is
+  // mostly horizontal (that's the day-chip row's own territory).
+  const pullRef = useRef<{ x: number; y: number; t: number } | null>(null);
+  const pullHandlers = {
+    onTouchStart: (e: React.TouchEvent) => {
+      const t = e.touches[0];
+      pullRef.current = { x: t.clientX, y: t.clientY, t: Date.now() };
+    },
+    onTouchEnd: (e: React.TouchEvent) => {
+      const s = pullRef.current;
+      pullRef.current = null;
+      if (!s) return;
+      const t = e.changedTouches[0];
+      const dy = t.clientY - s.y;
+      const dx = Math.abs(t.clientX - s.x);
+      if (dy < -40 && dx < 60 && Date.now() - s.t < 600) {
+        e.preventDefault();
+        e.stopPropagation();
+        commit();
+        onEdit();
+      }
+    },
+  };
   const project = task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
   const client = (task.clientId ?? project?.clientId) ? clients.find((c) => c.id === (task.clientId ?? project?.clientId)) : undefined;
   // Highlight the chip for the day the task DISPLAYS on. For dated tasks that's the deadline
@@ -1237,6 +1286,7 @@ function TaskSheet({ task, projects, clients, isos, anchor, onRename, onMove, on
   return (
     <SheetShell onClose={() => { commit(); onClose(); }}>
       <input
+        ref={titleRef}
         value={title}
         onChange={(e) => setTitle(e.target.value)}
         onBlur={commit}
@@ -1260,6 +1310,9 @@ function TaskSheet({ task, projects, clients, isos, anchor, onRename, onMove, on
           {client?.short}{client && project ? <Arrowhead /> : null}{project?.name}
         </p>
       )}
+      {/* Lower controls, and the pull-up-to-edit target: dragging this whole
+          block upward opens the full task panel. */}
+      <div {...pullHandlers}>
       {/* Same control as the day switcher and the creator panel: capsules on a dark track. */}
       <div className="pb-[16px]">
         <div className={CHIP_TRACK}>
@@ -1305,6 +1358,7 @@ function TaskSheet({ task, projects, clients, isos, anchor, onRename, onMove, on
         >
           Done
         </button>
+      </div>
       </div>
     </SheetShell>
   );

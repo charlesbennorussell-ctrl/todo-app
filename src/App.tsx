@@ -2083,7 +2083,7 @@ function BottomBar({ mode, onSetMode, onAdd, userShort }: { mode: AppMode; onSet
     // Vertical nav rail hugging the far-left edge. Top cluster: the four view icons + the
     // add-task button. Settings is pinned to the bottom (mt-auto). Tooltips fly out to the
     // RIGHT of each icon (the bar is only 52px wide). The Assign rail lives just to its right.
-    <div className="fixed left-0 top-[var(--titlebar-h)] bottom-0 w-[66px] bg-[#151412] flex flex-col items-center py-[22px] z-40">
+    <div className="fixed left-0 top-[var(--titlebar-h)] bottom-0 w-[66px] bg-[var(--app-card)] flex flex-col items-center py-[22px] z-40">
       <div className="flex flex-col gap-[26px] items-center">
         {/* Order: Focus, Calendar, List, Project. Each icon carries a styled hover tooltip
             (the native title= delay/skin read as missing). */}
@@ -4316,10 +4316,85 @@ export function computeCalendarDistribution(tasks: Task[], todayAnchor: Date, ho
 
 // Presentational body of a calendar card ï¿½ no drag wiring, no callbacks. Shared between the
 // live CalendarCard and the DragOverlay so the floating ghost matches the source pixel-for-pixel.
-function CalendarCardBody({ task, projects, clients, taskOrder = 'ptc', isTodayCard = false, stacked = false }: { task: Task; projects: Project[]; clients: Client[]; taskOrder?: TaskOrder; isTodayCard?: boolean; stacked?: boolean }) {
-  const project = task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
-  const resolvedClientId = task.clientId ?? project?.clientId;
-  const client = resolvedClientId ? clients.find((c) => c.id === resolvedClientId) : undefined;
+// NextBandHeader — the Next Week column's sticky "Category: Client" bar.
+//
+// The Next column groups its cards by client (by PROJECT under Personal), so
+// repeating the category on every sub-group would shout. Instead: the first
+// group needs no label of its own (this bar already reads "Work: Turbo"), later
+// groups carry just their own name inline, and THIS bar keeps the category
+// pinned while swapping the half after the colon to whichever group is
+// currently at the top of the column. Sub-groups mark themselves with
+// data-group-name; we read those positions off the DOM rather than threading
+// scroll state through the render tree.
+function NextBandHeader({ label, bodyFont, onLabelClick, onAdd, addAriaLabel }: {
+  label: string; bodyFont: string;
+  onLabelClick: (e: React.MouseEvent<HTMLElement>) => void;
+  onAdd: () => void; addAriaLabel: string;
+}) {
+  const rowRef = useRef<HTMLDivElement>(null);
+  const [active, setActive] = useState<string | null>(null);
+  useEffect(() => {
+    const row = rowRef.current;
+    const band = row?.parentElement;
+    if (!row || !band) return;
+    let scroller: HTMLElement | null = band.parentElement;
+    while (scroller) {
+      const oy = getComputedStyle(scroller).overflowY;
+      if (oy === 'auto' || oy === 'scroll') break;
+      scroller = scroller.parentElement;
+    }
+    // NB: a missing scroller must NOT skip the initial compute — the column
+    // still needs to name its first group before anyone scrolls anything.
+    let raf = 0;
+    const compute = () => {
+      raf = 0;
+      const marks = Array.from(band.querySelectorAll<HTMLElement>('[data-group-name]'));
+      if (!marks.length) { setActive(null); return; }
+      const threshold = row.getBoundingClientRect().bottom + 1;
+      let cur = marks[0].dataset.groupName ?? null;
+      for (const m of marks) {
+        if (m.getBoundingClientRect().top <= threshold) cur = m.dataset.groupName ?? null;
+      }
+      setActive((prev) => (prev === cur ? prev : cur));
+    };
+    const schedule = () => { if (!raf) raf = requestAnimationFrame(compute); };
+    compute();
+    scroller?.addEventListener('scroll', schedule, { passive: true });
+    const ro = new ResizeObserver(schedule); ro.observe(band);
+    const mo = new MutationObserver(schedule); mo.observe(band, { childList: true, subtree: true });
+    return () => {
+      scroller?.removeEventListener('scroll', schedule);
+      ro.disconnect(); mo.disconnect();
+      if (raf) cancelAnimationFrame(raf);
+    };
+  }, []);
+  return (
+    <div ref={rowRef} className="group/band h-[26px] mb-[18px] px-[16px] flex items-center gap-2 sticky top-0 z-10 bg-[var(--app-bg)]">
+      <p onClick={onLabelClick} className={`${bodyFont} text-[#5e5e5e] cursor-pointer`}>
+        {label}
+        {active ? <span className="text-[#454545]">{': '}</span> : null}
+        {active ? <span className="text-[#7a7a7a]">{active}</span> : null}
+      </p>
+      <button
+        type="button"
+        onClick={onAdd}
+        className="opacity-0 group-hover/band:opacity-100 text-[#656464] hover:text-white transition-opacity"
+        aria-label={addAriaLabel}
+      >
+        <Plus size={14} />
+      </button>
+    </div>
+  );
+}
+
+function CalendarCardBody({ task, projects, clients, taskOrder = 'ptc', isTodayCard = false, stacked = false, hideClient = false, hideProject = false }: { task: Task; projects: Project[]; clients: Client[]; taskOrder?: TaskOrder; isTodayCard?: boolean; stacked?: boolean; hideClient?: boolean; hideProject?: boolean }) {
+  const rawProject = task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
+  const resolvedClientId = task.clientId ?? rawProject?.clientId;
+  const rawClient = resolvedClientId ? clients.find((c) => c.id === resolvedClientId) : undefined;
+  // A column that GROUPS by client (or by project, under Personal) already says
+  // it in the group heading — repeating it on every card is noise.
+  const project = hideProject ? undefined : rawProject;
+  const client = hideClient ? undefined : rawClient;
   const isScheduled = task.type === 'scheduled';
   const isNext = task.section === 'next' || task.section === 'tomorrow';
   // A card dated beyond today is a FUTURE item — it reads muted (gray), never the loud white
@@ -4360,7 +4435,7 @@ function CalendarCardBody({ task, projects, clients, taskOrder = 'ptc', isTodayC
   );
 }
 
-function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onDelete, onEdit, onQuickEdit, onAddSibling, onRescheduleDate, isAnyDragging, dimmed, categoryDimmed, displacementOffset = 0, insertionGap = 0, taskOrder = 'ptc', autoFocusEdit = false, stacked = false }: {
+function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onDelete, onEdit, onQuickEdit, onAddSibling, onRescheduleDate, isAnyDragging, dimmed, categoryDimmed, displacementOffset = 0, insertionGap = 0, taskOrder = 'ptc', autoFocusEdit = false, stacked = false, hideClient = false, hideProject = false }: {
   task: Task; cellId: string; projects: Project[]; clients: Client[];
   onToggle: () => void; onRename: (title: string) => void; onDelete: () => void; onEdit: () => void;
   onQuickEdit?: () => void;
@@ -4384,9 +4459,12 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
   displacementOffset?: number; insertionGap?: number;
   taskOrder?: TaskOrder;
 }) {
-  const project = task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
-  const resolvedClientId = task.clientId ?? project?.clientId;
-  const client = resolvedClientId ? clients.find((c) => c.id === resolvedClientId) : undefined;
+  const rawProject = task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
+  const resolvedClientId = task.clientId ?? rawProject?.clientId;
+  const rawClient = resolvedClientId ? clients.find((c) => c.id === resolvedClientId) : undefined;
+  // See CalendarCardBody: a grouped column suppresses the field it groups by.
+  const project = hideProject ? undefined : rawProject;
+  const client = hideClient ? undefined : rawClient;
   // Right-click-on-date mini menu anchor (viewport coords; rendered via portal).
   const [dateMenu, setDateMenu] = useState<{ x: number; y: number } | null>(null);
   // 1-row mode (Settings): collapse to a single continuous line, title truncates first.
@@ -4804,8 +4882,8 @@ function WeekCalendarMode({
                 // so the source category and matching drop targets stay visually loud.
                 const categoryDimmed = !!activeTask && activeTask.list !== listId;
                 return (
-                  <CalendarDayDroppable key={listId} id={`cal:${iso}:${listId}`} isEmpty={bucket.length === 0 && dayMilestones.length === 0} slotHeight={activeSlotHeight} className="pb-[37px] last:pb-0">
-                    <div className="group/band h-[26px] px-[16px] flex items-center gap-2 sticky top-0 z-10 bg-[var(--app-bg)]">
+                  <CalendarDayDroppable key={listId} id={`cal:${iso}:${listId}`} isEmpty={bucket.length === 0 && dayMilestones.length === 0} slotHeight={activeSlotHeight} className="pt-[15px]">
+                    <div className="group/band h-[26px] mb-[18px] px-[16px] flex items-center gap-2 sticky top-0 z-10 bg-[var(--app-bg)]">
                       <p onClick={scrollBandToTop} className={`${bodyFont} text-[#5e5e5e] cursor-pointer`}>{label}</p>
                       <button
                         type="button"
@@ -4934,22 +5012,53 @@ function WeekCalendarMode({
                   const overInBucket = oIdx >= 0;
                   const categoryDimmed = !!activeTask && activeTask.list !== listId;
                   const cellId = `cal:${nwToken}:${listId}`;
+                  // Next Week groups its cards one level deeper than the category band:
+                  // by CLIENT normally, and by PROJECT under Personal (which has no
+                  // clients — everything there hangs off the Personal system client).
+                  // Groups keep the bucket's existing order, so whatever sort the user
+                  // chose still drives which group leads.
+                  const nwGroups: { name: string; tasks: Task[] }[] = [];
+                  for (const t of bucket) {
+                    const proj = t.projectId ? projects.find((p) => p.id === t.projectId) : undefined;
+                    let name: string;
+                    if (listId === 'personal') {
+                      name = proj?.name || 'Unfiled';
+                    } else {
+                      const cid = t.clientId ?? proj?.clientId;
+                      const cl = cid && cid !== PERSONAL_CLIENT_ID ? clients.find((c) => c.id === cid) : undefined;
+                      name = cl?.short || cl?.name || 'Unfiled';
+                    }
+                    const existing = nwGroups.find((g) => g.name === name);
+                    if (existing) existing.tasks.push(t); else nwGroups.push({ name, tasks: [t] });
+                  }
                   return (
-                    <CalendarDayDroppable key={listId} id={cellId} isEmpty={bucket.length === 0 && bandMilestones.length === 0} slotHeight={activeSlotHeight} className="pb-[37px] last:pb-0">
-                      <div className="group/band h-[26px] px-[16px] flex items-center gap-2 sticky top-0 z-10 bg-[var(--app-bg)]">
-                        <p onClick={scrollBandToTop} className={`${bodyFont} text-[#5e5e5e] cursor-pointer`}>{label}</p>
-                        <button
-                          type="button"
-                          onClick={() => onAddTaskOnDay(listId, nwStartIso)}
-                          className="opacity-0 group-hover/band:opacity-100 text-[#656464] hover:text-white transition-opacity"
-                          aria-label={`Add ${label} task next week`}
-                        >
-                          <Plus size={14} />
-                        </button>
-                      </div>
+                    // Major category gap carries an EXTRA space unit (one label row on top of the
+                    // one-card slot) so a category break reads louder than a client sub-break.
+                    <CalendarDayDroppable key={listId} id={cellId} isEmpty={bucket.length === 0 && bandMilestones.length === 0} slotHeight={activeSlotHeight} className="pt-[41px] first:pt-[15px]">
+                      <NextBandHeader
+                        label={label}
+                        bodyFont={bodyFont}
+                        onLabelClick={scrollBandToTop}
+                        onAdd={() => onAddTaskOnDay(listId, nwStartIso)}
+                        addAriaLabel={`Add ${label} task next week`}
+                      />
                       {bandMilestones.length > 0 && bandMilestones.map((t) => <MilestoneCard key={`m-${t.id}`} task={t} showDate categoryDimmed={categoryDimmed} />)}
                       <SortableContext items={items} strategy={verticalListSortingStrategy}>
-                        {bucket.map((t, index) => {
+                        {nwGroups.map((g, gi) => (
+                          <Fragment key={`g-${g.name}`}>
+                            {/* Marker the sticky header reads to know which sub-group is on top.
+                                Group 0 needs no inline label — the sticky bar already says
+                                "Work: <that client>". Later groups get their own name, one
+                                card-slot of air above it. */}
+                            <div data-group-name={g.name} className={gi === 0 ? '' : 'pt-[15px]'}>
+                              {gi > 0 && (
+                                <div className="h-[26px] mb-[18px] px-[16px] flex items-center">
+                                  <p className={`${bodyFont} text-[#7a7a7a]`}>{g.name}</p>
+                                </div>
+                              )}
+                            </div>
+                            {g.tasks.map((t) => {
+                          const index = bucket.indexOf(t);
                           let displacementOffset = 0;
                           let insertionGap = 0;
                           const sameCategory = activeTask && activeTask.list === listId;
@@ -4982,9 +5091,14 @@ function WeekCalendarMode({
                               taskOrder={taskOrder}
                               autoFocusEdit={t.id === newTaskId}
                               stacked
+                              // The group heading already names it — don't repeat it per card.
+                              hideClient={listId !== 'personal'}
+                              hideProject={listId === 'personal'}
                             />
                           );
-                        })}
+                            })}
+                          </Fragment>
+                        ))}
                       </SortableContext>
                     </CalendarDayDroppable>
                   );
@@ -5595,7 +5709,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
       <div className="flex-1 min-h-0 overflow-x-hidden">
         <div className="grid grid-cols-4 gap-x-5 h-full">
           {/* COLUMN 1 — config: version, ordering, shortcuts, case. */}
-          <div className="min-w-0 h-full overflow-y-auto flex flex-col gap-[34px] pt-[2px] pb-[106px]">
+          <div className="min-w-0 h-full"><CustomScroll innerClassName="flex flex-col gap-[34px] pt-[2px] pb-[106px]">
             <div>
               {sectionTitle('About')}
               <div className="px-[35px] pt-[4px] flex flex-col gap-2 text-[13px]">
@@ -5681,10 +5795,10 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
                 <p className="text-[11px] text-[#5e5e5e]">Groups the Focus day columns by client › project, then by deadline and started-first within each group.</p>
               </div>
             </div>
-          </div>
+          </CustomScroll></div>
           {/* COLUMN 2 — people & clients. (Members/account management lives on
               the Team page now — click your avatar in the nav rail.) */}
-          <div className="min-w-0 h-full overflow-y-auto flex flex-col gap-[34px] pt-[2px] pb-[106px]">
+          <div className="min-w-0 h-full"><CustomScroll innerClassName="flex flex-col gap-[34px] pt-[2px] pb-[106px]">
             <div>
               {sectionTitle('People', <AddPlus onClick={onAddPerson} />)}
               <div className="pt-[4px]">
@@ -5718,10 +5832,10 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
                 ))}
               </div>
             </div>
-          </div>
+          </CustomScroll></div>
 
           {/* COLUMN 3 — Trash. */}
-          <div className="min-w-0 h-full overflow-y-auto flex flex-col gap-[34px] pt-[2px] pb-[106px]">
+          <div className="min-w-0 h-full"><CustomScroll innerClassName="flex flex-col gap-[34px] pt-[2px] pb-[106px]">
             <div>
               {sectionTitle('Trash', <span className="text-[#666] text-[12px]">{trashedTasks.length}</span>)}
               <div className="pt-[4px]">
@@ -5745,9 +5859,9 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
                 ))}
               </div>
             </div>
-          </div>
+          </CustomScroll></div>
           {/* COLUMN 4 — Completed & collapsible Debug. */}
-          <div className="min-w-0 h-full overflow-y-auto flex flex-col gap-[34px] pt-[2px] pb-[106px]">
+          <div className="min-w-0 h-full"><CustomScroll innerClassName="flex flex-col gap-[34px] pt-[2px] pb-[106px]">
             <div>
               {sectionTitle('Completed', <span className="text-[#666] text-[12px]">{completedTasks.length}</span>)}
               <div className="pt-[4px]">
@@ -5796,7 +5910,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
                 </div>
               )}
             </div>
-          </div>
+          </CustomScroll></div>
         </div>
       </div>
     </div>
@@ -9154,12 +9268,14 @@ export default function App() {
       const today = todayISO();
       setTasks((prev) => {
         let next = [...prev];
-        // STEP A — expire "rest of day" overrides. Any task whose deadline OR startDate has
-        // arrived (≤ today) that the user had snoozed into Tomorrow / Next / Inbox yesterday is
-        // now back in scope. Promote it to Today so the user sees it. Today/Inbox/Next/Tomorrow
-        // placement was the user's call for THAT day; a new day = re-evaluation.
+        // STEP A — surface UNPLACED (inbox) work whose deadline or start date has arrived.
+        // Restricted to 'inbox' on purpose: Tomorrow and Next are the user's own placement
+        // decisions, and hoisting those into Today every rollover was the automatic move
+        // that had to be undone by hand each morning. A dated task left in Tomorrow still
+        // DISPLAYS on Today (the distribution engine anchors dated cards to their deadline
+        // and absorbs overdue ones) — it just no longer has its section rewritten.
         next = next.map((t) => {
-          if (t.type === 'scheduled' || t.completed || t.section === 'today') return t;
+          if (t.type === 'scheduled' || t.completed || t.section !== 'inbox') return t;
           const dueOrStarting = (t.deadline && t.deadline <= today) || (t.startDate && t.startDate <= today);
           return dueOrStarting ? { ...t, section: 'today' as SectionId } : t;
         });
@@ -10868,10 +10984,12 @@ export default function App() {
                     // category on ANY day — the label carries a hover-reveal +. Empty bands
                     // are just the quiet grey label until you hover.
                     return (
-                      <div key={`${colKey}-${listId}`} className={cellTasks.length > 0 ? 'pb-[24px] last:pb-0' : 'pb-[12px] last:pb-0'}>
+                      <div key={`${colKey}-${listId}`} className={cellTasks.length > 0 ? 'pt-[15px]' : 'pt-[8px]'}>
                         {/* Band label — same treatment as the calendar's in-column
-                            category labels (grey, 20px row, 16px inset) + hover +. */}
-                        <div className="group/band h-[26px] px-[16px] flex items-center gap-2 sticky top-0 z-10 bg-[var(--app-bg)]">
+                            category labels (grey, 26px row, 16px inset) + hover +.
+                            mb mirrors the container's pt so the label sits centered
+                            in the gap between bands. */}
+                        <div className={`group/band h-[26px] ${cellTasks.length > 0 ? 'mb-[18px]' : 'mb-[8px]'} px-[16px] flex items-center gap-2 sticky top-0 z-10 bg-[var(--app-bg)]`}>
                           <p onClick={scrollBandToTop} className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap text-[#5e5e5e] cursor-pointer">{bandLabel}</p>
                           <button
                             type="button"
@@ -11930,7 +12048,7 @@ export default function App() {
         {/* Persistent right-edge tray bar — ALWAYS visible, even mid-drag (when the drawer itself
             is pinned open + invisible so its drop rows stay measured on-screen). Sits behind the
             drawer (z-30 < z-40), so the tray never vanishes the moment you grab a card. */}
-        {!PIP_MODE && mode !== 'settings' && <div className="fixed right-0 top-[var(--titlebar-h)] bottom-0 w-[22px] bg-[#151412] z-30 flex items-center justify-center" aria-hidden><ChevronRight size={12} className="text-[#a8a8a8] rotate-180" /></div>}
+        {!PIP_MODE && mode !== 'settings' && <div className="fixed right-0 top-[var(--titlebar-h)] bottom-0 w-[22px] bg-[var(--app-card)] z-30 flex items-center justify-center" aria-hidden><ChevronRight size={12} className="text-[#a8a8a8] rotate-180" /></div>}
         {!PIP_MODE && mode !== 'settings' && (() => {
           // Assign rail + tray. The rail is a FULL-HEIGHT lighter bar living in the far-left
           // gutter (the pl-[22px] on the wrapper reserves the space) — ONLY the bar is the
@@ -11965,7 +12083,7 @@ export default function App() {
               // pointer dip) fired and slammed the tray shut mid-assign.
               onMouseEnter={trayDrag ? undefined : () => setEdgeDrawer('left')}
               onMouseLeave={trayDrag ? undefined : () => { setEdgeDrawer((d) => (d === 'left' ? null : d)); cancelHoverExpand(); setEdgeExpandedClient(null); }}
-              className={`fixed right-0 top-[var(--titlebar-h)] bottom-0 w-[320px] pt-[104px] z-40 bg-[#151412] flex flex-col duration-300 ease-in-out ${trayDrag ? 'transition-opacity' : 'transition-[transform,opacity]'}`}
+              className={`fixed right-0 top-[var(--titlebar-h)] bottom-0 w-[320px] pt-[104px] z-40 bg-[var(--app-card)] flex flex-col duration-300 ease-in-out ${trayDrag ? 'transition-opacity' : 'transition-[transform,opacity]'}`}
               style={{
                 transform: (trayOpen || trayDrag) ? 'translateX(0)' : 'translateX(320px)',
                 // Opacity is tied to OPEN alone (not "resting"). During a drag the tray sits at
@@ -12041,7 +12159,7 @@ export default function App() {
                   type="button"
                   onClick={() => setEdgeDrawer('left')}
                   style={{ left: -22 }}
-                  className="absolute top-0 bottom-0 w-[22px] bg-[#151412] flex items-center justify-center"
+                  className="absolute top-0 bottom-0 w-[22px] bg-[var(--app-card)] flex items-center justify-center"
                   aria-label="Assign drawer"
                   title="Assign project / person"
                 >

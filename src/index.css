@@ -37,6 +37,16 @@ body { background: var(--app-bg, #1c1b19); color: white; }
    looks identical until a color is picked. --app-bg = the page/card ground; --app-accent = the
    purple used for today/milestones/checkboxes/etc. */
 :root { --app-bg: #1c1b19; --app-accent: #8465ff; }
+/* The card surface — 3% white over whatever the current app background is
+   (cards themselves are bg-white/[0.03] on that background). Panels that need
+   an OPAQUE version of that same tone — the left nav rail, the right assign
+   tray — use this token so they read as the same material as the cards
+   instead of the darker #151412 they used to be. Tracks theme changes because
+   it is derived from --app-bg rather than hard-coded. */
+:root { --app-card: color-mix(in srgb, #ffffff 3%, var(--app-bg)); }
+@supports not (background: color-mix(in srgb, red 3%, blue)) {
+  :root { --app-card: #232120; }
+}
 
 /* iPhone-first column carousel.
    On viewports ≤ 767px (Tailwind `md` breakpoint), the existing
