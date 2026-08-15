@@ -3516,8 +3516,32 @@ function EditableText({ value, onChange, className, autoFocus = false, placehold
   );
 }
 
+// Capsule toggle — the mobile day-switcher language at desktop scale: chips
+// on a darker track; the ACTIVE chip is the page background colour, inactive
+// chips are transparent muted text.
+function CapsuleToggle<T extends string | number>({ options, value, onChange }: {
+  options: { v: T; label: string }[];
+  value: T;
+  onChange: (v: T) => void;
+}) {
+  return (
+    <div className="inline-flex flex-row items-center gap-[3px] rounded-full bg-black/30 p-[3px]">
+      {options.map((o) => (
+        <button
+          key={String(o.v)}
+          type="button"
+          onClick={() => onChange(o.v)}
+          className={`h-[26px] px-[12px] rounded-full text-[13px] font-['Univers_BQ:55_Regular',sans-serif] transition-colors ${o.v === value ? 'bg-[var(--app-bg)] text-white' : 'bg-transparent text-[#656464] hover:text-[#a8a8a8]'}`}
+        >
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function SettingsRow({ children }: { children: React.ReactNode }) {
-  return <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px]">{children}</div>;
+  return <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[10px]">{children}</div>;
 }
 
 function AddPlus({ onClick }: { onClick: () => void }) {
@@ -5815,7 +5839,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
           <div className="min-w-0 h-full flex flex-col"><CustomScroll innerClassName="flex flex-col gap-[37px] pb-[37px]">
             <div>
               {sectionTitle('About')}
-              <div className="px-[31px] flex flex-col gap-2 text-[13px]">
+              <div className="mx-[21px] px-[10px] py-[10px] rounded-[3.333px] bg-white/[0.03] flex flex-col gap-2 text-[13px]">
                 {(() => {
                   const buildDate = new Date(__BUILD_TIME__);
                   const ageMs = Date.now() - buildDate.getTime();
@@ -5837,14 +5861,14 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
             </div>
             <div>
               {sectionTitle('Colors')}
-              <div className="px-[31px] flex flex-col gap-3">
+              <div className="mx-[21px] px-[10px] py-[10px] rounded-[3.333px] bg-white/[0.03] flex flex-col gap-3">
                 <ThemePresetRow label="Background" presets={BG_PRESETS} themeKey="bg" varName="--app-bg" storageKey="app-bg" />
                 <ThemePresetRow label="Accent" presets={ACCENT_PRESETS} themeKey="accent" varName="--app-accent" storageKey="app-accent" />
               </div>
             </div>
             <div>
               {sectionTitle('Task Order')}
-              <div className="px-[31px] flex flex-col gap-2">
+              <div className="mx-[21px] px-[10px] py-[10px] rounded-[3.333px] bg-white/[0.03] flex flex-col gap-2">
                 {([{ id: 'cpt' as TaskOrder, parts: ['Client - Project', 'Task'] as const }, { id: 'ptc' as TaskOrder, parts: ['Project', 'Task', 'Client'] as const }, { id: 'tcp' as TaskOrder, parts: ['Task', 'Client - Project'] as const }]).map((opt) => {
                   const active = taskOrder === opt.id;
                   return (
@@ -5857,7 +5881,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
             </div>
             <div>
               {sectionTitle('Section Sequence')}
-              <div className="px-[31px] flex flex-col gap-2">
+              <div className="mx-[21px] px-[10px] py-[10px] rounded-[3.333px] bg-white/[0.03] flex flex-col gap-2">
                 {listSequence.map((l, i) => (
                   <div key={l} className="flex flex-row items-center gap-3 h-[26px]">
                     <span className="text-[13px] text-white w-[90px]">{LIST_TITLES[l]}</span>
@@ -5869,32 +5893,25 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
             </div>
             <div>
               {sectionTitle('Quick Window Shortcut')}
-              <div className="px-[31px] flex flex-col gap-2 items-start"><PipShortcutSetting /></div>
+              <div className="mx-[21px] px-[10px] py-[10px] rounded-[3.333px] bg-white/[0.03] flex flex-col gap-2 items-start"><PipShortcutSetting /></div>
             </div>
             <div>
               {sectionTitle('Title Case Auto-Correct')}
-              <div className="px-[31px] flex flex-row gap-4">
-                <button type="button" onClick={() => onSetCaseMode('off')} className={`text-[13px] transition-colors ${caseMode === 'off' ? 'text-[var(--app-accent)] font-bold' : 'text-[#656464] hover:text-white'}`}>Off</button>
-                <button type="button" onClick={() => onSetCaseMode('title')} className={`text-[13px] transition-colors ${caseMode === 'title' ? 'text-[var(--app-accent)] font-bold' : 'text-[#656464] hover:text-white'}`}>On</button>
+              <div className="mx-[21px] px-[10px] py-[10px] rounded-[3.333px] bg-white/[0.03] flex flex-row gap-4">
+                <CapsuleToggle options={[{ v: 'off', label: 'Off' }, { v: 'title', label: 'On' }]} value={caseMode} onChange={(v) => onSetCaseMode(v as 'off' | 'title')} />
               </div>
             </div>
             <div>
               {sectionTitle('Card Layout')}
-              <div className="px-[31px] flex flex-col gap-1">
-                <div className="flex flex-row gap-4">
-                  <button type="button" onClick={() => onSetCardRows(2)} className={`text-[13px] transition-colors ${cardRows === 2 ? 'text-[var(--app-accent)] font-bold' : 'text-[#656464] hover:text-white'}`}>Two rows</button>
-                  <button type="button" onClick={() => onSetCardRows(1)} className={`text-[13px] transition-colors ${cardRows === 1 ? 'text-[var(--app-accent)] font-bold' : 'text-[#656464] hover:text-white'}`}>One row</button>
-                </div>
+              <div className="mx-[21px] px-[10px] py-[10px] rounded-[3.333px] bg-white/[0.03] flex flex-col gap-1">
+                <CapsuleToggle options={[{ v: 2, label: 'Two rows' }, { v: 1, label: 'One row' }]} value={cardRows} onChange={(v) => onSetCardRows(v as 1 | 2)} />
                 <p className="text-[11px] text-[#5e5e5e]">One row collapses title + client › project + deadline onto a single line and truncates the title first.</p>
               </div>
             </div>
             <div>
               {sectionTitle('Sort by Client / Project')}
-              <div className="px-[31px] flex flex-col gap-1">
-                <div className="flex flex-row gap-4">
-                  <button type="button" onClick={() => onSetSortByCP(false)} className={`text-[13px] transition-colors ${!sortByCP ? 'text-[var(--app-accent)] font-bold' : 'text-[#656464] hover:text-white'}`}>Off</button>
-                  <button type="button" onClick={() => onSetSortByCP(true)} className={`text-[13px] transition-colors ${sortByCP ? 'text-[var(--app-accent)] font-bold' : 'text-[#656464] hover:text-white'}`}>On</button>
-                </div>
+              <div className="mx-[21px] px-[10px] py-[10px] rounded-[3.333px] bg-white/[0.03] flex flex-col gap-1">
+                <CapsuleToggle options={[{ v: 'off', label: 'Off' }, { v: 'on', label: 'On' }]} value={sortByCP ? 'on' : 'off'} onChange={(v) => onSetSortByCP(v === 'on')} />
                 <p className="text-[11px] text-[#5e5e5e]">Groups the Focus day columns by client › project, then by deadline and started-first within each group.</p>
               </div>
             </div>
@@ -5904,7 +5921,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
           <div className="min-w-0 h-full flex flex-col"><CustomScroll innerClassName="flex flex-col gap-[37px] pb-[37px]">
             <div>
               {sectionTitle('Clients Naming', <AddPlus onClick={onAddClient} />)}
-              <div>
+              <div className="mx-[21px] py-[6px] rounded-[3.333px] bg-white/[0.03]">
                 {clients.map((c) => (
                   c.id === PERSONAL_CLIENT_ID ? (
                     <SettingsRow key={c.id}><span className={`${bodyFont} text-[#656464]`}>Personal</span></SettingsRow>
