@@ -622,9 +622,8 @@ function CustomScroll({
         <div
           data-drop-beacon={bandIndicator.list}
           className="pointer-events-none absolute bottom-0 left-[2px] right-[16px] z-40 rounded-t-[3px] h-[114px]"
-          style={{
-            background: 'linear-gradient(to bottom, transparent, rgb(from var(--app-accent) r g b / 0.1) 45%, rgb(from var(--app-accent) r g b / 0.16))',
-          }}
+          // Solid — the exact same wash the band drop targets use, no gradient.
+          style={{ backgroundColor: 'rgb(from var(--app-accent) r g b / 0.1)' }}
         />
       )}
       {hasOverflow && (
