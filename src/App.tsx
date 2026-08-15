@@ -5253,7 +5253,7 @@ function WeekCalendarMode({
                       id={cellId}
                       isEmpty={bucket.length === 0 && bandMilestones.length === 0}
                       slotHeight={activeSlotHeight}
-                      className="pt-[41px] first:pt-[15px]"
+                      className="pt-[15px]"
                       header={(
                         <NextBandHeader
                           bandList={listId}
