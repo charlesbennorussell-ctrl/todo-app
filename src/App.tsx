@@ -77,8 +77,14 @@ const SHOW_TITLEBAR = false && IS_TAURI && !PIP_MODE;
 // the room adopts a current value the next time a swatch is picked.
 const RETIRED_ACCENTS: Record<string, string> = {
   '#8465ff': '#7666fc',
-  '#7361ff': '#6d66fc',
-  '#625dff': '#6668fc',
+  '#7361ff': '#6e66fc',
+  '#625dff': '#6666fc',
+  // The first pass at the blue end landed either side of 240 by eye; these are
+  // the same two swatches re-derived exactly on the hue walk.
+  '#6d66fc': '#6e66fc',
+  '#6668fc': '#6666fc',
+  '#8171ff': '#6e66fc',
+  '#726dff': '#6666fc',
 };
 export function migrateAccent<T extends string | null | undefined>(v: T): T {
   return (v ? (RETIRED_ACCENTS[v.toLowerCase()] ?? v) : v) as T;
@@ -221,11 +227,15 @@ const BG_PRESETS = [
   { id: 'ink', value: '#121212' },      // almost black — dark as it can be while the pure-black toggle tracks still read against it
 ];
 const ACCENT_PRESETS = [
-  // Sampled from the app's own add button (#7666fc). The two variants hold that
-  // exact HSL lightness/saturation and only rotate hue toward blue in 3.5° steps.
-  { id: 'purple', value: '#7666fc' },   // H 246.4
-  { id: 'violet', value: '#6d66fc' },   // H 242.9
-  { id: 'indigo', value: '#6668fc' },   // H 239.4
+  // The ramp is one hue walk. Purple is the app's own add-button colour; the
+  // other two hold its EXACT saturation (96.15%) and lightness (69.41%) and
+  // only rotate hue toward 240 — the hue of pure RGB blue. So they read as the
+  // same colour family at the same weight, just bluer, instead of three
+  // unrelated swatches. Every accent surface reads var(--app-accent), so
+  // desktop, web and phone all follow whichever is picked.
+  { id: 'purple', value: '#7666fc' },   // H 246.40 — baseline
+  { id: 'violet', value: '#6e66fc' },   // H 243.20 — halfway
+  { id: 'blue',   value: '#6666fc' },   // H 240.00 — pure blue's hue
 ];
 
 function ThemePresetRow({ label, presets, themeKey, varName, storageKey }: {
@@ -571,6 +581,12 @@ function CustomScroll({
   }, [bandIndicator]);
   const overflowRef = useRef(false);
   const dragRef = useRef<{ startY: number; startScrollTop: number; trackH: number; maxScroll: number } | null>(null);
+  // bandIndicator is non-null for exactly as long as a task drag is running,
+  // so it doubles as "a drag is in flight". Snapping mid-drag would fight
+  // dnd-kit's auto-scroll, so the settle is suppressed while it's set. Mirrored
+  // into a ref because the scroll effect below is set up once.
+  const draggingRef = useRef(false);
+  draggingRef.current = bandIndicator !== null;
 
   // Pill travels between just-below-up-arrow and just-above-down-arrow.
   const computeTrack = (clientH: number) => {
@@ -670,11 +686,104 @@ function CustomScroll({
       if (rafId === null) rafId = requestAnimationFrame(tick);
     };
     el.addEventListener('wheel', onWheel, { passive: false });
+
+    // ---- Snap to the baseline grid when the scroll settles ----------------
+    // Scrolling itself stays completely free — no resistance, no CSS
+    // scroll-snap (which fights the wheel mid-gesture). Instead we wait for a
+    // quiet moment and then ease to the nearest legal resting place, so a
+    // column never comes to rest showing a sliver of a card.
+    //
+    // Candidates are read from the DOM rather than assumed from a unit, because
+    // one column mixes a 37px label row with 60px calendar cards (or 37px focus
+    // cards) — arithmetic on a single unit would drift. Both scroll extremes
+    // count as legal rests too, otherwise a small scroll away from the top
+    // would suck the view down past the category label.
+    let snapTimer: number | null = null;
+    let snapRaf: number | null = null;
+    const SNAP_IDLE_MS = 130;   // quiet time that means "the gesture is over"
+    const SNAP_MS = 320;        // the ease itself
+    // Quintic in/out — the curve the drop beacon already settles on.
+    const easeInOutQuint = (t: number) => (t < 0.5 ? 16 * t * t * t * t * t : 1 - Math.pow(-2 * t + 2, 5) / 2);
+    const cancelSnap = () => {
+      if (snapTimer !== null) { clearTimeout(snapTimer); snapTimer = null; }
+      if (snapRaf !== null) { cancelAnimationFrame(snapRaf); snapRaf = null; }
+    };
+    const runSnap = () => {
+      snapTimer = null;
+      if (draggingRef.current || dragRef.current) return;
+      const maxScroll = el.scrollHeight - el.clientHeight;
+      if (maxScroll <= 1) return;
+      const from = el.scrollTop;
+      const erTop = el.getBoundingClientRect().top;
+      // Every card-shaped box contributes its own 4px halo line, the same edge
+      // the drop beacon snaps to — so the two features agree on where a
+      // boundary is.
+      let to = from;
+      let best = Infinity;
+      const consider = (candidate: number) => {
+        const clamped = Math.max(0, Math.min(maxScroll, candidate));
+        const d = Math.abs(clamped - from);
+        if (d < best) { best = d; to = clamped; }
+      };
+      consider(0);
+      consider(maxScroll);
+      // Cards, Add placeholders and client sub-labels all sit on the baseline,
+      // so each is a legal rest. Category band headers are deliberately EXCLUDED:
+      // they are `sticky top-0`, so once scrolled past, their rect reports the
+      // container's own top and every one of them would look like a boundary
+      // 4px away — a permanent phantom that would drag the column on every settle.
+      for (const box of el.querySelectorAll<HTMLElement>('[data-cal-card], [data-add-card], [data-group-name]')) {
+        if (box.getBoundingClientRect().height < 1) continue;   // group markers can be zero-height
+        consider(from + (box.getBoundingClientRect().top - 4 - erTop));
+      }
+      // Nothing card-shaped in this column (Settings, the filter panel) → the
+      // nearest candidate is an extreme, so this correctly no-ops mid-scroll.
+      //
+      // The 34px ceiling keeps this a SETTLE rather than a jump. A within-slot
+      // correction is never more than half a slot (30 on the calendar's 60,
+      // 18.5 on focus's 37), so the cap never blocks a real snap — it only
+      // declines the blank stretch at a category break, where the nearest edge
+      // can be 45px+ away and yanking the view there reads as a lurch. Resting
+      // in that gap shows empty space, not a sliced card, so it is harmless.
+      if (best === Infinity || best < 0.5 || best > 34) return;
+      if (typeof document !== 'undefined' && document.hidden) { el.scrollTop = to; return; }
+      const t0 = performance.now();
+      const step = (now: number) => {
+        const k = Math.min(1, (now - t0) / SNAP_MS);
+        el.scrollTop = from + (to - from) * easeInOutQuint(k);
+        // Keep the wheel lerp in sync so it doesn't read this as an external
+        // writer and yank the view back.
+        lastSyncedTop = el.scrollTop;
+        target = el.scrollTop;
+        snapRaf = k < 1 ? requestAnimationFrame(step) : null;
+      };
+      snapRaf = requestAnimationFrame(step);
+    };
+    const scheduleSnap = () => {
+      if (snapRaf !== null) return;   // our own animation's scroll events
+      if (snapTimer !== null) clearTimeout(snapTimer);
+      snapTimer = window.setTimeout(runSnap, SNAP_IDLE_MS);
+    };
+    const onScrollSnap = () => scheduleSnap();
+    el.addEventListener('scroll', onScrollSnap, { passive: true });
+    // Any fresh input cancels a settle in progress — the user always wins.
+    const onInterrupt = () => cancelSnap();
+    el.addEventListener('wheel', onInterrupt, { passive: true });
+    el.addEventListener('pointerdown', onInterrupt, { passive: true });
+    el.addEventListener('touchstart', onInterrupt, { passive: true });
+    el.addEventListener('keydown', onInterrupt);
+
     return () => {
       ro.disconnect();
       mo.disconnect();
       el.removeEventListener('scroll', onScroll);
+      el.removeEventListener('scroll', onScrollSnap);
       el.removeEventListener('wheel', onWheel);
+      el.removeEventListener('wheel', onInterrupt);
+      el.removeEventListener('pointerdown', onInterrupt);
+      el.removeEventListener('touchstart', onInterrupt);
+      el.removeEventListener('keydown', onInterrupt);
+      cancelSnap();
       if (rafId !== null) cancelAnimationFrame(rafId);
     };
   }, [update]);
@@ -719,6 +828,13 @@ function CustomScroll({
         className={`absolute inset-0 overflow-y-auto custom-scroll-hidden pr-[14px] ${innerClassName}`}
       >
         {children}
+        {/* Snap tail. When a column overflows by only a sliver there is not
+            enough scroll range to bring the next card boundary to the top, so
+            the settle could only ever fall back. One slot of empty space at the
+            end makes that upward snap reachable. Only when the column already
+            overflows — adding it unconditionally would manufacture a scrollbar
+            on columns that fit. */}
+        {hasOverflow && <div style={{ height: CAL_SLOT }} aria-hidden />}
       </div>
       {/* Sticky label overlay — pinned at the top of the column, crossfades date
           and category labels by opacity as the user scrolls. Inert if the
@@ -2186,7 +2302,7 @@ function ProjectsHeaderDropZone({ onClearFilter }: { onClearFilter?: () => void 
       style={{ marginBottom: SPACING.dcr }}
     >
       <FilterGlyph />
-      <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white whitespace-nowrap">Clients + Projects{isOver ? ' — drop to un-nest' : ''}</p>
+      <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-[#656464] whitespace-nowrap">Clients + Projects{isOver ? ' — drop to un-nest' : ''}</p>
     </div>
   );
 }
@@ -4724,22 +4840,22 @@ function NextBandHeader({ label, bodyFont, onLabelClick, onAdd, addAriaLabel, ba
   return (
     // On the calendar (`stacked`) the header is a card-shaped slot with its label
     // docked to the BOTTOM row; the blank row above is the section break.
-    <div ref={rowRef} data-band-list={bandList} className={`group/band px-[16px] sticky top-0 z-10 bg-[var(--app-bg)] ${stacked ? 'h-[56px] mb-[4px] pb-[6px] flex flex-col justify-end' : 'h-[37px] flex items-center gap-2'}`} style={stacked ? undefined : { marginBottom: labelMb }}>
-      <div className={stacked ? 'h-[22px] flex items-center gap-2' : 'contents'}>
-        <p onClick={onLabelClick} className={`${bodyFont} text-[#5e5e5e] cursor-pointer`}>
-          {label}
-          {active ? <Arrowhead /> : null}
-          {active ? <span className="text-[#7a7a7a]">{active}</span> : null}
-        </p>
-        <button
-          type="button"
-          onClick={onAdd}
-          className="opacity-0 group-hover/band:opacity-100 text-[#656464] hover:text-white transition-opacity"
-          aria-label={addAriaLabel}
-        >
-          <Plus size={14} />
-        </button>
-      </div>
+    // One frame for both modes: the app's universal 37px label row. `stacked`
+    // (calendar) now only drops the focus variant's inline bottom margin.
+    <div ref={rowRef} data-band-list={bandList} className="group/band px-[16px] sticky top-0 z-10 bg-[var(--app-bg)] h-[37px] flex items-center gap-2" style={stacked ? undefined : { marginBottom: labelMb }}>
+      <p onClick={onLabelClick} className={`${bodyFont} text-[#5e5e5e] cursor-pointer`}>
+        {label}
+        {active ? <Arrowhead /> : null}
+        {active ? <span className="text-[#7a7a7a]">{active}</span> : null}
+      </p>
+      <button
+        type="button"
+        onClick={onAdd}
+        className="opacity-0 group-hover/band:opacity-100 text-[#656464] hover:text-white transition-opacity"
+        aria-label={addAriaLabel}
+      >
+        <Plus size={14} />
+      </button>
     </div>
   );
 }
@@ -5282,18 +5398,16 @@ function WeekCalendarMode({
                     className=""
                     style={{ paddingTop: isFirstBand ? 0 : CAL_SLOT }}
                     header={(
-                      <div data-band-list={listId} className="group/band h-[56px] mb-[4px] pb-[6px] px-[16px] flex flex-col justify-end sticky top-0 z-10 bg-[var(--app-bg)]">
-                        <div className="h-[22px] flex items-center gap-2">
-                          <p onClick={scrollBandToTop} className={`${bodyFont} text-[#5e5e5e] cursor-pointer`}>{label}</p>
-                          <button
-                            type="button"
-                            onClick={() => onAddTaskOnDay(listId, iso)}
-                            className="opacity-0 group-hover/band:opacity-100 text-[#656464] hover:text-white transition-opacity"
-                            aria-label={`Add ${label} task on ${iso}`}
-                          >
-                            <Plus size={14} />
-                          </button>
-                        </div>
+                      <div data-band-list={listId} className="group/band h-[37px] px-[16px] flex items-center gap-2 sticky top-0 z-10 bg-[var(--app-bg)]">
+                        <p onClick={scrollBandToTop} className={`${bodyFont} text-[#5e5e5e] cursor-pointer`}>{label}</p>
+                        <button
+                          type="button"
+                          onClick={() => onAddTaskOnDay(listId, iso)}
+                          className="opacity-0 group-hover/band:opacity-100 text-[#656464] hover:text-white transition-opacity"
+                          aria-label={`Add ${label} task on ${iso}`}
+                        >
+                          <Plus size={14} />
+                        </button>
                       </div>
                     )}
                   >
@@ -5430,11 +5544,11 @@ function WeekCalendarMode({
                     const proj = t.projectId ? projects.find((p) => p.id === t.projectId) : undefined;
                     let name: string;
                     if (listId === 'personal') {
-                      name = proj?.name || 'Unfiled';
+                      name = proj?.name || 'Misc';
                     } else {
                       const cid = t.clientId ?? proj?.clientId;
                       const cl = cid && cid !== PERSONAL_CLIENT_ID ? clients.find((c) => c.id === cid) : undefined;
-                      name = cl?.short || cl?.name || 'Unfiled';
+                      name = cl?.short || cl?.name || 'Misc';
                     }
                     const existing = nwGroups.find((g) => g.name === name);
                     if (existing) existing.tasks.push(t); else nwGroups.push({ name, tasks: [t] });
@@ -5478,9 +5592,9 @@ function WeekCalendarMode({
                                 gap belongs to the category break above. */}
                             <div data-group-name={g.name}>
                               {gi > 0 && (
-                                <div className="h-[56px] mb-[4px] pb-[6px] px-[16px] flex flex-col justify-end">
+                                <div className="h-[37px] px-[16px] flex items-center">
                                   {/* Breadcrumb — see the focus column's note. */}
-                                  <p className={`${bodyFont} text-[#5e5e5e] h-[22px] flex items-center`}>
+                                  <p className={`${bodyFont} text-[#5e5e5e]`}>
                                     {label}<Arrowhead /><span className="text-[#7a7a7a]">{g.name}</span>
                                   </p>
                                 </div>
@@ -11114,7 +11228,7 @@ export default function App() {
           const focusMilestonesHeader = (
             <div className="group shrink-0 h-[37px] mb-[37px] flex items-center gap-2 px-[31px]">
               <FilterGlyph />
-              <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">Milestones</p>
+              <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-[#656464]">Milestones</p>
               <button type="button" onClick={() => { const id = `task-${Date.now()}`; const ms: Task = { id, title: '', type: 'scheduled', assignees: currentUserShort ? [currentUserShort] : [], completed: false, list: 'work', section: 'today', deadline: todayISO(), order: 0, createdAt: Date.now(), ...(focusProjectId ? { projectId: focusProjectId } : focusClientId ? { clientId: focusClientId } : {}) }; setTasks((prev) => [...prev, ms]); setNewId(id); openEdit(ms); }} className="opacity-0 group-hover:opacity-100 text-[#656464] hover:text-white transition-opacity" aria-label="Add milestone"><Plus size={14} /></button>
             </div>
           );
@@ -11124,7 +11238,7 @@ export default function App() {
           const focusClientsHeader = (
             <div onClick={focusClearFilter} className={`shrink-0 h-[37px] mb-[37px] flex items-center gap-2 px-[31px] ${focusClearFilter ? 'cursor-pointer' : ''}`}>
               <FilterGlyph />
-              <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">Clients + Projects</p>
+              <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-[#656464]">Clients + Projects</p>
             </div>
           );
           const focusClientsList = proj2SortedClients.map((c) => {
@@ -11233,7 +11347,7 @@ export default function App() {
                       className={`shrink-0 h-[37px] mb-[37px] flex items-center gap-2 px-[31px] ${assigneeFilter.length ? 'cursor-pointer' : ''}`}
                     >
                       <FilterGlyph />
-                      <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-white">Assignees</p>
+                      <p className="font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] text-[#656464]">Assignees</p>
                       {assigneeFilter.length > 0 && <X size={14} className="text-[#a8a8a8]" />}
                     </div>
                     {people.map((p) => {
@@ -11506,11 +11620,11 @@ export default function App() {
                               for (const t of cellTasks) {
                                 const proj = t.projectId ? projects.find((pp) => pp.id === t.projectId) : undefined;
                                 let name: string;
-                                if (listId === 'personal') name = proj?.name || 'Unfiled';
+                                if (listId === 'personal') name = proj?.name || 'Misc';
                                 else {
                                   const cid = t.clientId ?? proj?.clientId;
                                   const cl = cid && cid !== PERSONAL_CLIENT_ID ? clients.find((x) => x.id === cid) : undefined;
-                                  name = cl?.short || cl?.name || 'Unfiled';
+                                  name = cl?.short || cl?.name || 'Misc';
                                 }
                                 const g = groups.find((x) => x.name === name);
                                 if (g) g.tasks.push(t); else groups.push({ name, tasks: [t] });
