@@ -4325,14 +4325,19 @@ export function computeCalendarDistribution(tasks: Task[], todayAnchor: Date, ho
 // the TODAY column it takes today's purple wash and accent text, exactly like
 // the real cards there; every other column gets the card gray with pale text
 // that stays quiet until you look for it.
-function AddPlaceholderCard({ isToday, onClick }: { isToday: boolean; onClick: () => void }) {
+function AddPlaceholderCard({ isToday, onClick, stacked = false }: { isToday: boolean; onClick: () => void; stacked?: boolean }) {
   const tone = isToday ? 'text-[var(--app-accent)]' : 'text-[#4a4a4a]';
+  // Match the RENDERED height of the cards beside it, not CalendarCard's
+  // min-height: a two-line card declares min-h-[45px] but content pushes it to
+  // 55px, and a placeholder that stopped at 45 broke the column's grid.
+  const oneRow = useContext(CardRowsContext) === 1;
+  const singleLine = oneRow && !stacked;
   return (
     <button
       type="button"
       onClick={onClick}
       aria-label="Add task"
-      className={`mx-[6px] mb-[4px] rounded-[3.333px] min-h-[45px] w-[calc(100%-12px)] flex flex-row items-center gap-[6px] px-[10px] ${isToday ? '' : 'bg-white/[0.03]'} hover:brightness-125 transition-[filter]`}
+      className={`mx-[6px] mb-[4px] rounded-[3.333px] ${singleLine ? 'min-h-[30px]' : 'min-h-[55px]'} w-[calc(100%-12px)] flex flex-row items-center gap-[6px] px-[10px] ${isToday ? '' : 'bg-white/[0.03]'} hover:brightness-125 transition-[filter]`}
       style={isToday ? { backgroundColor: 'rgb(from var(--app-accent) r g b / 0.1)' } : undefined}
     >
       <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] ${tone}`}>Add</span>
@@ -4925,7 +4930,7 @@ function WeekCalendarMode({
                     {/* Empty band → the Add invitation. Hidden mid-drag so the droppable's
                         own empty slot stays the clean target. */}
                     {bucket.length === 0 && dayMilestones.length === 0 && !isAnyDragging && (
-                      <AddPlaceholderCard isToday={isToday} onClick={() => onAddTaskOnDay(listId, iso)} />
+                      <AddPlaceholderCard isToday={isToday} stacked onClick={() => onAddTaskOnDay(listId, iso)} />
                     )}
                     <SortableContext items={items} strategy={verticalListSortingStrategy}>
                         {bucket.map((t, index) => {
@@ -5077,7 +5082,7 @@ function WeekCalendarMode({
                       {bandMilestones.length > 0 && bandMilestones.map((t) => <MilestoneCard key={`m-${t.id}`} task={t} showDate categoryDimmed={categoryDimmed} />)}
                       {/* Next Week is never the Today column, so this is always the gray tone. */}
                       {bucket.length === 0 && bandMilestones.length === 0 && !isAnyDragging && (
-                        <AddPlaceholderCard isToday={false} onClick={() => onAddTaskOnDay(listId, nwStartIso)} />
+                        <AddPlaceholderCard isToday={false} stacked onClick={() => onAddTaskOnDay(listId, nwStartIso)} />
                       )}
                       <SortableContext items={items} strategy={verticalListSortingStrategy}>
                         {nwGroups.map((g, gi) => (
