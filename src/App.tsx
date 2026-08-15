@@ -481,12 +481,21 @@ export function bandSpacing(_oneRow: boolean) {
 // Every element in a column occupies ONE slot: task cards fill both rows,
 // milestones and Add dock their content to the TOP row, and a category label
 // sits on the BOTTOM row — the blank row above it IS the section break.
-// Literals 'h-[22px]' / 'h-[44px]' / 'mb-[4px]' appear in the classes below;
+// Literals 'h-[22px]' / 'h-[56px]' / 'mb-[4px]' appear in the classes below;
 // Tailwind only reads source text, never computed values.
 export const CAL_ROW = 22;                      // one text line inside a card
+export const CAL_PAD = 6;                       // breathing room above/below the text block
 export const CAL_GAP = 4;                       // gutter under every slot
-export const CAL_CARD_H = CAL_ROW * 2;          // 44 — a card is exactly two rows
-export const CAL_SLOT = CAL_CARD_H + CAL_GAP;   // 48 — the calendar's grid unit
+export const CAL_CARD_H = CAL_ROW * 2 + CAL_PAD * 2; // 56 — two rows plus their padding
+export const CAL_SLOT = CAL_CARD_H + CAL_GAP;   // 60 — the calendar's grid unit
+
+// CAL_PAD is the dial for "how tight do the cards feel". The two text rows stay
+// welded together (that's what makes line 2 read as belonging to line 1); this
+// only opens up the gap between the text block and the card's edges. Raising it
+// grows the card and therefore the whole column's grid, which is intended —
+// every slot is derived, so nothing else needs touching. Tailwind reads source
+// text only, so the literals below must be updated alongside it:
+//   CAL_PAD 6 -> 'py-[6px]' / 'pt-[6px]' / 'pb-[6px]', CAL_CARD_H 56 -> 'h-[56px]'.
 
 // Beacon target height — two card slots (55px card + 4px gap, twice). The
 // snap picks the card edge nearest this, so the block lands on a boundary
@@ -4366,7 +4375,7 @@ function MilestoneCardView({ task, projects, clients, showDate, categoryDimmed =
       data-cal-card={task.id}
       {...(cellId ? drag.attributes : {})}
       {...(cellId ? drag.listeners : {})}
-      onClick={onClick} onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onQuickEdit?.(); }} style={cardBgStyle} className={`relative mx-[6px] mb-[4px] group ${cellId ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'} ${drag.isDragging ? 'opacity-40' : ''} ${stacked ? 'h-[44px]' : 'h-[33px]'} rounded-[3.333px]`}>
+      onClick={onClick} onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onQuickEdit?.(); }} style={cardBgStyle} className={`relative mx-[6px] mb-[4px] group ${cellId ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'} ${drag.isDragging ? 'opacity-40' : ''} ${stacked ? 'h-[56px] pt-[6px]' : 'h-[33px]'} rounded-[3.333px]`}>
       {/* One continuous line — title (truncates first), then client › project, assignees, date, +.
           Coming-Up cards stay ONE line in BOTH the calendar and focus views. */}
       <div className={`px-[10px] flex flex-row items-center gap-[6px] ${stacked ? 'h-[22px]' : 'h-full'}`}>
@@ -4631,7 +4640,7 @@ function AddPlaceholderCard({ isToday, onClick, stacked = false, dimmed = false 
       aria-label="Add task"
       // Card-shaped, so it is a valid snap target for the drop beacon's top edge.
       data-add-card
-      className={`mx-[6px] mb-[4px] rounded-[3.333px] ${stacked ? 'h-[44px]' : 'h-[33px]'} w-[calc(100%-12px)] flex flex-col px-[10px] ${isToday ? '' : 'bg-white/[0.03]'} hover:brightness-125 transition-[filter]`}
+      className={`mx-[6px] mb-[4px] rounded-[3.333px] ${stacked ? 'h-[56px] pt-[6px]' : 'h-[33px]'} w-[calc(100%-12px)] flex flex-col px-[10px] ${isToday ? '' : 'bg-white/[0.03]'} hover:brightness-125 transition-[filter]`}
       style={isToday ? { backgroundColor: 'rgb(from var(--app-accent) r g b / 0.1)' } : undefined}
     >
       <span className={`flex flex-row items-center gap-[6px] ${stacked ? 'h-[22px]' : 'h-full'}`}>
@@ -4697,7 +4706,7 @@ function NextBandHeader({ label, bodyFont, onLabelClick, onAdd, addAriaLabel, ba
   return (
     // On the calendar (`stacked`) the header is a card-shaped slot with its label
     // docked to the BOTTOM row; the blank row above is the section break.
-    <div ref={rowRef} data-band-list={bandList} className={`group/band px-[16px] sticky top-0 z-10 bg-[var(--app-bg)] ${stacked ? 'h-[44px] mb-[4px] flex flex-col justify-end' : 'h-[37px] flex items-center gap-2'}`} style={stacked ? undefined : { marginBottom: labelMb }}>
+    <div ref={rowRef} data-band-list={bandList} className={`group/band px-[16px] sticky top-0 z-10 bg-[var(--app-bg)] ${stacked ? 'h-[56px] mb-[4px] pb-[6px] flex flex-col justify-end' : 'h-[37px] flex items-center gap-2'}`} style={stacked ? undefined : { marginBottom: labelMb }}>
       <div className={stacked ? 'h-[22px] flex items-center gap-2' : 'contents'}>
         <p onClick={onLabelClick} className={`${bodyFont} text-[#5e5e5e] cursor-pointer`}>
           {label}
@@ -4745,7 +4754,7 @@ function CalendarCardBody({ task, projects, clients, taskOrder = 'ptc', isTodayC
   // focus ghosts follow the 1-row setting like the live focus cards.
   const singleLine = oneRow && !stacked;
   return (
-    <div className={`px-[10px] overflow-hidden h-full flex ${singleLine ? 'flex-row items-center gap-[4px] py-[7px]' : stacked ? 'flex-col' : 'flex-col justify-center gap-[2px] py-[7px]'}`}>
+    <div className={`px-[10px] overflow-hidden h-full flex ${singleLine ? 'flex-row items-center gap-[4px] py-[7px]' : stacked ? 'flex-col py-[6px]' : 'flex-col justify-center gap-[2px] py-[7px]'}`}>
       <div className={`flex flex-row items-center gap-[10px] ${stacked ? 'h-[22px] shrink-0' : ''}`}>
         {!isScheduled && (
           <div className="shrink-0 flex items-center justify-center">
@@ -4874,11 +4883,11 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
       ref={setNodeRef}
       style={style}
       data-cal-card={task.id}
-      className={`relative mx-[6px] mb-[4px] group rounded-[3.333px] ${singleLine ? 'h-[33px]' : stacked ? 'h-[44px]' : 'h-[70px]'} flex ${isTodayCard ? '' : 'bg-white/[0.03]'} ${dimmed ? 'opacity-60' : ''}`}
+      className={`relative mx-[6px] mb-[4px] group rounded-[3.333px] ${singleLine ? 'h-[33px]' : stacked ? 'h-[56px]' : 'h-[70px]'} flex ${isTodayCard ? '' : 'bg-white/[0.03]'} ${dimmed ? 'opacity-60' : ''}`}
       animate={{ opacity: isDragging ? 0 : 1 }}
       transition={{ opacity: { duration: 0.12, ease: 'easeOut' } }}
     >
-      <div onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} onContextMenu={(e) => { if (onQuickEdit) { e.preventDefault(); e.stopPropagation(); onQuickEdit(); } }} {...attributes} {...listeners} className={`cursor-grab active:cursor-grabbing px-[10px] overflow-hidden flex-1 ${singleLine ? 'flex flex-row items-center gap-[4px] pr-[26px]' : 'flex flex-col gap-0'}`}>
+      <div onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} onContextMenu={(e) => { if (onQuickEdit) { e.preventDefault(); e.stopPropagation(); onQuickEdit(); } }} {...attributes} {...listeners} className={`cursor-grab active:cursor-grabbing px-[10px] overflow-hidden flex-1 ${singleLine ? 'flex flex-row items-center gap-[4px] pr-[26px]' : stacked ? 'flex flex-col gap-0 py-[6px]' : 'flex flex-col gap-0'}`}>
         {/* Calendar cards always render Title on line 1, all other meta on line 2 — taskOrder
             setting doesn't apply here. Line 1: checkbox + title. Line 2: client › project,
             assignees, deadline, + button. Checkbox is INLINE with the title so it stays aligned
@@ -5247,7 +5256,7 @@ function WeekCalendarMode({
                     className=""
                     style={{ paddingTop: bandGap.pt }}
                     header={(
-                      <div data-band-list={listId} className="group/band h-[44px] mb-[4px] px-[16px] flex flex-col justify-end sticky top-0 z-10 bg-[var(--app-bg)]">
+                      <div data-band-list={listId} className="group/band h-[56px] mb-[4px] pb-[6px] px-[16px] flex flex-col justify-end sticky top-0 z-10 bg-[var(--app-bg)]">
                         <div className="h-[22px] flex items-center gap-2">
                           <p onClick={scrollBandToTop} className={`${bodyFont} text-[#5e5e5e] cursor-pointer`}>{label}</p>
                           <button
@@ -5441,7 +5450,7 @@ function WeekCalendarMode({
                                 card-slot of air above it. */}
                             <div data-group-name={g.name} style={gi === 0 ? undefined : { paddingTop: bandGap.pt }}>
                               {gi > 0 && (
-                                <div className="h-[44px] mb-[4px] px-[16px] flex flex-col justify-end">
+                                <div className="h-[56px] mb-[4px] pb-[6px] px-[16px] flex flex-col justify-end">
                                   <p className={`${bodyFont} text-[#7a7a7a] h-[22px] flex items-center`}>{g.name}</p>
                                 </div>
                               )}

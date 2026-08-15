@@ -3,8 +3,17 @@
 # bricks sign-in for every surface at once (and presents as a confusing auth
 # error, not "server asleep"). Two cheap pings a day keep it warm.
 #
-# The anon key is already public by design (committed in .env.production);
-# the REST root just needs to see *any* request to count as activity.
+# The anon key is public by design (committed in .env.production); the ping
+# just needs to reach the project to count as activity.
+#
+# HISTORY: the first version of this job fetched .env.production over raw
+# githubusercontent and parsed it with an UNANCHORED `grep VITE_SUPABASE_ANON_KEY`.
+# That file's header comment also mentions the variable by name, so the grep
+# matched two lines and the key came out as a two-line string — curl rejected
+# the header with exit 43 and the job failed on every single run. It never
+# pinged anything. Hence: check out the repo instead of fetching it, anchor the
+# match to the start of a line, take the first hit, keep everything after the
+# first '=', strip CR/LF, and refuse to proceed on an empty key.
 name: Supabase keep-alive
 
 on:
@@ -16,12 +25,54 @@ jobs:
   ping:
     runs-on: ubuntu-latest
     steps:
-      - name: Ping Supabase REST API
+      - uses: actions/checkout@v4
+
+      - name: Read the publishable key
+        id: key
         run: |
-          ANON_KEY="$(curl -s https://raw.githubusercontent.com/charlesbennorussell-ctrl/todo-app/master/.env.production | grep VITE_SUPABASE_ANON_KEY | cut -d= -f2)"
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-            -H "apikey: ${ANON_KEY}" \
-            "https://ogbtppqysksooinmftpj.supabase.co/rest/v1/")
-          echo "Supabase responded with HTTP ${STATUS}"
-          # 200/401/404 all prove the project is awake; only fail on network death.
-          if [ "$STATUS" = "000" ]; then exit 1; fi
+          set -euo pipefail
+          KEY="$(grep -E '^[[:space:]]*VITE_SUPABASE_ANON_KEY=' .env.production \
+                 | head -n 1 | cut -d= -f2- | tr -d '\r\n' | xargs)"
+          if [ -z "$KEY" ]; then
+            echo "::error::Could not read VITE_SUPABASE_ANON_KEY from .env.production"
+            exit 1
+          fi
+          echo "Read a ${#KEY}-character key (${KEY:0:15}...)"
+          echo "key=$KEY" >> "$GITHUB_OUTPUT"
+
+      - name: Ping Supabase
+        env:
+          ANON_KEY: ${{ steps.key.outputs.key }}
+          PROJECT: https://ogbtppqysksooinmftpj.supabase.co
+        run: |
+          set -uo pipefail
+          fail=0
+
+          # A real table read, not just the REST root: this reaches POSTGRES,
+          # which is the thing that actually goes idle. RLS may return an empty
+          # array for the anon role — that still proves the database answered.
+          DB=$(curl -s -o /tmp/db.out -w '%{http_code}' --max-time 30 \
+                 -H "apikey: ${ANON_KEY}" \
+                 "${PROJECT}/rest/v1/members?select=id&limit=1")
+          echo "REST/postgres -> HTTP ${DB}  $(head -c 200 /tmp/db.out)"
+
+          # GoTrue liveness. Auth is the half that bricks sign-in, and it has
+          # its own process, so check it separately.
+          AUTH=$(curl -s -o /tmp/auth.out -w '%{http_code}' --max-time 30 \
+                   -H "apikey: ${ANON_KEY}" \
+                   "${PROJECT}/auth/v1/health")
+          echo "auth/health   -> HTTP ${AUTH}  $(head -c 200 /tmp/auth.out)"
+
+          # 000 = never reached the host. 5xx = the project is paused or broken.
+          # Both mean the keep-alive is NOT keeping anything alive, so make it
+          # loud — a silently green job is exactly how the last project died.
+          for pair in "REST:${DB}" "AUTH:${AUTH}"; do
+            name=${pair%%:*}; code=${pair##*:}
+            if [ "$code" = "000" ]; then
+              echo "::error::${name} unreachable (curl could not connect)"; fail=1
+            elif [ "$code" -ge 500 ] 2>/dev/null; then
+              echo "::error::${name} returned ${code} — project may be paused"; fail=1
+            fi
+          done
+
+          exit $fail
