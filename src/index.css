@@ -36,7 +36,7 @@ body { background: var(--app-bg, #1c1b19); color: white; }
    localStorage, re-applied on load). Defaults reproduce the original palette exactly, so the app
    looks identical until a color is picked. --app-bg = the page/card ground; --app-accent = the
    purple used for today/milestones/checkboxes/etc. */
-:root { --app-bg: #1c1b19; --app-accent: #8465ff; }
+:root { --app-bg: #1c1b19; --app-accent: #7666fc; }
 /* The card surface — 3% white over whatever the current app background is
    (cards themselves are bg-white/[0.03] on that background). Panels that need
    an OPAQUE version of that same tone — the left nav rail, the right assign

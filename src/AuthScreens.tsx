@@ -19,8 +19,8 @@ import { getSlot, downloadSnapshot } from './backup';
 
 const FONT = "font-['Univers_BQ:55_Regular',sans-serif]";
 const HEAD = "font-['NB_International:Regular',sans-serif]";
-const INPUT = `${FONT} w-full h-[42px] px-[16px] rounded-full bg-[#151412] text-white text-[14px] placeholder-[#656464] outline-none focus:ring-1 focus:ring-[var(--app-accent,#8465ff)] border border-transparent`;
-const BTN_PRIMARY = `${FONT} w-full h-[42px] rounded-full bg-[var(--app-accent,#8465ff)] text-white text-[14px] hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-default`;
+const INPUT = `${FONT} w-full h-[42px] px-[16px] rounded-full bg-[#151412] text-white text-[14px] placeholder-[#656464] outline-none focus:ring-1 focus:ring-[var(--app-accent,#7666fc)] border border-transparent`;
+const BTN_PRIMARY = `${FONT} w-full h-[42px] rounded-full bg-[var(--app-accent,#7666fc)] text-white text-[14px] hover:opacity-90 transition-opacity disabled:opacity-40 disabled:cursor-default`;
 const BTN_QUIET = `${FONT} text-[13px] text-[#656464] hover:text-white transition-colors`;
 
 function Shell({ children }: { children: React.ReactNode }) {

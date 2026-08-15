@@ -152,7 +152,7 @@ const Loading = () => {
     return () => { window.clearInterval(poll); window.clearTimeout(t); };
   }, []);
   const manualReset = async () => { await clearLocalCache(); window.location.reload(); };
-  const btn: React.CSSProperties = { marginTop: 2, padding: '8px 16px', background: '#7363FF', color: 'white', border: 'none', borderRadius: 6, fontSize: 13, cursor: 'pointer' };
+  const btn: React.CSSProperties = { marginTop: 2, padding: '8px 16px', background: 'var(--app-accent)', color: 'white', border: 'none', borderRadius: 6, fontSize: 13, cursor: 'pointer' };
   return (
     <div style={{ minHeight: '100vh', background: '#282828', color: '#666', display: 'flex', flexDirection: 'column', gap: 14, alignItems: 'center', justifyContent: 'center', fontFamily: 'sans-serif', padding: 40, textAlign: 'center' }}>
       {phase === 'concurrency' ? (
@@ -229,7 +229,7 @@ const Providers = ({ member }: { member: Membership | null }) => (
           // cannot drift the way per-device localStorage did. Only seeds a NEW room; existing
           // rooms have no `theme` key and fall back to the localStorage cache then defaults,
           // and get one written the first time a colour is changed in Settings.
-          theme: { bg: '#1c1b19', accent: '#8465ff' },
+          theme: { bg: '#1c1b19', accent: '#7666fc' },
         }}
       >
         <ClientSideSuspense fallback={<Loading />}>

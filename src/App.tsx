@@ -69,11 +69,25 @@ const IS_TAURI = typeof window !== 'undefined' && !!(window as { __TAURI__?: unk
 // Custom title bar DISABLED — reverted to the native Windows bar per user. The TauriTitlebar
 // component + --titlebar-h offsets stay dormant (var forced to 0px below) in case we revisit.
 const SHOW_TITLEBAR = false && IS_TAURI && !PIP_MODE;
+
+// The accent palette was re-sampled from the app's own add button — the earlier
+// set read too dark. Rooms and localStorage still hold the retired values, so
+// every READ maps them forward. Without this a device keeps painting the old
+// purple and no swatch in Settings shows as selected. Writes are untouched:
+// the room adopts a current value the next time a swatch is picked.
+const RETIRED_ACCENTS: Record<string, string> = {
+  '#8465ff': '#7666fc',
+  '#7361ff': '#6d66fc',
+  '#625dff': '#6668fc',
+};
+export function migrateAccent<T extends string | null | undefined>(v: T): T {
+  return (v ? (RETIRED_ACCENTS[v.toLowerCase()] ?? v) : v) as T;
+}
 if (typeof document !== 'undefined') {
   document.documentElement.style.setProperty('--titlebar-h', SHOW_TITLEBAR ? '40px' : '0px');
   // Re-apply the user's saved theme colors over the index.css defaults, before first paint.
   const savedBg = localStorage.getItem('app-bg'); if (savedBg) document.documentElement.style.setProperty('--app-bg', savedBg);
-  const savedAccent = localStorage.getItem('app-accent'); if (savedAccent) document.documentElement.style.setProperty('--app-accent', savedAccent);
+  const savedAccent = migrateAccent(localStorage.getItem('app-accent')); if (savedAccent) document.documentElement.style.setProperty('--app-accent', savedAccent);
 }
 
 // Custom Tauri title bar: a drag region with a centered accent logo + wordmark and Windows-style
@@ -136,7 +150,7 @@ function TauriTitlebar() {
 export function useSharedTheme(): void {
   const theme = useStorage((root) => (root as unknown as { theme?: { bg?: string; accent?: string } }).theme);
   const bg = theme?.bg;
-  const accent = theme?.accent;
+  const accent = migrateAccent(theme?.accent);
   useEffect(() => {
     if (bg) {
       document.documentElement.style.setProperty('--app-bg', bg);
@@ -207,9 +221,11 @@ const BG_PRESETS = [
   { id: 'ink', value: '#121212' },      // almost black — dark as it can be while the pure-black toggle tracks still read against it
 ];
 const ACCENT_PRESETS = [
-  { id: 'purple', value: '#8465ff' },   // original RGB purple
-  { id: 'violet', value: '#7361ff' },   // slightly more blue
-  { id: 'indigo', value: '#625dff' },   // more blue again
+  // Sampled from the app's own add button (#7666fc). The two variants hold that
+  // exact HSL lightness/saturation and only rotate hue toward blue in 3.5° steps.
+  { id: 'purple', value: '#7666fc' },   // H 246.4
+  { id: 'violet', value: '#6d66fc' },   // H 242.9
+  { id: 'indigo', value: '#6668fc' },   // H 239.4
 ];
 
 function ThemePresetRow({ label, presets, themeKey, varName, storageKey }: {
@@ -221,9 +237,10 @@ function ThemePresetRow({ label, presets, themeKey, varName, storageKey }: {
 }) {
   const roomTheme = useStorage((root) => (root as unknown as { theme?: { bg?: string; accent?: string } }).theme);
   const setRoomTheme = useSetSharedTheme();
-  const current = (roomTheme?.[themeKey]
+  const raw = (roomTheme?.[themeKey]
     || (typeof localStorage !== 'undefined' && localStorage.getItem(storageKey))
     || presets[0].value).toLowerCase();
+  const current = themeKey === 'accent' ? migrateAccent(raw) : raw;
   const apply = (v: string) => {
     document.documentElement.style.setProperty(varName, v);
     try { localStorage.setItem(storageKey, v); } catch { /* ignore */ }
@@ -450,8 +467,26 @@ export const CARD_H_TWO = GRID * 2 - 4;   // 70 → pitch 74 = 2 units (literal 
 // padding: gap from one card's bottom to the next card's top is simply the
 // card's own margin (4) + the label unit (37) = 41, on grid either way.
 export function bandSpacing(_oneRow: boolean) {
-  return { pt: 0, mb: 0, slot: GRID };
+  // A section break is a DOUBLE space: one blank unit, then the label unit at
+  // the BOTTOM of that space, sitting directly above its own cards.
+  return { pt: GRID, mb: 0, slot: GRID * 2 };
 }
+
+// ── The CALENDAR page's own vertical grid ──────────────────────────────────
+// Calendar columns do NOT ride the app's 37px baseline. Their unit is the
+// calendar card itself, restored to its pre-grid dimension: two TIGHT text rows
+// plus a 4px gutter. At 37-based sizing the two lines of a card sat 35px apart
+// and you couldn't tell whether line 2 belonged to that card or the next one.
+// The rows divide the card exactly, so a column can never drift.
+// Every element in a column occupies ONE slot: task cards fill both rows,
+// milestones and Add dock their content to the TOP row, and a category label
+// sits on the BOTTOM row — the blank row above it IS the section break.
+// Literals 'h-[22px]' / 'h-[44px]' / 'mb-[4px]' appear in the classes below;
+// Tailwind only reads source text, never computed values.
+export const CAL_ROW = 22;                      // one text line inside a card
+export const CAL_GAP = 4;                       // gutter under every slot
+export const CAL_CARD_H = CAL_ROW * 2;          // 44 — a card is exactly two rows
+export const CAL_SLOT = CAL_CARD_H + CAL_GAP;   // 48 — the calendar's grid unit
 
 // Beacon target height — two card slots (55px card + 4px gap, twice). The
 // snap picks the card edge nearest this, so the block lands on a boundary
@@ -927,7 +962,7 @@ function MilestoneToggle({ value, onChange }: { value: boolean; onChange: (v: bo
       role="switch"
       aria-checked={value}
       onClick={() => onChange(!value)}
-      className={`relative inline-flex h-[18px] w-[32px] shrink-0 rounded-full transition-colors ${value ? 'bg-[#7363FF]' : 'bg-[#1f1f1f]'}`}
+      className={`relative inline-flex h-[18px] w-[32px] shrink-0 rounded-full transition-colors ${value ? 'bg-[var(--app-accent)]' : 'bg-[#1f1f1f]'}`}
     >
       <span className={`absolute top-[2px] size-[14px] rounded-full bg-white transition-transform ${value ? 'translate-x-[16px]' : 'translate-x-[2px]'}`} />
     </button>
@@ -1012,6 +1047,28 @@ export function Arrowhead({ dim = false, tone = 'default', faint = false, color 
         <polygon points="0,0 4,4 0,8" style={{ fill }} />
       </svg>
     </span>
+  );
+}
+
+// Week-navigator arrow. The glyph is Arrowhead's exact 4x8 triangle — that size
+// is fixed everywhere it appears and never scales. What's big is the BUTTON: a
+// 30x37 transparent hit area, so the cursor catches it long before the 4px
+// triangle and the triangle flares to white on approach.
+export function NavArrow({ dir, onClick, label, className = '' }: { dir: 'left' | 'right'; onClick: () => void; label: string; className?: string }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      className={`group/nav absolute top-1/2 translate-y-[-50%] h-[37px] w-[30px] flex items-center justify-center ${className}`}
+    >
+      <svg
+        width="4" height="8" viewBox="0 0 4 8" fill="none"
+        className={`text-[#656464] group-hover/nav:text-white transition-colors duration-150 ${dir === 'left' ? 'rotate-180' : ''}`}
+      >
+        <polygon points="0,0 4,4 0,8" fill="currentColor" />
+      </svg>
+    </button>
   );
 }
 
@@ -2208,7 +2265,7 @@ function PipShortcutSetting() {
           onClick={() => { setRecording(true); setStatus(null); }}
           onKeyDown={onKeyDown}
           onBlur={() => setRecording(false)}
-          className={`px-3 py-1 rounded-md text-[13px] transition-colors ${recording ? 'bg-[#7363FF] text-white' : 'bg-[#1f1f1f] text-[#ccc] hover:bg-[#333]'}`}
+          className={`px-3 py-1 rounded-md text-[13px] transition-colors ${recording ? 'bg-[var(--app-accent)] text-white' : 'bg-[#1f1f1f] text-[#ccc] hover:bg-[#333]'}`}
         >
           {recording ? 'Press keys…' : combo}
         </button>
@@ -2263,7 +2320,7 @@ function BottomBar({ mode, onSetMode, onAdd, userShort }: { mode: AppMode; onSet
             <span className="pointer-events-none absolute left-full top-1/2 -translate-y-1/2 ml-2 px-2 py-1 rounded bg-[#333333] text-white text-[11px] whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-50">{label}</span>
           </div>
         ))}
-        <motion.button title="Add task" aria-label="Add task" onClick={onAdd} whileHover={{ scale: 1.06 }} whileTap={{ scale: 0.94 }} className="size-[27px] rounded-full bg-[#7363FF] flex items-center justify-center shadow-lg">
+        <motion.button title="Add task" aria-label="Add task" onClick={onAdd} whileHover={{ scale: 1.06 }} whileTap={{ scale: 0.94 }} className="size-[27px] rounded-full bg-[var(--app-accent)] flex items-center justify-center shadow-lg">
           <Plus size={16} color="#151412" strokeWidth={2.5} />
         </motion.button>
       </div>
@@ -2350,7 +2407,7 @@ function DateRangePicker({ start, end, onChange }: { start?: string; end?: strin
               onClick={() => pick(d)}
               onMouseEnter={() => setHoverIso(cur)}
               onMouseLeave={() => setHoverIso(null)}
-              className={`h-7 rounded text-[12px] transition-colors ${isEdge ? 'bg-[#7363FF] text-white' : isInRange ? 'bg-[#7363FF]/30 text-white' : 'text-[#ccc] hover:bg-[#333]'}`}
+              className={`h-7 rounded text-[12px] transition-colors ${isEdge ? 'bg-[var(--app-accent)] text-white' : isInRange ? 'bg-[rgb(from_var(--app-accent)_r_g_b_/_0.30)] text-white' : 'text-[#ccc] hover:bg-[#333]'}`}
             >{d}</button>
           );
         })}
@@ -2456,7 +2513,7 @@ function AddModal({
   };
 
   const tabBtn = (id: typeof tab, label: string) => (
-    <button type="button" onClick={() => setTab(id)} className={`px-4 py-2 text-[14px] rounded-md transition-colors ${tab === id ? 'bg-[#7363FF] text-white' : 'text-[#999] hover:text-white'}`}>{label}</button>
+    <button type="button" onClick={() => setTab(id)} className={`px-4 py-2 text-[14px] rounded-md transition-colors ${tab === id ? 'bg-[var(--app-accent)] text-white' : 'text-[#999] hover:text-white'}`}>{label}</button>
   );
 
   return (
@@ -2471,7 +2528,7 @@ function AddModal({
         <form onSubmit={submit} className="flex flex-col gap-3">
           {tab === 'task' && (
             <>
-              <input autoFocus value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Task title (required)" className="bg-[#1f1f1f] rounded-md px-3 py-2 text-white text-[14px] outline-none focus:ring-1 focus:ring-[#7363FF]" />
+              <input autoFocus value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Task title (required)" className="bg-[#1f1f1f] rounded-md px-3 py-2 text-white text-[14px] outline-none focus:ring-1 focus:ring-[var(--app-accent)]" />
               <div className="flex items-center justify-between bg-[#1f1f1f] rounded-md px-3 py-2">
                 <div className="flex flex-col">
                   <span className={`text-[14px] ${isMilestone ? 'text-[var(--app-accent)]' : 'text-white'}`}>Milestone</span>
@@ -2508,7 +2565,7 @@ function AddModal({
                     key={key}
                     type="button"
                     onClick={() => setSection(key)}
-                    className={`flex-1 px-3 py-2 text-[14px] rounded-md transition-colors ${section === key ? 'bg-[#7363FF] text-white' : 'bg-[#1f1f1f] text-[#888] hover:text-white'}`}
+                    className={`flex-1 px-3 py-2 text-[14px] rounded-md transition-colors ${section === key ? 'bg-[var(--app-accent)] text-white' : 'bg-[#1f1f1f] text-[#888] hover:text-white'}`}
                   >
                     {label}
                   </button>
@@ -2520,7 +2577,7 @@ function AddModal({
                   {people.map((p) => {
                     const active = assignees.includes(p.short);
                     return (
-                      <button key={p.id} type="button" onClick={() => toggleAssignee(p.short)} className={`px-3 py-1 rounded-full text-[13px] transition-colors ${active ? 'bg-[#7363FF] text-white' : 'bg-[#1f1f1f] text-[#ccc] hover:bg-[#333]'}`}>
+                      <button key={p.id} type="button" onClick={() => toggleAssignee(p.short)} className={`px-3 py-1 rounded-full text-[13px] transition-colors ${active ? 'bg-[var(--app-accent)] text-white' : 'bg-[#1f1f1f] text-[#ccc] hover:bg-[#333]'}`}>
                         {p.name} <span className="opacity-70">({p.short})</span>
                       </button>
                     );
@@ -2535,7 +2592,7 @@ function AddModal({
           )}
           {tab === 'project' && (
             <>
-              <input autoFocus value={projectName} onChange={(e) => setProjectName(e.target.value)} placeholder="Project name" className="bg-[#1f1f1f] rounded-md px-3 py-2 text-white text-[14px] outline-none focus:ring-1 focus:ring-[#7363FF]" />
+              <input autoFocus value={projectName} onChange={(e) => setProjectName(e.target.value)} placeholder="Project name" className="bg-[#1f1f1f] rounded-md px-3 py-2 text-white text-[14px] outline-none focus:ring-1 focus:ring-[var(--app-accent)]" />
               <select value={projectClient} onChange={(e) => setProjectClient(e.target.value)} className="bg-[#1f1f1f] rounded-md px-3 py-2 text-white text-[14px] outline-none">
                 <option value="">No client</option>
                 {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
@@ -2543,11 +2600,11 @@ function AddModal({
             </>
           )}
           {tab === 'client' && (
-            <input autoFocus value={clientName} onChange={(e) => setClientName(e.target.value)} placeholder="Client name" className="bg-[#1f1f1f] rounded-md px-3 py-2 text-white text-[14px] outline-none focus:ring-1 focus:ring-[#7363FF]" />
+            <input autoFocus value={clientName} onChange={(e) => setClientName(e.target.value)} placeholder="Client name" className="bg-[#1f1f1f] rounded-md px-3 py-2 text-white text-[14px] outline-none focus:ring-1 focus:ring-[var(--app-accent)]" />
           )}
           <div className="flex justify-end gap-2 mt-2">
             <button type="button" onClick={onClose} className="px-4 py-2 rounded-md text-[#999] hover:text-white text-[14px]">Cancel</button>
-            <button type="submit" className="px-4 py-2 rounded-md bg-[#7363FF] text-white text-[14px] hover:bg-[#8573ff]">{isEdit ? 'Save' : 'Add'}</button>
+            <button type="submit" className="px-4 py-2 rounded-md bg-[var(--app-accent)] text-white text-[14px] hover:bg-[#8573ff]">{isEdit ? 'Save' : 'Add'}</button>
           </div>
           <p className="text-[#666] text-[12px] mt-1">Projects referenced: {projects.length} Â· Clients: {clients.length}</p>
         </form>
@@ -3076,7 +3133,7 @@ function FocusDamTile({
             column width (intentionally going past 1:1, even though that
             sacrifices DPI sharpness). max-h-[70vh] caps super-tall portraits;
             object-contain keeps aspect when the cap kicks in (no stretch). */}
-        <div className={`relative block w-full cursor-zoom-in ${isSelected ? 'ring-2 ring-[#7363FF] ring-offset-0' : ''}`}>
+        <div className={`relative block w-full cursor-zoom-in ${isSelected ? 'ring-2 ring-[var(--app-accent)] ring-offset-0' : ''}`}>
           <CachedImage src={resolveImageSrc(img)} alt={img.filename} className="block w-full h-auto max-h-[70vh] object-contain" />
           <button
             type="button"
@@ -3114,7 +3171,7 @@ function FocusDamTile({
       onClick={(e) => onImageClick(img.id, e)}
       {...attributes}
       {...listeners}
-      className={`relative group bg-[#1f1f1f] overflow-hidden cursor-zoom-in ${isSelected ? 'outline outline-2 outline-[#7363FF]' : ''}`}
+      className={`relative group bg-[#1f1f1f] overflow-hidden cursor-zoom-in ${isSelected ? 'outline outline-2 outline-[var(--app-accent)]' : ''}`}
       style={tileStyle}
     >
       <CachedImage src={resolveImageSrc(img)} alt={img.filename} className="block w-full h-full object-cover" />
@@ -3309,7 +3366,7 @@ function FocusDamFolderRow({
           // Folder-name input matches the folder name's resting tone (grey),
           // not white — the brand-purple underline is plenty of "I'm being
           // edited" signal without needing the text colour to swap.
-          className="bg-transparent text-[#a8a8a8] outline-none border-b border-[#7363FF] flex-1 min-w-0"
+          className="bg-transparent text-[#a8a8a8] outline-none border-b border-[var(--app-accent)] flex-1 min-w-0"
           placeholder="Folder name…"
         />
       ) : (
@@ -3517,7 +3574,7 @@ function ResourceDeleteModal({
               <button
                 type="button"
                 onClick={() => setReassignTo(null)}
-                className={`px-3 py-1.5 rounded-md text-[13px] transition-colors ${reassignTo === null ? 'bg-[#3a3a3a] text-white ring-1 ring-[#7363FF]' : 'bg-[#1f1f1f] text-[#888] hover:text-white'}`}
+                className={`px-3 py-1.5 rounded-md text-[13px] transition-colors ${reassignTo === null ? 'bg-[#3a3a3a] text-white ring-1 ring-[var(--app-accent)]' : 'bg-[#1f1f1f] text-[#888] hover:text-white'}`}
               >
                 Leave unassigned
               </button>
@@ -3526,7 +3583,7 @@ function ResourceDeleteModal({
                   key={r.id}
                   type="button"
                   onClick={() => setReassignTo(r.short)}
-                  className={`px-3 py-1.5 rounded-md text-[13px] transition-colors ${reassignTo === r.short ? 'bg-[#3a3a3a] text-white ring-1 ring-[#7363FF]' : 'bg-[#1f1f1f] text-[#888] hover:text-white'}`}
+                  className={`px-3 py-1.5 rounded-md text-[13px] transition-colors ${reassignTo === r.short ? 'bg-[#3a3a3a] text-white ring-1 ring-[var(--app-accent)]' : 'bg-[#1f1f1f] text-[#888] hover:text-white'}`}
                 >
                   {r.name || r.short}{r.short ? <span className="text-[#666] ml-1">({r.short})</span> : null}
                 </button>
@@ -3708,7 +3765,7 @@ function ClientRow({ client, autoFocus, bodyFont, onRenameName, onRenameShort, o
   return (
     <motion.div
       ref={setNodeRef}
-      className={`relative group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px] overflow-hidden ${isOver ? 'bg-white/[0.06] ring-1 ring-[#7363FF]/40' : ''}`}
+      className={`relative group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px] overflow-hidden ${isOver ? 'bg-white/[0.06] ring-1 ring-[rgb(from_var(--app-accent)_r_g_b_/_0.40)]' : ''}`}
       whileHover={{ backgroundColor: "rgba(255, 255, 255, 0.03)", transition: { duration: 0.15 } }}
     >
       {isPersonal && <AssigneeBadge letter={currentUserShort || '?'} tone="todo" hollow />}
@@ -3745,7 +3802,7 @@ function ResourceRow({ person, bodyFont, onDelete }: { person: Person; bodyFont:
   return (
     <motion.div
       ref={setNodeRef}
-      className={`relative group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px] overflow-hidden ${isOver ? 'bg-white/[0.06] ring-1 ring-[#7363FF]/40' : ''}`}
+      className={`relative group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px] overflow-hidden ${isOver ? 'bg-white/[0.06] ring-1 ring-[rgb(from_var(--app-accent)_r_g_b_/_0.40)]' : ''}`}
       whileHover={{ backgroundColor: "rgba(255, 255, 255, 0.03)", transition: { duration: 0.15 } }}
     >
       <AssigneeBadge letter={person.short || '?'} tone="todo" />
@@ -3841,7 +3898,7 @@ function HeaderAddMenu({
             value={filter}
             onChange={(e) => setFilter(e.target.value)}
             placeholder="Find a clientâ€¦"
-            className="w-full bg-[#2a2a2a] rounded px-2 py-1 text-white text-[13px] outline-none focus:ring-1 focus:ring-[#7363FF] mb-2"
+            className="w-full bg-[#2a2a2a] rounded px-2 py-1 text-white text-[13px] outline-none focus:ring-1 focus:ring-[var(--app-accent)] mb-2"
           />
           <div className="max-h-[220px] overflow-y-auto">
             {filtered.length === 0 ? (
@@ -3863,7 +3920,7 @@ function HeaderAddMenu({
             <button
               type="button"
               onClick={() => { onAddBlankClient(); setMode('closed'); setFilter(''); }}
-              className="w-full text-left px-2 py-1 text-[13px] text-[#7363FF] hover:bg-white/[0.05] rounded transition-colors"
+              className="w-full text-left px-2 py-1 text-[13px] text-[var(--app-accent)] hover:bg-white/[0.05] rounded transition-colors"
             >+ Create New</button>
           </div>
         </div>
@@ -3925,7 +3982,7 @@ function ProjectViewMode({
   const ClientSubHeader = ({ client, listId }: { client: Client; listId: ListId }) => {
     const { setNodeRef, isOver } = useDroppable({ id: `clientsub:${listId}:${client.id}`, data: { type: 'clientHeader', clientId: client.id, listId } });
     return (
-      <div ref={setNodeRef} className={`group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px] ${isOver ? 'bg-white/[0.06] ring-1 ring-[#7363FF]/40' : ''}`}>
+      <div ref={setNodeRef} className={`group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px] ${isOver ? 'bg-white/[0.06] ring-1 ring-[rgb(from_var(--app-accent)_r_g_b_/_0.40)]' : ''}`}>
         <p className={`${bodyFont} text-[#656464]`}>{client.name}</p>
         <AddPlus onClick={() => onAddProject(client.id)} />
       </div>
@@ -4278,12 +4335,12 @@ const measureTextPx = (s: string): number => {
 // assignees, date on line 2). Extracted from WeekCalendarMode's local MilestoneCard so the
 // focus page's "Coming Up" section renders the IDENTICAL format. `onClick` (focus page) filters
 // to the milestone's project — or seeds the live search with its title when it has no project.
-function MilestoneCardView({ task, projects, clients, showDate, categoryDimmed = false, onEdit, onQuickEdit, onAddSibling, onClick, active = false }: {
+function MilestoneCardView({ task, projects, clients, showDate, categoryDimmed = false, onEdit, onQuickEdit, onAddSibling, onClick, active = false, stacked = false, cellId }: {
   task: Task; projects: Project[]; clients: Client[]; showDate: boolean; categoryDimmed?: boolean;
   onEdit: () => void; onQuickEdit?: () => void; onAddSibling?: () => void; onClick?: () => void;
   // Active milestone filter — white title + × at the end of line 1 (same visual the
   // client/project filter rows use). Click anywhere on the card toggles it back off.
-  active?: boolean;
+  active?: boolean; stacked?: boolean; cellId?: string;
 }) {
   const project = task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
   const resolvedClientId = task.clientId ?? project?.clientId;
@@ -4298,11 +4355,21 @@ function MilestoneCardView({ task, projects, clients, showDate, categoryDimmed =
   const titleClass = categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : milestonePurpleClass;
   // Inline style because Tailwind arbitrary opacity on hex colors wasn't reliably generating the CSS.
   const cardBgStyle: React.CSSProperties = { backgroundColor: 'rgb(from var(--app-accent) r g b / 0.1)' };
+  // Same data shape the task cards use, so a drop into another day column runs
+  // the existing reschedule path (rule A: a task WITH a deadline gets it
+  // rewritten to the target date). PointerSensor's distance:8 keeps the
+  // click-to-filter behaviour intact.
+  const drag = useDraggable({ id: task.id, data: { type: 'task', task, calendarCellId: cellId }, disabled: !cellId });
   return (
-    <div onClick={onClick} onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onQuickEdit?.(); }} style={cardBgStyle} className="relative mx-[6px] mb-[4px] group cursor-pointer h-[33px] rounded-[3.333px]">
+    <div
+      ref={cellId ? drag.setNodeRef : undefined}
+      data-cal-card={task.id}
+      {...(cellId ? drag.attributes : {})}
+      {...(cellId ? drag.listeners : {})}
+      onClick={onClick} onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onQuickEdit?.(); }} style={cardBgStyle} className={`relative mx-[6px] mb-[4px] group ${cellId ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'} ${drag.isDragging ? 'opacity-40' : ''} ${stacked ? 'h-[44px]' : 'h-[33px]'} rounded-[3.333px]`}>
       {/* One continuous line — title (truncates first), then client › project, assignees, date, +.
           Coming-Up cards stay ONE line in BOTH the calendar and focus views. */}
-      <div className="px-[10px] flex flex-row items-center gap-[6px] h-full">
+      <div className={`px-[10px] flex flex-row items-center gap-[6px] ${stacked ? 'h-[22px]' : 'h-full'}`}>
         <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis min-w-0 shrink ${titleClass}`}>{task.title}</span>
         {client?.short && project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap shrink-0 ${titleClass}`}>{client.short}<Arrowhead dim={task.completed || categoryDimmed} tone="milestone" faint={isExpired} />{project.name}</p>}
         {client?.short && !project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap shrink-0 ${titleClass}`}>{client.short}</p>}
@@ -4555,11 +4622,8 @@ export function computeCalendarDistribution(tasks: Task[], todayAnchor: Date, ho
 // that stays quiet until you look for it.
 function AddPlaceholderCard({ isToday, onClick, stacked = false, dimmed = false }: { isToday: boolean; onClick: () => void; stacked?: boolean; dimmed?: boolean }) {
   const tone = dimmed ? 'text-[#383838]' : isToday ? 'text-[var(--app-accent)]' : 'text-[#4a4a4a]';
-  // Match the RENDERED height of the cards beside it, not CalendarCard's
-  // min-height: a two-line card declares min-h-[45px] but content pushes it to
-  // 55px, and a placeholder that stopped at 45 broke the column's grid.
-  const oneRow = useContext(CardRowsContext) === 1;
-  const singleLine = oneRow && !stacked;
+  // On the calendar (`stacked`) the placeholder takes a WHOLE slot like every
+  // other element, with its label docked to the card's top row.
   return (
     <button
       type="button"
@@ -4567,11 +4631,13 @@ function AddPlaceholderCard({ isToday, onClick, stacked = false, dimmed = false 
       aria-label="Add task"
       // Card-shaped, so it is a valid snap target for the drop beacon's top edge.
       data-add-card
-      className={`mx-[6px] mb-[4px] rounded-[3.333px] h-[33px] w-[calc(100%-12px)] flex flex-row items-center gap-[6px] px-[10px] ${isToday ? '' : 'bg-white/[0.03]'} hover:brightness-125 transition-[filter]`}
+      className={`mx-[6px] mb-[4px] rounded-[3.333px] ${stacked ? 'h-[44px]' : 'h-[33px]'} w-[calc(100%-12px)] flex flex-col px-[10px] ${isToday ? '' : 'bg-white/[0.03]'} hover:brightness-125 transition-[filter]`}
       style={isToday ? { backgroundColor: 'rgb(from var(--app-accent) r g b / 0.1)' } : undefined}
     >
-      <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] ${tone}`}>Add</span>
-      <Plus size={12} className={tone} />
+      <span className={`flex flex-row items-center gap-[6px] ${stacked ? 'h-[22px]' : 'h-full'}`}>
+        <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] ${tone}`}>Add</span>
+        <Plus size={12} className={tone} />
+      </span>
     </button>
   );
 }
@@ -4586,8 +4652,8 @@ function AddPlaceholderCard({ isToday, onClick, stacked = false, dimmed = false 
 // currently at the top of the column. Sub-groups mark themselves with
 // data-group-name; we read those positions off the DOM rather than threading
 // scroll state through the render tree.
-function NextBandHeader({ label, bodyFont, onLabelClick, onAdd, addAriaLabel, bandList, labelMb = 18 }: {
-  label: string; bodyFont: string; bandList?: string; labelMb?: number;
+function NextBandHeader({ label, bodyFont, onLabelClick, onAdd, addAriaLabel, bandList, labelMb = 18, stacked = false }: {
+  label: string; bodyFont: string; bandList?: string; labelMb?: number; stacked?: boolean;
   onLabelClick: (e: React.MouseEvent<HTMLElement>) => void;
   onAdd: () => void; addAriaLabel: string;
 }) {
@@ -4629,20 +4695,24 @@ function NextBandHeader({ label, bodyFont, onLabelClick, onAdd, addAriaLabel, ba
     };
   }, []);
   return (
-    <div ref={rowRef} data-band-list={bandList} className="group/band h-[37px] px-[16px] flex items-center gap-2 sticky top-0 z-10 bg-[var(--app-bg)]" style={{ marginBottom: labelMb }}>
-      <p onClick={onLabelClick} className={`${bodyFont} text-[#5e5e5e] cursor-pointer`}>
-        {label}
-        {active ? <span className="text-[#454545]">{': '}</span> : null}
-        {active ? <span className="text-[#7a7a7a]">{active}</span> : null}
-      </p>
-      <button
-        type="button"
-        onClick={onAdd}
-        className="opacity-0 group-hover/band:opacity-100 text-[#656464] hover:text-white transition-opacity"
-        aria-label={addAriaLabel}
-      >
-        <Plus size={14} />
-      </button>
+    // On the calendar (`stacked`) the header is a card-shaped slot with its label
+    // docked to the BOTTOM row; the blank row above is the section break.
+    <div ref={rowRef} data-band-list={bandList} className={`group/band px-[16px] sticky top-0 z-10 bg-[var(--app-bg)] ${stacked ? 'h-[44px] mb-[4px] flex flex-col justify-end' : 'h-[37px] flex items-center gap-2'}`} style={stacked ? undefined : { marginBottom: labelMb }}>
+      <div className={stacked ? 'h-[22px] flex items-center gap-2' : 'contents'}>
+        <p onClick={onLabelClick} className={`${bodyFont} text-[#5e5e5e] cursor-pointer`}>
+          {label}
+          {active ? <Arrowhead /> : null}
+          {active ? <span className="text-[#7a7a7a]">{active}</span> : null}
+        </p>
+        <button
+          type="button"
+          onClick={onAdd}
+          className="opacity-0 group-hover/band:opacity-100 text-[#656464] hover:text-white transition-opacity"
+          aria-label={addAriaLabel}
+        >
+          <Plus size={14} />
+        </button>
+      </div>
     </div>
   );
 }
@@ -4675,8 +4745,8 @@ function CalendarCardBody({ task, projects, clients, taskOrder = 'ptc', isTodayC
   // focus ghosts follow the 1-row setting like the live focus cards.
   const singleLine = oneRow && !stacked;
   return (
-    <div className={`px-[10px] py-[7px] overflow-hidden h-full flex ${singleLine ? 'flex-row items-center gap-[4px]' : 'flex-col justify-center gap-[2px]'}`}>
-      <div className="flex flex-row items-center gap-[10px]">
+    <div className={`px-[10px] overflow-hidden h-full flex ${singleLine ? 'flex-row items-center gap-[4px] py-[7px]' : stacked ? 'flex-col' : 'flex-col justify-center gap-[2px] py-[7px]'}`}>
+      <div className={`flex flex-row items-center gap-[10px] ${stacked ? 'h-[22px] shrink-0' : ''}`}>
         {!isScheduled && (
           <div className="shrink-0 flex items-center justify-center">
             <TaskCheckbox completed={task.completed} started={task.started} onToggle={() => {}} accent={isTodayCard ? 'var(--app-accent)' : undefined} />
@@ -4684,7 +4754,7 @@ function CalendarCardBody({ task, projects, clients, taskOrder = 'ptc', isTodayC
         )}
         <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleColor}`}>{task.title}</span>
       </div>
-      <div className="flex flex-row items-center gap-[6px]">
+      <div className={`flex flex-row items-center gap-[6px] ${stacked ? 'h-[22px] shrink-0' : ''}`}>
         {client && project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap text-[#656464]`}>{client.short}<Arrowhead dim={task.completed} />{project.name}</p>}
         {client && !project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${metaColor}`}>{client.short}</p>}
         {!client && project && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap text-[#656464]`}>{project.name}</p>}
@@ -4804,7 +4874,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
       ref={setNodeRef}
       style={style}
       data-cal-card={task.id}
-      className={`relative mx-[6px] mb-[4px] group rounded-[3.333px] ${singleLine ? 'h-[33px]' : 'h-[70px]'} flex ${isTodayCard ? '' : 'bg-white/[0.03]'} ${dimmed ? 'opacity-60' : ''}`}
+      className={`relative mx-[6px] mb-[4px] group rounded-[3.333px] ${singleLine ? 'h-[33px]' : stacked ? 'h-[44px]' : 'h-[70px]'} flex ${isTodayCard ? '' : 'bg-white/[0.03]'} ${dimmed ? 'opacity-60' : ''}`}
       animate={{ opacity: isDragging ? 0 : 1 }}
       transition={{ opacity: { duration: 0.12, ease: 'easeOut' } }}
     >
@@ -4813,7 +4883,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
             setting doesn't apply here. Line 1: checkbox + title. Line 2: client › project,
             assignees, deadline, + button. Checkbox is INLINE with the title so it stays aligned
             with the title cap-height when the whole content block is vertically centered. */}
-        <div className={`flex flex-row items-center gap-[10px] ${singleLine ? 'min-w-0 shrink' : 'w-full pr-5 h-[35px] shrink-0'}`}>
+        <div className={`flex flex-row items-center gap-[10px] ${singleLine ? 'min-w-0 shrink' : stacked ? 'w-full pr-5 h-[22px] shrink-0' : 'w-full pr-5 h-[35px] shrink-0'}`}>
           {!isScheduled && (
             <div onPointerDown={(e) => e.stopPropagation()} className="shrink-0 flex items-center justify-center">
               <TaskCheckbox completed={task.completed} started={task.started} onToggle={onToggle} accent={isTodayCard && !categoryDimmed ? 'var(--app-accent)' : undefined} />
@@ -4879,7 +4949,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
               STACKED mode the meta sits on its own second line and competes with nothing, so it
               keeps the original shrink-0 and its reserved min-height. */}
           <div
-            className={`flex flex-row items-center gap-[6px] ${singleLine ? 'min-w-0 overflow-hidden' : 'shrink-0 h-[35px]'}`}
+            className={`flex flex-row items-center gap-[6px] ${singleLine ? 'min-w-0 overflow-hidden' : stacked ? 'shrink-0 h-[22px]' : 'shrink-0 h-[35px]'}`}
             style={singleLine ? { flexShrink: 1000 } : undefined}
           >
             {/* When completed, all line-2 meta drops to the same faint #383838 — visually quieted to match the title.
@@ -4983,7 +5053,9 @@ function WeekCalendarMode({
   // renders two-line cards (every card here passes `stacked`, ignoring the
   // one-row setting), so its band gap is always the two-row slot — reading the
   // setting here made calendar bands 42px against 55px cards.
-  const bandGap = bandSpacing(false);
+  // On the calendar the section break IS the label slot: a card-shaped block
+  // whose top row is blank and whose bottom row carries the label. No extra pad.
+  const bandGap = { pt: 0, mb: 0 };
   const bodyFont = "font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap";
   const todayIso = dateToISO(new Date());
 
@@ -5050,8 +5122,11 @@ function WeekCalendarMode({
 
   // Thin wrapper over the shared MilestoneCardView (extracted to module scope so the focus
   // page's "Coming Up" renders the identical purple-tint two-line card). Call sites unchanged.
-  const MilestoneCard = ({ task, showDate, categoryDimmed = false }: { task: Task; showDate: boolean; categoryDimmed?: boolean }) => (
+  const renderMilestoneCard = ({ key, task, showDate, categoryDimmed = false, cellId }: { key: string; task: Task; showDate: boolean; categoryDimmed?: boolean; cellId?: string }) => (
     <MilestoneCardView
+      key={key}
+      stacked
+      cellId={cellId}
       task={task}
       projects={projects}
       clients={clients}
@@ -5094,12 +5169,17 @@ function WeekCalendarMode({
         <div className="absolute top-0 left-0 right-0 h-[37px] grid grid-cols-6 gap-0 px-[19px] min-w-[1200px] items-center pointer-events-none">
           <div aria-hidden />
           <div aria-hidden />
-          <div className="flex items-center gap-3 px-[16px] pointer-events-auto">
-            <button onClick={() => setWeekOffset((o) => o - 1)} className="p-1 text-[#656464] hover:text-white transition-colors" aria-label="Previous week"><ChevronLeft size={20} /></button>
-            <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px] whitespace-nowrap">{formatRange()}</p>
-            <button onClick={() => setWeekOffset((o) => o + 1)} className="p-1 text-[#656464] hover:text-white transition-colors" aria-label="Next week"><ChevronRight size={20} /></button>
+          <div className="flex items-center px-[16px] pointer-events-auto">
+            {/* The DATE is the anchor: it starts at the column's own px-[16px] inset so
+                it lines up with that column's day name below. The arrows are absolute
+                (right-full / left-full), so they hang outside without shifting it. */}
+            <div className="relative flex items-center">
+              <NavArrow dir="left" onClick={() => setWeekOffset((o) => o - 1)} label="Previous week" className="right-full" />
+              <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px] whitespace-nowrap">{formatRange()}</p>
+              <NavArrow dir="right" onClick={() => setWeekOffset((o) => o + 1)} label="Next week" className="left-full" />
+            </div>
             {weekOffset !== 0 && (
-              <button onClick={() => setWeekOffset(0)} className={`${bodyFont} text-[#656464] hover:text-white ml-2 transition-colors whitespace-nowrap`}>Today</button>
+              <button onClick={() => setWeekOffset(0)} className={`${bodyFont} text-[#656464] hover:text-white ml-[42px] transition-colors whitespace-nowrap`}>Today</button>
             )}
           </div>
         </div>
@@ -5167,20 +5247,22 @@ function WeekCalendarMode({
                     className=""
                     style={{ paddingTop: bandGap.pt }}
                     header={(
-                      <div data-band-list={listId} className="group/band h-[37px] px-[16px] flex items-center gap-2 sticky top-0 z-10 bg-[var(--app-bg)]" style={{ marginBottom: bandGap.mb }}>
-                        <p onClick={scrollBandToTop} className={`${bodyFont} text-[#5e5e5e] cursor-pointer`}>{label}</p>
-                        <button
-                          type="button"
-                          onClick={() => onAddTaskOnDay(listId, iso)}
-                          className="opacity-0 group-hover/band:opacity-100 text-[#656464] hover:text-white transition-opacity"
-                          aria-label={`Add ${label} task on ${iso}`}
-                        >
-                          <Plus size={14} />
-                        </button>
+                      <div data-band-list={listId} className="group/band h-[44px] mb-[4px] px-[16px] flex flex-col justify-end sticky top-0 z-10 bg-[var(--app-bg)]">
+                        <div className="h-[22px] flex items-center gap-2">
+                          <p onClick={scrollBandToTop} className={`${bodyFont} text-[#5e5e5e] cursor-pointer`}>{label}</p>
+                          <button
+                            type="button"
+                            onClick={() => onAddTaskOnDay(listId, iso)}
+                            className="opacity-0 group-hover/band:opacity-100 text-[#656464] hover:text-white transition-opacity"
+                            aria-label={`Add ${label} task on ${iso}`}
+                          >
+                            <Plus size={14} />
+                          </button>
+                        </div>
                       </div>
                     )}
                   >
-                    {dayMilestones.length > 0 && dayMilestones.map((t) => <MilestoneCard key={`m-${t.id}`} task={t} showDate={false} categoryDimmed={categoryDimmed} />)}
+                    {dayMilestones.length > 0 && dayMilestones.map((t) => renderMilestoneCard({ key: `m-${t.id}`, task: t, showDate: false, categoryDimmed, cellId: `cal:${iso}:${listId}` }))}
                     {/* Empty band → the Add invitation. Stays mounted during drags
                         (hiding it left card-shaped holes) but goes quiet/dim. */}
                     {bucket.length === 0 && dayMilestones.length === 0 && (
@@ -5280,7 +5362,7 @@ function WeekCalendarMode({
                     <div className="h-[37px] px-[16px] flex items-center">
                       <p className={`${bodyFont} text-[#5e5e5e]`}>Coming Up</p>
                     </div>
-                    {overflowMilestones.map((t) => <MilestoneCard key={t.id} task={t} showDate />)}
+                    {overflowMilestones.map((t) => renderMilestoneCard({ key: t.id, task: t, showDate: true }))}
                   </div>
                 )}
                 {listSequence.map((listId) => {
@@ -5334,6 +5416,7 @@ function WeekCalendarMode({
                       style={{ paddingTop: bandGap.pt }}
                       header={(
                         <NextBandHeader
+                          stacked
                           labelMb={bandGap.mb}
                           bandList={listId}
                           label={label}
@@ -5344,7 +5427,7 @@ function WeekCalendarMode({
                         />
                       )}
                     >
-                      {bandMilestones.length > 0 && bandMilestones.map((t) => <MilestoneCard key={`m-${t.id}`} task={t} showDate categoryDimmed={categoryDimmed} />)}
+                      {bandMilestones.length > 0 && bandMilestones.map((t) => renderMilestoneCard({ key: `m-${t.id}`, task: t, showDate: true, categoryDimmed, cellId }))}
                       {/* Next Week is never the Today column, so this is always the gray tone. */}
                       {bucket.length === 0 && bandMilestones.length === 0 && (
                         <AddPlaceholderCard isToday={false} stacked dimmed={isAnyDragging} onClick={() => onAddTaskOnDay(listId, nwStartIso)} />
@@ -5358,8 +5441,8 @@ function WeekCalendarMode({
                                 card-slot of air above it. */}
                             <div data-group-name={g.name} style={gi === 0 ? undefined : { paddingTop: bandGap.pt }}>
                               {gi > 0 && (
-                                <div className="h-[37px] px-[16px] flex items-center" style={{ marginBottom: bandGap.mb }}>
-                                  <p className={`${bodyFont} text-[#7a7a7a]`}>{g.name}</p>
+                                <div className="h-[44px] mb-[4px] px-[16px] flex flex-col justify-end">
+                                  <p className={`${bodyFont} text-[#7a7a7a] h-[22px] flex items-center`}>{g.name}</p>
                                 </div>
                               )}
                             </div>
@@ -5552,7 +5635,7 @@ function AccountSection({ people, currentUserShort, onSetCurrentUser, sectionTit
       <div>
         {sectionTitle('I am (temporary — becomes login)')}
         <div className="px-[31px] flex flex-wrap gap-2">
-          {people.map((p) => { const active = p.short === currentUserShort; return (<button key={p.id} type="button" onClick={() => onSetCurrentUser(p.short)} className={`px-3 py-1 rounded-full text-[13px] transition-colors ${active ? 'bg-[#7363FF] text-white' : 'bg-[#1f1f1f] text-[#ccc] hover:bg-[#333]'}`}>{p.name || '(unnamed)'} <span className="opacity-70">({p.short || '?'})</span></button>); })}
+          {people.map((p) => { const active = p.short === currentUserShort; return (<button key={p.id} type="button" onClick={() => onSetCurrentUser(p.short)} className={`px-3 py-1 rounded-full text-[13px] transition-colors ${active ? 'bg-[var(--app-accent)] text-white' : 'bg-[#1f1f1f] text-[#ccc] hover:bg-[#333]'}`}>{p.name || '(unnamed)'} <span className="opacity-70">({p.short || '?'})</span></button>); })}
           {people.length === 0 && <span className="text-[#474747] text-[12px]">Add a person first.</span>}
         </div>
       </div>
@@ -5685,7 +5768,7 @@ function TeamMode({ projects, people, currentUserShort, onSetCurrentUser }: {
   };
 
   const capsule = (active: boolean) =>
-    `px-3 py-1 rounded-full text-[13px] transition-colors ${active ? 'bg-[#7363FF] text-white' : 'bg-[#1f1f1f] text-[#ccc] hover:bg-[#333]'}`;
+    `px-3 py-1 rounded-full text-[13px] transition-colors ${active ? 'bg-[var(--app-accent)] text-white' : 'bg-[#1f1f1f] text-[#ccc] hover:bg-[#333]'}`;
   const quiet = 'text-[13px] text-[#656464] hover:text-white transition-colors';
   const input = `${bodyFont} h-[30px] px-[12px] rounded-full bg-[#151412] text-white text-[13px] placeholder-[#656464] outline-none`;
 
@@ -5750,7 +5833,7 @@ function TeamMode({ projects, people, currentUserShort, onSetCurrentUser }: {
               <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px] hover:bg-white/[0.03]">
                 <span className={`${bodyFont} text-white truncate`}>{m.display_name}</span>
                 <span className={`${bodyFont} text-[#656464] text-[12px]`}>({m.person_short})</span>
-                <span className={`px-2 py-[1px] rounded-full text-[11px] ${m.role === 'admin' ? 'bg-[#7363FF]/20 text-[var(--app-accent)]' : 'bg-white/[0.06] text-[#a8a8a8]'}`}>
+                <span className={`px-2 py-[1px] rounded-full text-[11px] ${m.role === 'admin' ? 'bg-[rgb(from_var(--app-accent)_r_g_b_/_0.20)] text-[var(--app-accent)]' : 'bg-white/[0.06] text-[#a8a8a8]'}`}>
                   {m.role}
                 </span>
                 {isSelf && <span className={`${bodyFont} text-[11px] text-[#5e5e5e]`}>you</span>}
@@ -5788,7 +5871,7 @@ function TeamMode({ projects, people, currentUserShort, onSetCurrentUser }: {
                         const on = (acc.projectIds ?? []).includes(p.id);
                         return (
                           <label key={p.id} className={`${bodyFont} text-[13px] flex flex-row items-center gap-2 cursor-pointer ${on ? 'text-white' : 'text-[#656464]'}`}>
-                            <input type="checkbox" checked={on} className="accent-[#7363FF]"
+                            <input type="checkbox" checked={on} className="accent-[var(--app-accent)]"
                               onChange={() => {
                                 const next = new Set(acc.projectIds ?? []);
                                 if (on) next.delete(p.id); else next.add(p.id);
@@ -5881,7 +5964,7 @@ function TeamMode({ projects, people, currentUserShort, onSetCurrentUser }: {
                       const on = invProjects.has(p.id);
                       return (
                         <label key={p.id} className={`${bodyFont} text-[13px] flex flex-row items-center gap-2 cursor-pointer ${on ? 'text-white' : 'text-[#656464]'}`}>
-                          <input type="checkbox" checked={on} className="accent-[#7363FF]"
+                          <input type="checkbox" checked={on} className="accent-[var(--app-accent)]"
                             onChange={() => setInvProjects((prev) => { const next = new Set(prev); if (on) next.delete(p.id); else next.add(p.id); return next; })} />
                           {p.name || '(unnamed)'}
                         </label>
@@ -6025,7 +6108,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
             <div>
               {sectionTitle('About')}
               <GridSnap>
-              <div className="mx-[21px] px-[10px] rounded-[3.333px] bg-white/[0.03] [&>*]:min-h-[37px] [&>*]:flex [&>*]:flex-col [&>*]:justify-center flex flex-col text-[13px]">
+              <div className="mx-[21px] px-[10px] py-[8px] rounded-[3.333px] bg-white/[0.03] flex flex-col items-start gap-[8px] [&>*]:w-full text-[13px]">
                 {(() => {
                   const buildDate = new Date(__BUILD_TIME__);
                   const ageMs = Date.now() - buildDate.getTime();
@@ -6049,7 +6132,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
             <div>
               {sectionTitle('Colors')}
               <GridSnap>
-              <div className="mx-[21px] px-[10px] rounded-[3.333px] bg-white/[0.03] [&>*]:min-h-[37px] [&>*]:flex [&>*]:flex-col [&>*]:justify-center flex flex-col">
+              <div className="mx-[21px] px-[10px] py-[8px] rounded-[3.333px] bg-white/[0.03] flex flex-col items-start gap-[8px] [&>*]:w-full">
                 <ThemePresetRow label="Background" presets={BG_PRESETS} themeKey="bg" varName="--app-bg" storageKey="app-bg" />
                 <ThemePresetRow label="Accent" presets={ACCENT_PRESETS} themeKey="accent" varName="--app-accent" storageKey="app-accent" />
               </div>
@@ -6058,7 +6141,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
             <div>
               {sectionTitle('Task Order')}
               <GridSnap>
-              <div className="mx-[21px] px-[10px] rounded-[3.333px] bg-white/[0.03] [&>*]:min-h-[37px] [&>*]:flex [&>*]:flex-col [&>*]:justify-center flex flex-col">
+              <div className="mx-[21px] px-[10px] py-[8px] rounded-[3.333px] bg-white/[0.03] flex flex-col items-start gap-[8px] [&>*]:w-full">
                 {([{ id: 'cpt' as TaskOrder, parts: ['Client - Project', 'Task'] as const }, { id: 'ptc' as TaskOrder, parts: ['Project', 'Task', 'Client'] as const }, { id: 'tcp' as TaskOrder, parts: ['Task', 'Client - Project'] as const }]).map((opt) => {
                   const active = taskOrder === opt.id;
                   return (
@@ -6073,7 +6156,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
             <div>
               {sectionTitle('Section Sequence')}
               <GridSnap>
-              <div className="mx-[21px] px-[10px] rounded-[3.333px] bg-white/[0.03] [&>*]:min-h-[37px] [&>*]:flex [&>*]:flex-col [&>*]:justify-center flex flex-col">
+              <div className="mx-[21px] px-[10px] py-[8px] rounded-[3.333px] bg-white/[0.03] flex flex-col items-start gap-[8px] [&>*]:w-full">
                 {listSequence.map((l, i) => (
                   <div key={l} className="flex flex-row items-center gap-3 h-[26px]">
                     <span className="text-[13px] text-white w-[90px]">{LIST_TITLES[l]}</span>
@@ -6087,13 +6170,13 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
             <div>
               {sectionTitle('Quick Window Shortcut')}
               <GridSnap>
-              <div className="mx-[21px] px-[10px] rounded-[3.333px] bg-white/[0.03] [&>*]:min-h-[37px] [&>*]:flex [&>*]:flex-col [&>*]:justify-center flex flex-col items-start"><PipShortcutSetting /></div>
+              <div className="mx-[21px] px-[10px] py-[8px] rounded-[3.333px] bg-white/[0.03] flex flex-col items-start gap-[8px] [&>*]:w-full items-start"><PipShortcutSetting /></div>
               </GridSnap>
             </div>
             <div>
               {sectionTitle('Title Case Auto-Correct')}
               <GridSnap>
-              <div className="mx-[21px] px-[10px] rounded-[3.333px] bg-white/[0.03] [&>*]:min-h-[37px] [&>*]:flex [&>*]:flex-col [&>*]:justify-center flex flex-col">
+              <div className="mx-[21px] px-[10px] py-[8px] rounded-[3.333px] bg-white/[0.03] flex flex-col items-start gap-[8px] [&>*]:w-full">
                 <CapsuleToggle options={[{ v: 'off', label: 'Off' }, { v: 'title', label: 'On' }]} value={caseMode} onChange={(v) => onSetCaseMode(v as 'off' | 'title')} />
               </div>
               </GridSnap>
@@ -6101,7 +6184,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
             <div>
               {sectionTitle('Card Layout')}
               <GridSnap>
-              <div className="mx-[21px] px-[10px] rounded-[3.333px] bg-white/[0.03] [&>*]:min-h-[37px] [&>*]:flex [&>*]:flex-col [&>*]:justify-center flex flex-col">
+              <div className="mx-[21px] px-[10px] py-[8px] rounded-[3.333px] bg-white/[0.03] flex flex-col items-start gap-[8px] [&>*]:w-full">
                 <CapsuleToggle options={[{ v: 2, label: 'Two rows' }, { v: 1, label: 'One row' }]} value={cardRows} onChange={(v) => onSetCardRows(v as 1 | 2)} />
                 <p className="text-[11px] text-[#5e5e5e]">One row collapses title + client › project + deadline onto a single line and truncates the title first.</p>
               </div>
@@ -6110,7 +6193,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
             <div>
               {sectionTitle('Sort by Client / Project')}
               <GridSnap>
-              <div className="mx-[21px] px-[10px] rounded-[3.333px] bg-white/[0.03] [&>*]:min-h-[37px] [&>*]:flex [&>*]:flex-col [&>*]:justify-center flex flex-col">
+              <div className="mx-[21px] px-[10px] py-[8px] rounded-[3.333px] bg-white/[0.03] flex flex-col items-start gap-[8px] [&>*]:w-full">
                 <CapsuleToggle options={[{ v: 'off', label: 'Off' }, { v: 'on', label: 'On' }]} value={sortByCP ? 'on' : 'off'} onChange={(v) => onSetSortByCP(v === 'on')} />
                 <p className="text-[11px] text-[#5e5e5e]">Groups the Focus day columns by client › project, then by deadline and started-first within each group.</p>
               </div>
@@ -6770,11 +6853,11 @@ function TaskQuickEdit({
               return (
                 <div key={`day-${i}`} className="relative h-7 flex items-center justify-center">
                   {showBar && (
-                    <div className="absolute h-7 inset-y-0 bg-[#7363FF]" style={{ left: barLeft, right: barRight }} />
+                    <div className="absolute h-7 inset-y-0 bg-[var(--app-accent)]" style={{ left: barLeft, right: barRight }} />
                   )}
                   <button
                     onClick={onPick}
-                    className={`relative z-10 h-7 w-7 rounded-full flex items-center justify-center transition-colors text-[13px] font-bold ${isSelected ? 'bg-[#7363FF] text-[#1f1f1f]' : isInRange ? 'text-[#1f1f1f]' : isToday ? 'text-[var(--app-accent)]' : c.inMonth ? 'text-white hover:bg-white/10 font-normal' : 'text-[#454545] hover:bg-white/[0.03] font-normal'}`}
+                    className={`relative z-10 h-7 w-7 rounded-full flex items-center justify-center transition-colors text-[13px] font-bold ${isSelected ? 'bg-[var(--app-accent)] text-[#1f1f1f]' : isInRange ? 'text-[#1f1f1f]' : isToday ? 'text-[var(--app-accent)]' : c.inMonth ? 'text-white hover:bg-white/10 font-normal' : 'text-[#454545] hover:bg-white/[0.03] font-normal'}`}
                   >
                     {c.date?.getDate()}
                   </button>
@@ -10770,12 +10853,12 @@ export default function App() {
           // that travel). The commitment is what stops the tray flicking open while you just shuffle
           // cards around inside the Next column — a little horizontal drift no longer counts; you
           // have to deliberately push the card out toward the edge.
-          if (x > window.innerWidth - 42 && ev.delta.x > 40 && mode !== 'settings') setEdgeDrawer('left');
+          if (x > window.innerWidth - 64 && ev.delta.x > 40 && mode !== 'settings') setEdgeDrawer('left');
           // Once open, LOCK it: only tuck away when the cursor travels LEFT clear off the panel —
-          // past the 320px drawer AND its 22px chevron tab (342 total). Anywhere over the tray keeps
+          // past the 320px drawer AND its 44px triangle tab (364 total). Anywhere over the tray keeps
           // it open. Dropping on a row closes it via onDragEnd. Combined with the drag-inert hover
           // handlers above, this kills the random mid-drag retract.
-          else if (x < window.innerWidth - 342) setEdgeDrawer(null);
+          else if (x < window.innerWidth - 364) setEdgeDrawer(null);
         }
       }}
       onDragEnd={(ev) => { setEdgeDrawer(null); setTraySettling(true); window.setTimeout(() => setTraySettling(false), 400); handleDragEnd(ev); }}
@@ -10815,12 +10898,12 @@ export default function App() {
           </div>
         </div>
       )}
-      {/* Far-left layout: a 52px vertical nav rail, then the 22px Assign-rail chevron gutter
+      {/* Far-left layout: a 52px vertical nav rail, then the 44px Assign-rail triangle gutter
           beside it, so pl-[74px] carves the combined space and the flowing views start clear of
           both. Fixed overlays (nav, assign rail, tray, modals) are position:fixed → unaffected by
           this padding. PIP has neither nav nor rail, so no gutter there. */}
       {SHOW_TITLEBAR && <TauriTitlebar />}
-      <div className={`relative h-screen bg-[var(--app-bg)] overflow-hidden pt-[var(--titlebar-h)] ${PIP_MODE ? '' : 'pl-[74px] pr-[42px]'}`}>
+      <div className={`relative h-screen bg-[var(--app-bg)] overflow-hidden pt-[var(--titlebar-h)] ${PIP_MODE ? '' : 'pl-[74px] pr-[64px]'}`}>
         {/* PIP quick-view: an always-on-top mini-window (?pip=1, opened by the Tauri shell's
             global shortcut) that renders the FOCUS view below with NO BottomBar / tray chrome.
             Edits sync live via Liveblocks, so changes here land in the main window instantly.
@@ -11333,6 +11416,17 @@ export default function App() {
                             category labels (grey, 26px row, 16px inset) + hover +.
                             mb mirrors the container's pt so the label sits centered
                             in the gap between bands. */}
+                        {section === 'next' ? (
+                          <NextBandHeader
+                            bandList={listId}
+                            label={bandLabel}
+                            bodyFont="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap"
+                            labelMb={bandSpacing(cardRows === 1).mb}
+                            onLabelClick={scrollBandToTop}
+                            onAdd={() => addBlankTaskInSection(listId, section, focusProjectId ? { projectId: focusProjectId } : focusClientId ? { clientId: focusClientId } : undefined)}
+                            addAriaLabel={`Add ${bandLabel} task`}
+                          />
+                        ) : (
                         <div data-band-list={listId} className="group/band h-[37px] px-[16px] flex items-center gap-2 sticky top-0 z-10 bg-[var(--app-bg)]" style={{ marginBottom: bandSpacing(cardRows === 1).mb }}>
                           <p onClick={scrollBandToTop} className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap text-[#5e5e5e] cursor-pointer">{bandLabel}</p>
                           <button
@@ -11344,6 +11438,7 @@ export default function App() {
                             <Plus size={14} />
                           </button>
                         </div>
+                        )}
                         {/* Wrap the cards in the SAME droppable cell the calendar view uses, so a
                             drop anywhere in the band (including an empty one) registers as this
                             cal:<day>:<list> target — without it, focus-mode drops fell through and
@@ -11359,7 +11454,70 @@ export default function App() {
                             />
                           )}
                           <SortableContext items={cellTasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
-                            {cellTasks.map((t, index) => {
+                            {/* Next column: cards are grouped by client (by PROJECT under
+                                Personal) with the group name above each run. Build one ORDERED
+                                list of labels + tasks so a label always sits with its own cards. */}
+                            {(() => {
+                              if (section !== 'next') return null;
+                              const groups: { name: string; tasks: Task[] }[] = [];
+                              for (const t of cellTasks) {
+                                const proj = t.projectId ? projects.find((pp) => pp.id === t.projectId) : undefined;
+                                let name: string;
+                                if (listId === 'personal') name = proj?.name || 'Unfiled';
+                                else {
+                                  const cid = t.clientId ?? proj?.clientId;
+                                  const cl = cid && cid !== PERSONAL_CLIENT_ID ? clients.find((x) => x.id === cid) : undefined;
+                                  name = cl?.short || cl?.name || 'Unfiled';
+                                }
+                                const g = groups.find((x) => x.name === name);
+                                if (g) g.tasks.push(t); else groups.push({ name, tasks: [t] });
+                              }
+                              return groups.map((g, gi) => (
+                                <Fragment key={`fg-${g.name}`}>
+                                  {/* Marker the sticky header reads; group 0 needs no inline
+                                      label because the header already names it. */}
+                                  <div data-group-name={g.name} style={gi === 0 ? undefined : { paddingTop: bandSpacing(cardRows === 1).pt }}>
+                                    {gi > 0 && (
+                                      <div className="h-[37px] px-[16px] flex items-center">
+                                        <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap text-[#7a7a7a]">{g.name}</p>
+                                      </div>
+                                    )}
+                                  </div>
+                                  {g.tasks.map((t) => {
+                                    // Index within the FLAT cell order — the drag displacement
+                                    // math is keyed to that, not to the group's local order.
+                                    const index = cellTasks.indexOf(t);
+                                    let insertionGap = 0;
+                                    if (dSameCategory && activeTask && overTask && t.id !== activeTask.id && !dActiveInBucket && dOverInBucket && index === dOIdx) {
+                                      insertionGap = dSlotH;
+                                    }
+                                    return (
+                                      <CalendarCard
+                                        key={t.id}
+                                        task={t}
+                                        cellId={cellId}
+                                        onToggle={() => toggleTask(t.id)}
+                                        onRename={(title) => renameTask(t.id, title)}
+                                        onDelete={() => deleteTask(t.id)}
+                                        onEdit={() => openEdit(t)}
+                                        onQuickEdit={() => openQuick(t)}
+                                        onAddSibling={() => addSiblingTask(t, undefined)}
+                                        onRescheduleDate={(k) => rescheduleOrClearDate(t.id, k)}
+                                        isAnyDragging={!!activeTask}
+                                        categoryDimmed={!!activeTask && activeTask.list !== listId}
+                                        projects={projects}
+                                        clients={clients}
+                                        displacementOffset={0}
+                                        insertionGap={insertionGap}
+                                        taskOrder={taskOrder}
+                                        autoFocusEdit={t.id === newId}
+                                      />
+                                    );
+                                  })}
+                                </Fragment>
+                              ));
+                            })()}
+                            {section !== 'next' && cellTasks.map((t, index) => {
                               let insertionGap = 0;
                               if (dSameCategory && activeTask && overTask && t.id !== activeTask.id && !dActiveInBucket && dOverInBucket && index === dOIdx) {
                                 insertionGap = dSlotH;
@@ -12250,7 +12408,7 @@ export default function App() {
                           value={lrImportUrl}
                           onChange={(e) => setLrImportUrl(e.target.value)}
                           placeholder="https://lightroom.adobe.com/shares/..."
-                          className="bg-[#1f1f1f] text-white px-3 py-2 rounded-md border border-[#3a3a3a] outline-none focus:border-[#7363FF]"
+                          className="bg-[#1f1f1f] text-white px-3 py-2 rounded-md border border-[#3a3a3a] outline-none focus:border-[var(--app-accent)]"
                           autoFocus
                         />
                         {lrImportStatus === 'error' && (
@@ -12268,7 +12426,7 @@ export default function App() {
                             type="button"
                             onClick={() => { const target = projectKey ?? taskKey; if (target) runLightroomImport(target); }}
                             disabled={!lrImportUrl.trim() || (!projectKey && !taskKey)}
-                            className="px-3 py-1 text-[13px] bg-[#7363FF] text-white rounded-md hover:bg-[#8473ff] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                            className="px-3 py-1 text-[13px] bg-[var(--app-accent)] text-white rounded-md hover:bg-[#8473ff] transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                           >
                             Import
                           </button>
@@ -12286,7 +12444,7 @@ export default function App() {
                             </p>
                             <div className="h-1 bg-[#1f1f1f] rounded overflow-hidden">
                               <div
-                                className="h-full bg-[#7363FF] transition-all duration-200"
+                                className="h-full bg-[var(--app-accent)] transition-all duration-200"
                                 style={{ width: `${(lrImportProgress.current / Math.max(1, lrImportProgress.total)) * 100}%` }}
                               />
                             </div>
@@ -12401,10 +12559,10 @@ export default function App() {
         {/* Persistent right-edge tray bar — ALWAYS visible, even mid-drag (when the drawer itself
             is pinned open + invisible so its drop rows stay measured on-screen). Sits behind the
             drawer (z-30 < z-40), so the tray never vanishes the moment you grab a card. */}
-        {!PIP_MODE && mode !== 'settings' && <div className="fixed right-0 top-[var(--titlebar-h)] bottom-0 w-[22px] bg-[var(--app-card)] z-30 flex items-center justify-center" aria-hidden><ChevronRight size={12} className="text-[#a8a8a8] rotate-180" /></div>}
+        {!PIP_MODE && mode !== 'settings' && <div className="fixed right-0 top-[var(--titlebar-h)] bottom-0 w-[44px] bg-[var(--app-card)] z-30 flex items-center justify-center" aria-hidden><span className="rotate-180 inline-flex"><Arrowhead color="#a8a8a8" /></span></div>}
         {!PIP_MODE && mode !== 'settings' && (() => {
           // Assign rail + tray. The rail is a FULL-HEIGHT lighter bar living in the far-left
-          // gutter (the pl-[22px] on the wrapper reserves the space) — ONLY the bar is the
+          // gutter (the pr-[64px] on the wrapper reserves the space) — ONLY the bar is the
           // hotspot, so it never overlaps or intercepts a column. Hover/click the bar (or drag
           // a task into the left edge) → the tray slides out, OPAQUE, masking the columns
           // underneath (TrayMask + calendarCollision keep the drag from leaking below). Drop a
@@ -12505,18 +12663,18 @@ export default function App() {
                   ))}
                 </CustomScroll>
                 {/* Chevron handle — the visible sliver when the drawer is closed. Absolute at the
-                    panel's right edge (right:-22) so it sits just past the 320px body; being a
+                    panel's right edge (left:-44) so it sits just past the 320px body; being a
                     child, it slides out WITH the drawer. Full-height, same #151412, no hover tint
                     (one monolithic material). Rotates 180° when open to read as "close". */}
                 <button
                   type="button"
                   onClick={() => setEdgeDrawer('left')}
-                  style={{ left: -22 }}
-                  className="absolute top-0 bottom-0 w-[22px] bg-[var(--app-card)] flex items-center justify-center"
+                  style={{ left: -44 }}
+                  className="absolute top-0 bottom-0 w-[44px] bg-[var(--app-card)] flex items-center justify-center"
                   aria-label="Assign drawer"
                   title="Assign project / person"
                 >
-                  <ChevronRight size={12} className={`text-[#a8a8a8] shrink-0 transition-transform duration-300 ${trayOpen ? '' : 'rotate-180'}`} />
+                  <span className={`inline-flex shrink-0 transition-transform duration-300 ${trayOpen ? '' : 'rotate-180'}`}><Arrowhead color="#a8a8a8" /></span>
                 </button>
               </div>
           );
@@ -12728,7 +12886,7 @@ export default function App() {
                 className="block w-full h-full object-cover"
               />
               {activeDamMultiCount > 1 ? (
-                <div className="absolute top-1 right-1 bg-[#7363FF] text-white px-2 py-0.5 rounded-full pointer-events-none">
+                <div className="absolute top-1 right-1 bg-[var(--app-accent)] text-white px-2 py-0.5 rounded-full pointer-events-none">
                   +{activeDamMultiCount - 1}
                 </div>
               ) : null}
