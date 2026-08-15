@@ -418,7 +418,7 @@ function SheetShell({ onClose, children }: { onClose: () => void; children: Reac
 const SHEET_BG = '#232220';
 // Track hugs its capsules (inline-flex) instead of stretching edge to edge — two People chips
 // get a two-chip-wide track, not a full-width bar. max-w-full lets long lists still wrap.
-const CHIP_TRACK = 'inline-flex flex-row flex-wrap items-center gap-[4px] rounded-[21px] bg-[#151412] p-[3px] max-w-full';
+const CHIP_TRACK = 'inline-flex flex-row flex-wrap items-center gap-[4px] rounded-[21px] bg-black p-[3px] max-w-full';
 const CHIP_BASE = "h-[36px] inline-flex items-center px-[14px] rounded-full text-[13px] font-['Univers_BQ:55_Regular',sans-serif] transition-colors";
 const chipCls = (active: boolean) => `${CHIP_BASE} ${active ? 'bg-[#232220] text-white' : 'bg-transparent text-[#656464]'}`;
 
@@ -880,7 +880,7 @@ export default function MobileApp() {
         <div className="shrink-0 flex items-center justify-center pt-[45px] pb-[24px]">
           {/* Track is the same near-black as the bottom bar (#151412) so the switcher reads as
               chrome rather than as content. */}
-          <div className="relative inline-flex items-center rounded-full bg-[#151412] p-[3px] w-[calc(100%-36px)] max-w-[340px]">
+          <div className="relative inline-flex items-center rounded-full bg-black p-[3px] w-[calc(100%-36px)] max-w-[340px]">
             {/* Sliding knob: one third of the inner width, translated by whole knob-widths.
                 It is simply the page background colour sitting on the near-black track — the
                 same one knob for all three days, no purple wash and no per-day special case. */}
@@ -924,12 +924,12 @@ export default function MobileApp() {
             {PANES.map((p, i) => (
               <PaneDroppable key={p.section} id={`mpane:${i}`} width={w}>
                 {bandsByPane[i].map(({ listId, cellId, tasks: bandTasks }) => (
-                  <div key={`${p.section}-${listId}`} className={bandTasks.length > 0 ? 'pt-[7px]' : 'pt-[5px]'}>
+                  <div key={`${p.section}-${listId}`} className="pt-[7px]">
                     {/* Label vertically centered; the + is ALWAYS visible (tap-to-reveal made it
                         undiscoverable) and sits in a 44px touch box with the same right-edge
                         geometry as the cards' + (card mx-10 + right-0 w-44 → icon center 32px
                         from the pane edge), so the column of pluses lines up. */}
-                    <div className={`h-[28px] ${bandTasks.length > 0 ? 'mb-[13px]' : 'mb-[5px]'} pl-[20px] flex items-center sticky top-0 z-10 bg-[var(--app-bg)]`}>
+                    <div className={`h-[28px] mb-[13px] pl-[20px] flex items-center sticky top-0 z-10 bg-[var(--app-bg)]`}>
                       <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap text-[#5e5e5e]">{LIST_TITLES[listId]}</p>
                       <button
                         type="button"

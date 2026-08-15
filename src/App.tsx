@@ -204,7 +204,7 @@ function ThemeColorPicker({ varName, storageKey, label, fallback, themeKey }: { 
 const BG_PRESETS = [
   { id: 'warm', value: '#1c1b19' },     // original — brightest, slightly warm
   { id: 'neutral', value: '#141413' },  // midpoint, de-warmed
-  { id: 'ink', value: '#0d0d0d' },      // almost black, still visibly gray
+  { id: 'ink', value: '#121212' },      // almost black — dark as it can be while the pure-black toggle tracks still read against it
 ];
 const ACCENT_PRESETS = [
   { id: 'purple', value: '#8465ff' },   // original RGB purple
@@ -425,14 +425,40 @@ const CUSTOM_SCROLL_LINE_PX = 40;     // deltaMode=1 (lines) → px conversion
 function CustomScroll({
   children,
   innerClassName = '',
+  bandIndicator = null,
 }: {
   children: React.ReactNode;
   /** Classes for the inner scrolling div (e.g. padding for content). */
   innerClassName?: string;
+  /** While a task drag is active: the category band the drop would land in.
+      If that band ([data-band-list]) is scrolled off the BOTTOM of this
+      column, a glowing accent overlay pins to the column's bottom edge naming
+      the destination with a down-chevron — so a drop aimed at Personal three
+      screens down never lands blind. */
+  bandIndicator?: { list: string; label: string } | null;
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const thumbElRef = useRef<HTMLDivElement | null>(null);
   const [hasOverflow, setHasOverflow] = useState(false);
+  // Bottom drop-target overlay: true while the indicated band's header sits
+  // below the visible bottom edge of this column.
+  const [bandBelow, setBandBelow] = useState(false);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || !bandIndicator) { setBandBelow(false); return; }
+    let raf = 0;
+    const compute = () => {
+      raf = 0;
+      const bandEl = el.querySelector<HTMLElement>(`[data-band-list="${bandIndicator.list}"]`);
+      if (!bandEl) { setBandBelow(false); return; }
+      const er = el.getBoundingClientRect();
+      setBandBelow(bandEl.getBoundingClientRect().top > er.bottom - 24);
+    };
+    const schedule = () => { if (!raf) raf = requestAnimationFrame(compute); };
+    compute();
+    el.addEventListener('scroll', schedule, { passive: true });
+    return () => { el.removeEventListener('scroll', schedule); if (raf) cancelAnimationFrame(raf); };
+  }, [bandIndicator]);
   const overflowRef = useRef(false);
   const dragRef = useRef<{ startY: number; startScrollTop: number; trackH: number; maxScroll: number } | null>(null);
 
@@ -589,6 +615,19 @@ function CustomScroll({
           children don't include any [data-sticky-tier] elements. Sits OVER the
           inner scroll element so labels stay fixed while content scrolls. */}
       <StickyOverlay scrollElRef={ref} />
+      {bandIndicator && bandBelow && (
+        <div
+          className="pointer-events-none absolute bottom-[4px] left-[22px] right-[36px] z-40 rounded-[3.333px] min-h-[45px] flex flex-row items-center justify-center gap-[7px]"
+          style={{
+            backgroundColor: 'var(--app-bg)',
+            boxShadow: '0 0 0 1.5px rgb(from var(--app-accent) r g b / 0.55), 0 0 20px rgb(from var(--app-accent) r g b / 0.45)',
+          }}
+        >
+          <div className="absolute inset-0 rounded-[3.333px]" style={{ backgroundColor: 'rgb(from var(--app-accent) r g b / 0.14)' }} />
+          <span className="relative font-['Univers_BQ:55_Regular',sans-serif] text-[13px] text-[var(--app-accent)]">{bandIndicator.label}</span>
+          <svg className="relative" width="10" height="6" viewBox="0 0 10 6" fill="var(--app-accent)"><polygon points="0,0 10,0 5,6" /></svg>
+        </div>
+      )}
       {hasOverflow && (
         <>
           {/* Up triangle */}
@@ -4440,8 +4479,8 @@ function AddPlaceholderCard({ isToday, onClick, stacked = false }: { isToday: bo
 // currently at the top of the column. Sub-groups mark themselves with
 // data-group-name; we read those positions off the DOM rather than threading
 // scroll state through the render tree.
-function NextBandHeader({ label, bodyFont, onLabelClick, onAdd, addAriaLabel }: {
-  label: string; bodyFont: string;
+function NextBandHeader({ label, bodyFont, onLabelClick, onAdd, addAriaLabel, bandList }: {
+  label: string; bodyFont: string; bandList?: string;
   onLabelClick: (e: React.MouseEvent<HTMLElement>) => void;
   onAdd: () => void; addAriaLabel: string;
 }) {
@@ -4483,7 +4522,7 @@ function NextBandHeader({ label, bodyFont, onLabelClick, onAdd, addAriaLabel }: 
     };
   }, []);
   return (
-    <div ref={rowRef} className="group/band h-[26px] mb-[18px] px-[16px] flex items-center gap-2 sticky top-0 z-10 bg-[var(--app-bg)]">
+    <div ref={rowRef} data-band-list={bandList} className="group/band h-[26px] mb-[18px] px-[16px] flex items-center gap-2 sticky top-0 z-10 bg-[var(--app-bg)]">
       <p onClick={onLabelClick} className={`${bodyFont} text-[#5e5e5e] cursor-pointer`}>
         {label}
         {active ? <span className="text-[#454545]">{': '}</span> : null}
@@ -4961,7 +5000,7 @@ function WeekCalendarMode({
               </div>
               {/* Independent per-column scroll. Coming-Up + per-band stacks live here.
                   CustomScroll supplies the fixed-size pill thumb (the native scrollbar is hidden). */}
-              <CustomScroll>
+              <CustomScroll bandIndicator={activeTask ? { list: activeTask.list, label: LIST_TITLES[activeTask.list] } : null}>
               {/* Coming Up (overflow milestones) moved to the dedicated
                   "Next Week" column — see below after the day-columns map. */}
               {/* Milestones for this day are pinned above their respective category band (Work,
@@ -4999,7 +5038,7 @@ function WeekCalendarMode({
                 const categoryDimmed = !!activeTask && activeTask.list !== listId;
                 return (
                   <CalendarDayDroppable key={listId} id={`cal:${iso}:${listId}`} isEmpty={bucket.length === 0 && dayMilestones.length === 0} slotHeight={activeSlotHeight} className="pt-[15px]">
-                    <div className="group/band h-[26px] mb-[18px] px-[16px] flex items-center gap-2 sticky top-0 z-10 bg-[var(--app-bg)]">
+                    <div data-band-list={listId} className="group/band h-[26px] mb-[18px] px-[16px] flex items-center gap-2 sticky top-0 z-10 bg-[var(--app-bg)]">
                       <p onClick={scrollBandToTop} className={`${bodyFont} text-[#5e5e5e] cursor-pointer`}>{label}</p>
                       <button
                         type="button"
@@ -5102,7 +5141,7 @@ function WeekCalendarMode({
               <div className="shrink-0 h-[37px] flex items-center gap-2 px-[16px] mb-[37px] text-white">
                 <p className="font-['NB_International:Regular',sans-serif]">Next Week</p>
               </div>
-              <CustomScroll>
+              <CustomScroll bandIndicator={activeTask ? { list: activeTask.list, label: LIST_TITLES[activeTask.list] } : null}>
                 {/* Coming-Up milestones (dated beyond the visible window) stay pinned at the
                     very top — a read-only look-ahead, same as before. */}
                 {overflowMilestones.length > 0 && (
@@ -5157,6 +5196,7 @@ function WeekCalendarMode({
                     // one-card slot) so a category break reads louder than a client sub-break.
                     <CalendarDayDroppable key={listId} id={cellId} isEmpty={bucket.length === 0 && bandMilestones.length === 0} slotHeight={activeSlotHeight} className="pt-[41px] first:pt-[15px]">
                       <NextBandHeader
+                        bandList={listId}
                         label={label}
                         bodyFont={bodyFont}
                         onLabelClick={scrollBandToTop}
@@ -10887,9 +10927,10 @@ export default function App() {
                   // Milestones header lands exactly on the Work band's line. Each header sits
                   // DIRECTLY above its own rows; the only other gap is the one separating the
                   // Milestones block from the Clients + Projects block.
-                  <div className="min-w-0 min-h-0 overflow-y-auto flex flex-col">
+                  <div className="min-w-0 min-h-0 flex flex-col">
                     {focusSearchRow}
                     <div className="shrink-0" style={{ height: SPACING.dcr }} aria-hidden />
+                    <CustomScroll>
                     {focusMilestonesHeader}
                     {renderReadonlyBucket(focusMilestones, undefined, true, milestoneClickTo, focusMilestoneId)}
                     <div className="shrink-0" style={{ height: stackGap }} aria-hidden />
@@ -10922,6 +10963,7 @@ export default function App() {
                       );
                     })}
                     <div className="shrink-0" style={{ height: stackGap }} aria-hidden />
+                    </CustomScroll>
                   </div>
                 )}
                 {/* SPLIT side columns (content would overflow): the previous two-column layout —
@@ -11123,12 +11165,12 @@ export default function App() {
                     // category on ANY day — the label carries a hover-reveal +. Empty bands
                     // are just the quiet grey label until you hover.
                     return (
-                      <div key={`${colKey}-${listId}`} className={cellTasks.length > 0 ? 'pt-[15px]' : 'pt-[8px]'}>
+                      <div key={`${colKey}-${listId}`} className="pt-[15px]">
                         {/* Band label — same treatment as the calendar's in-column
                             category labels (grey, 26px row, 16px inset) + hover +.
                             mb mirrors the container's pt so the label sits centered
                             in the gap between bands. */}
-                        <div className={`group/band h-[26px] ${cellTasks.length > 0 ? 'mb-[18px]' : 'mb-[8px]'} px-[16px] flex items-center gap-2 sticky top-0 z-10 bg-[var(--app-bg)]`}>
+                        <div data-band-list={listId} className={`group/band h-[26px] mb-[18px] px-[16px] flex items-center gap-2 sticky top-0 z-10 bg-[var(--app-bg)]`}>
                           <p onClick={scrollBandToTop} className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap text-[#5e5e5e] cursor-pointer">{bandLabel}</p>
                           <button
                             type="button"
@@ -11224,7 +11266,7 @@ export default function App() {
                   return cols.map((col) => (
                     <CalendarColumnDroppable key={col.key} date={col.isos[0]} className="min-w-[240px] flex flex-col min-h-0 overflow-hidden">
                       {col.header}
-                      <CustomScroll>
+                      <CustomScroll bandIndicator={activeTask ? { list: activeTask.list, label: LIST_TITLES[activeTask.list] } : null}>
                         {/* Next column only: upcoming milestones beyond the window, featured up top. */}
                         {col.section === 'next' && comingUpMilestones.length > 0 && (
                           <div className="mb-[24px]">
