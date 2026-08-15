@@ -4953,9 +4953,9 @@ function CalendarCardBody({ task, projects, clients, taskOrder = 'ptc', isTodayC
         <span style={doneStyle} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleColor}`}>{task.title}</span>
       </div>
       <div className={`flex flex-row items-center gap-[6px] ${stacked ? 'h-[22px] shrink-0' : ''}`}>
-        {client && project && <p style={doneStyle} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap text-[#656464]`}>{client.short}<Arrowhead color={done ? doneCol : undefined} dim={task.completed} />{project.name}</p>}
+        {client && project && <p style={doneStyle} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${metaColor}`}>{client.short}<Arrowhead tone={(isScheduled || isTodayCard) ? 'milestone' : 'default'} color={done ? doneCol : undefined} dim={task.completed} />{project.name}</p>}
         {client && !project && <p style={doneStyle} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${metaColor}`}>{client.short}</p>}
-        {!client && project && <p style={doneStyle} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap text-[#656464]`}>{project.name}</p>}
+        {!client && project && <p style={doneStyle} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${metaColor}`}>{project.name}</p>}
         {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={(isScheduled || isTodayCard) ? 'scheduled' : 'todo'} hollow={isPersonal} dimColor={done ? doneCol : undefined} dim={task.completed} />)}
         {task.deadline && <p style={doneStyle} className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${(isScheduled || isTodayCard) ? 'text-[var(--app-accent)]' : isLateDeadline(task.deadline) ? 'text-white' : 'text-[#656464]'}`}>{formatDeadline(task.deadline)}</p>}
       </div>
