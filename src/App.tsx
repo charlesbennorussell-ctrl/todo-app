@@ -616,16 +616,25 @@ function CustomScroll({
           inner scroll element so labels stay fixed while content scrolls. */}
       <StickyOverlay scrollElRef={ref} />
       {bandIndicator && bandBelow && (
+        // The drop beacon speaks the TODAY-card language: the same accent wash
+        // on the app background, accent text — and it's tall (about three card
+        // slots) so it reads as a destination, not a tooltip. Below the label,
+        // the app's own deadline arrow (line + solid head) rotated to point
+        // DOWN at where the drop will land.
         <div
-          className="pointer-events-none absolute bottom-[4px] left-[22px] right-[36px] z-40 rounded-[3.333px] min-h-[45px] flex flex-row items-center justify-center gap-[7px]"
+          className="pointer-events-none absolute bottom-[4px] left-[22px] right-[36px] z-40 rounded-[3.333px] h-[170px] flex flex-col items-center justify-center gap-[10px]"
           style={{
             backgroundColor: 'var(--app-bg)',
-            boxShadow: '0 0 0 1.5px rgb(from var(--app-accent) r g b / 0.55), 0 0 20px rgb(from var(--app-accent) r g b / 0.45)',
+            boxShadow: '0 0 22px rgb(from var(--app-accent) r g b / 0.35)',
           }}
         >
-          <div className="absolute inset-0 rounded-[3.333px]" style={{ backgroundColor: 'rgb(from var(--app-accent) r g b / 0.14)' }} />
-          <span className="relative font-['Univers_BQ:55_Regular',sans-serif] text-[13px] text-[var(--app-accent)]">{bandIndicator.label}</span>
-          <svg className="relative" width="10" height="6" viewBox="0 0 10 6" fill="var(--app-accent)"><polygon points="0,0 10,0 5,6" /></svg>
+          <div className="absolute inset-0 rounded-[3.333px]" style={{ backgroundColor: 'rgb(from var(--app-accent) r g b / 0.1)' }} />
+          <span className="relative font-['Univers_BQ:55_Regular',sans-serif] text-[14px] text-[var(--app-accent)]">{bandIndicator.label}</span>
+          {/* DeadlineArrow geometry (18x12 line + solid head), turned vertical. */}
+          <svg className="relative" width="12" height="18" viewBox="0 0 12 18" fill="none">
+            <line x1="6" y1="0" x2="6" y2="14" style={{ stroke: 'var(--app-accent)' }} strokeWidth="1" />
+            <polygon points="2,14 10,14 6,18" style={{ fill: 'var(--app-accent)' }} />
+          </svg>
         </div>
       )}
       {hasOverflow && (
@@ -4448,8 +4457,8 @@ export function computeCalendarDistribution(tasks: Task[], todayAnchor: Date, ho
 // the TODAY column it takes today's purple wash and accent text, exactly like
 // the real cards there; every other column gets the card gray with pale text
 // that stays quiet until you look for it.
-function AddPlaceholderCard({ isToday, onClick, stacked = false }: { isToday: boolean; onClick: () => void; stacked?: boolean }) {
-  const tone = isToday ? 'text-[var(--app-accent)]' : 'text-[#4a4a4a]';
+function AddPlaceholderCard({ isToday, onClick, stacked = false, dimmed = false }: { isToday: boolean; onClick: () => void; stacked?: boolean; dimmed?: boolean }) {
+  const tone = dimmed ? 'text-[#383838]' : isToday ? 'text-[var(--app-accent)]' : 'text-[#4a4a4a]';
   // Match the RENDERED height of the cards beside it, not CalendarCard's
   // min-height: a two-line card declares min-h-[45px] but content pushes it to
   // 55px, and a placeholder that stopped at 45 broke the column's grid.
@@ -4657,7 +4666,9 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
   // next, or normal. On a TODAY card (purple wash) the dim text/graphics instead take the APP
   // background color (var(--app-bg), the dark grayish-brown) so they read as a quiet dark-on-purple carve
   // — legible but recessive — rather than an illegible grayish-purple.
-  const DIM = isTodayCard ? 'text-[var(--app-bg)]' : 'text-[#454545]';
+  // Dim is the SAME readable gray everywhere — the old app-bg carve on today
+  // cards made every dimmed card read as blank during drags.
+  const DIM = 'text-[#454545]';
   // Today's column reads loud (white); every other column is a future/other day and reads
   // muted (gray) — a card whose deadline moved out of today no longer renders white just
   // because its section is still 'today'. Scheduled/completed/category-dim still win above.
@@ -4676,7 +4687,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
   const afterTitleSlots = cpSlots.slice(titleSlotIdx + 1);
   const renderMetaSlot = (slot: TaskMetaSlot, key: string) => {
     const cls = `font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : metaColor}`;
-    if (slot === 'cp' && client?.short && project?.name) return <p key={key} className={cls}>{client.short}<Arrowhead dim={task.completed || categoryDimmed} tone={isTodayCard ? 'milestone' : 'default'} color={categoryDimmed && isTodayCard ? 'var(--app-bg)' : undefined} />{project.name}</p>;
+    if (slot === 'cp' && client?.short && project?.name) return <p key={key} className={cls}>{client.short}<Arrowhead dim={task.completed || categoryDimmed} tone={isTodayCard ? 'milestone' : 'default'} color={undefined} />{project.name}</p>;
     if (slot === 'client' && client?.short) return <p key={key} className={cls}>{client.short}</p>;
     if (slot === 'project' && project?.name) return <p key={key} className={cls}>{project.name}</p>;
     return null;
@@ -4707,7 +4718,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
         <div className={`flex flex-row items-center gap-[10px] ${singleLine ? 'min-w-0 shrink' : 'w-full pr-5'}`}>
           {!isScheduled && (
             <div onPointerDown={(e) => e.stopPropagation()} className="shrink-0 flex items-center justify-center">
-              <TaskCheckbox completed={task.completed} started={task.started} onToggle={onToggle} accent={isTodayCard ? (categoryDimmed ? 'var(--app-bg)' : 'var(--app-accent)') : undefined} />
+              <TaskCheckbox completed={task.completed} started={task.started} onToggle={onToggle} accent={isTodayCard && !categoryDimmed ? 'var(--app-accent)' : undefined} />
             </div>
           )}
           {/* TITLE HAS PRIORITY over everything sharing its row. Two separate competitions:
@@ -4780,7 +4791,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
             {afterTitleSlots.map((s, i) => renderMetaSlot(s, `at-${i}`))}
             {/* Deadline arrow — the same glyph list view puts before dates (small variant for
                 the tighter card meta). Milestones get it too, tinted milestone purple. */}
-            {task.deadline && <DeadlineArrow dim={task.completed || (categoryDimmed && !isTodayCard)} color={categoryDimmed && isTodayCard ? 'var(--app-bg)' : (isScheduled || isTodayCard) ? 'var(--app-accent)' : undefined} />}
+            {task.deadline && <DeadlineArrow dim={task.completed || (categoryDimmed && !isTodayCard)} color={categoryDimmed ? undefined : (isScheduled || isTodayCard) ? 'var(--app-accent)' : undefined} />}
             {/* Overdue dates render WHITE (red read as alarmist next to the purple wash).
                 The date chip is interactive: dblclick kicks it +1 day; right-click opens the
                 mini date menu. pointer-down stays local so pressing the date never starts a drag. */}
@@ -4799,7 +4810,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
                 roll-off linger ~1s then fade out over 500ms (asymmetric group-hover transition). */}
             {task.assignees.length > 0 && (
               <span className="flex flex-row items-center gap-[6px] linger-reveal">
-                {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={(isScheduled || isTodayCard) ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed || categoryDimmed} dimColor={categoryDimmed && isTodayCard ? 'var(--app-bg)' : '#383838'} />)}
+                {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={(isScheduled || isTodayCard) ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed || categoryDimmed} dimColor={'#383838'} />)}
               </span>
             )}
             {/* One-line layout: the + is the LAST item in the content lineup — right after the
@@ -5050,10 +5061,10 @@ function WeekCalendarMode({
                       </button>
                     </div>
                     {dayMilestones.length > 0 && dayMilestones.map((t) => <MilestoneCard key={`m-${t.id}`} task={t} showDate={false} categoryDimmed={categoryDimmed} />)}
-                    {/* Empty band → the Add invitation. Hidden mid-drag so the droppable's
-                        own empty slot stays the clean target. */}
-                    {bucket.length === 0 && dayMilestones.length === 0 && !isAnyDragging && (
-                      <AddPlaceholderCard isToday={isToday} stacked onClick={() => onAddTaskOnDay(listId, iso)} />
+                    {/* Empty band → the Add invitation. Stays mounted during drags
+                        (hiding it left card-shaped holes) but goes quiet/dim. */}
+                    {bucket.length === 0 && dayMilestones.length === 0 && (
+                      <AddPlaceholderCard isToday={isToday} stacked dimmed={isAnyDragging} onClick={() => onAddTaskOnDay(listId, iso)} />
                     )}
                     <SortableContext items={items} strategy={verticalListSortingStrategy}>
                         {bucket.map((t, index) => {
@@ -5205,8 +5216,8 @@ function WeekCalendarMode({
                       />
                       {bandMilestones.length > 0 && bandMilestones.map((t) => <MilestoneCard key={`m-${t.id}`} task={t} showDate categoryDimmed={categoryDimmed} />)}
                       {/* Next Week is never the Today column, so this is always the gray tone. */}
-                      {bucket.length === 0 && bandMilestones.length === 0 && !isAnyDragging && (
-                        <AddPlaceholderCard isToday={false} stacked onClick={() => onAddTaskOnDay(listId, nwStartIso)} />
+                      {bucket.length === 0 && bandMilestones.length === 0 && (
+                        <AddPlaceholderCard isToday={false} stacked dimmed={isAnyDragging} onClick={() => onAddTaskOnDay(listId, nwStartIso)} />
                       )}
                       <SortableContext items={items} strategy={verticalListSortingStrategy}>
                         {nwGroups.map((g, gi) => (
@@ -11186,10 +11197,12 @@ export default function App() {
                             cal:<day>:<list> target — without it, focus-mode drops fell through and
                             snapped back to Next. min-h keeps empty bands droppable. */}
                         <CalendarDayDroppable id={cellId} isEmpty={cellTasks.length === 0}>
-                          {/* Empty band → Add invitation, purple in the Today column. */}
-                          {cellTasks.length === 0 && !activeTask && (
+                          {/* Empty band → Add invitation, purple in the Today column.
+                              Stays mounted (dimmed) during drags. */}
+                          {cellTasks.length === 0 && (
                             <AddPlaceholderCard
                               isToday={colKey === 'fc-today'}
+                              dimmed={!!activeTask}
                               onClick={() => addBlankTaskInSection(listId, section, focusProjectId ? { projectId: focusProjectId } : focusClientId ? { clientId: focusClientId } : undefined)}
                             />
                           )}
