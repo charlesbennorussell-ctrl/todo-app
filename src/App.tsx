@@ -4299,7 +4299,7 @@ function MilestoneCardView({ task, projects, clients, showDate, categoryDimmed =
   // Inline style because Tailwind arbitrary opacity on hex colors wasn't reliably generating the CSS.
   const cardBgStyle: React.CSSProperties = { backgroundColor: 'rgb(from var(--app-accent) r g b / 0.1)' };
   return (
-    <div onClick={onClick} onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onQuickEdit?.(); }} style={cardBgStyle} className="relative mx-[6px] mb-[4px] group cursor-pointer h-[30px] rounded-[3.333px]">
+    <div onClick={onClick} onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onQuickEdit?.(); }} style={cardBgStyle} className="relative mx-[6px] mb-[4px] group cursor-pointer h-[33px] rounded-[3.333px]">
       {/* One continuous line — title (truncates first), then client › project, assignees, date, +.
           Coming-Up cards stay ONE line in BOTH the calendar and focus views. */}
       <div className="px-[10px] flex flex-row items-center gap-[6px] h-full">
@@ -4567,7 +4567,7 @@ function AddPlaceholderCard({ isToday, onClick, stacked = false, dimmed = false 
       aria-label="Add task"
       // Card-shaped, so it is a valid snap target for the drop beacon's top edge.
       data-add-card
-      className={`mx-[6px] mb-[4px] rounded-[3.333px] ${singleLine ? 'h-[33px]' : 'h-[70px]'} w-[calc(100%-12px)] flex flex-row items-center gap-[6px] px-[10px] ${isToday ? '' : 'bg-white/[0.03]'} hover:brightness-125 transition-[filter]`}
+      className={`mx-[6px] mb-[4px] rounded-[3.333px] h-[33px] w-[calc(100%-12px)] flex flex-row items-center gap-[6px] px-[10px] ${isToday ? '' : 'bg-white/[0.03]'} hover:brightness-125 transition-[filter]`}
       style={isToday ? { backgroundColor: 'rgb(from var(--app-accent) r g b / 0.1)' } : undefined}
     >
       <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] ${tone}`}>Add</span>
@@ -4808,12 +4808,12 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
       animate={{ opacity: isDragging ? 0 : 1 }}
       transition={{ opacity: { duration: 0.12, ease: 'easeOut' } }}
     >
-      <div onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} onContextMenu={(e) => { if (onQuickEdit) { e.preventDefault(); e.stopPropagation(); onQuickEdit(); } }} {...attributes} {...listeners} className={`cursor-grab active:cursor-grabbing px-[10px] py-[7px] overflow-hidden flex-1 ${singleLine ? 'flex flex-row items-center gap-[4px] pr-[26px]' : 'flex flex-col justify-center gap-[2px]'}`}>
+      <div onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} onContextMenu={(e) => { if (onQuickEdit) { e.preventDefault(); e.stopPropagation(); onQuickEdit(); } }} {...attributes} {...listeners} className={`cursor-grab active:cursor-grabbing px-[10px] overflow-hidden flex-1 ${singleLine ? 'flex flex-row items-center gap-[4px] pr-[26px]' : 'flex flex-col gap-0'}`}>
         {/* Calendar cards always render Title on line 1, all other meta on line 2 — taskOrder
             setting doesn't apply here. Line 1: checkbox + title. Line 2: client › project,
             assignees, deadline, + button. Checkbox is INLINE with the title so it stays aligned
             with the title cap-height when the whole content block is vertically centered. */}
-        <div className={`flex flex-row items-center gap-[10px] ${singleLine ? 'min-w-0 shrink' : 'w-full pr-5'}`}>
+        <div className={`flex flex-row items-center gap-[10px] ${singleLine ? 'min-w-0 shrink' : 'w-full pr-5 h-[35px] shrink-0'}`}>
           {!isScheduled && (
             <div onPointerDown={(e) => e.stopPropagation()} className="shrink-0 flex items-center justify-center">
               <TaskCheckbox completed={task.completed} started={task.started} onToggle={onToggle} accent={isTodayCard && !categoryDimmed ? 'var(--app-accent)' : undefined} />
@@ -4879,7 +4879,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
               STACKED mode the meta sits on its own second line and competes with nothing, so it
               keeps the original shrink-0 and its reserved min-height. */}
           <div
-            className={`flex flex-row items-center gap-[6px] ${singleLine ? 'min-w-0 overflow-hidden' : 'shrink-0 min-h-[15px]'}`}
+            className={`flex flex-row items-center gap-[6px] ${singleLine ? 'min-w-0 overflow-hidden' : 'shrink-0 h-[35px]'}`}
             style={singleLine ? { flexShrink: 1000 } : undefined}
           >
             {/* When completed, all line-2 meta drops to the same faint #383838 — visually quieted to match the title.
