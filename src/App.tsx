@@ -422,6 +422,11 @@ const CUSTOM_SCROLL_LINE_PX = 40;     // deltaMode=1 (lines) → px conversion
 // so cards became un-movable near the edges). Native scroll keeps drag-drop
 // working, and the JS-managed thumb (DOM transform writes, no React render
 // per scroll frame) keeps the feel snappy without sacrificing reliability.
+// Beacon target height — two card slots (55px card + 4px gap, twice). The
+// snap picks the card edge nearest this, so the block lands on a boundary
+// instead of slicing a card in half.
+const BEACON_IDEAL_H = 118;
+
 function CustomScroll({
   children,
   innerClassName = '',
@@ -443,6 +448,12 @@ function CustomScroll({
   // Bottom drop-target overlay: true while the indicated band's header sits
   // below the visible bottom edge of this column.
   const [bandBelow, setBandBelow] = useState(false);
+  // Beacon height, driven by SNAPPING its top edge to a card boundary. Left to
+  // a fixed height the block guillotines whatever card it lands on, leaving a
+  // sliver — so instead we pick the card edge nearest the ideal two-slot height
+  // and run the top to that card's own 4px halo line. Recomputed on every
+  // scroll frame, so wheel-scrolling mid-drag re-snaps live.
+  const [beaconH, setBeaconH] = useState(BEACON_IDEAL_H);
   useEffect(() => {
     const el = ref.current;
     if (!el || !bandIndicator) { setBandBelow(false); return; }
@@ -453,6 +464,21 @@ function CustomScroll({
       if (!bandEl) { setBandBelow(false); return; }
       const er = el.getBoundingClientRect();
       setBandBelow(bandEl.getBoundingClientRect().top > er.bottom - 24);
+      // Snap: candidates are the top halo lines of every card-shaped box in
+      // view (real cards AND the Add placeholders, which are the same size).
+      const idealTop = er.bottom - BEACON_IDEAL_H;
+      let bestTop = idealTop;
+      let bestDist = Infinity;
+      const boxes = el.querySelectorAll<HTMLElement>('[data-cal-card], [data-add-card]');
+      for (const box of boxes) {
+        const br = box.getBoundingClientRect();
+        const candidate = br.top - 4;               // the card's own 4px halo line
+        if (candidate < er.top || candidate > er.bottom) continue;
+        const d = Math.abs(candidate - idealTop);
+        if (d < bestDist) { bestDist = d; bestTop = candidate; }
+      }
+      const next = Math.max(40, Math.round(er.bottom - bestTop));
+      setBeaconH((prev) => (Math.abs(prev - next) < 1 ? prev : next));
     };
     const schedule = () => { if (!raf) raf = requestAnimationFrame(compute); };
     compute();
@@ -621,9 +647,15 @@ function CustomScroll({
         // a quiet "your drop lands below this fold" cue. No text, no arrow.
         <div
           data-drop-beacon={bandIndicator.list}
-          className="pointer-events-none absolute bottom-0 left-[2px] right-[16px] z-40 rounded-t-[3px] h-[114px]"
+          className="pointer-events-none absolute bottom-0 left-[2px] right-[16px] z-40 rounded-t-[3px]"
           // Solid — the exact same wash the band drop targets use, no gradient.
-          style={{ backgroundColor: 'rgb(from var(--app-accent) r g b / 0.1)' }}
+          // Height animates on the quintic in/out curve so re-snaps while
+          // scrolling read as a deliberate settle rather than a jump.
+          style={{
+            height: beaconH,
+            backgroundColor: 'rgb(from var(--app-accent) r g b / 0.1)',
+            transition: 'height 190ms cubic-bezier(0.86, 0, 0.07, 1)',
+          }}
         />
       )}
       {hasOverflow && (
@@ -4470,6 +4502,8 @@ function AddPlaceholderCard({ isToday, onClick, stacked = false, dimmed = false 
       type="button"
       onClick={onClick}
       aria-label="Add task"
+      // Card-shaped, so it is a valid snap target for the drop beacon's top edge.
+      data-add-card
       className={`mx-[6px] mb-[4px] rounded-[3.333px] ${singleLine ? 'min-h-[30px]' : 'min-h-[55px]'} w-[calc(100%-12px)] flex flex-row items-center gap-[6px] px-[10px] ${isToday ? '' : 'bg-white/[0.03]'} hover:brightness-125 transition-[filter]`}
       style={isToday ? { backgroundColor: 'rgb(from var(--app-accent) r g b / 0.1)' } : undefined}
     >
