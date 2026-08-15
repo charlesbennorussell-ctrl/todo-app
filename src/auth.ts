@@ -92,7 +92,7 @@ export function onAuthHealth(listener: (h: AuthHealth) => void): () => void {
 // THROW (a cold-started function deserves a retry) — but both report to the
 // health store so the UI can surface a real screen instead of spinning.
 
-export async function liveblocksAuthEndpoint(room?: string): Promise<Record<string, unknown>> {
+export async function liveblocksAuthEndpoint(room?: string): Promise<{ token: string } | { error: string; reason: string }> {
   if (!supabase || !FUNCTIONS_URL) {
     setAuthHealth({ status: 'unreachable', detail: 'Supabase not configured' });
     throw new Error('Supabase not configured');
@@ -119,16 +119,16 @@ export async function liveblocksAuthEndpoint(room?: string): Promise<Record<stri
     throw e;
   }
   if (res.status === 403) {
-    const body = await res.json().catch(() => ({ error: 'forbidden', reason: 'access denied' }));
+    const body = await res.json().catch(() => ({ error: 'forbidden', reason: 'access denied' })) as { error?: string; reason?: string };
     setAuthHealth({ status: 'forbidden', detail: String(body.reason || 'access denied') });
-    return body;
+    return { error: body.error || 'forbidden', reason: body.reason || 'access denied' };
   }
   if (!res.ok) {
     setAuthHealth({ status: 'unreachable', detail: `auth service ${res.status}` });
     throw new Error(`liveblocks-auth failed: ${res.status}`);
   }
   setAuthHealth({ status: 'ok' });
-  return await res.json();
+  return await res.json() as { token: string };
 }
 
 // ---------------------------------------------------------------------------

@@ -4316,6 +4316,31 @@ export function computeCalendarDistribution(tasks: Task[], todayAnchor: Date, ho
 
 // Presentational body of a calendar card ï¿½ no drag wiring, no callbacks. Shared between the
 // live CalendarCard and the DragOverlay so the floating ghost matches the source pixel-for-pixel.
+// AddPlaceholderCard — what an empty category band shows instead of a blank
+// hole: a real card-shaped "Add +" invitation, so Projects-with-nothing-in-it
+// reads as somewhere to put something rather than a layout bug.
+//
+// Geometry deliberately matches CalendarCard (same margins, radius, min-height)
+// so the column's rhythm doesn't stutter where a band happens to be empty. In
+// the TODAY column it takes today's purple wash and accent text, exactly like
+// the real cards there; every other column gets the card gray with pale text
+// that stays quiet until you look for it.
+function AddPlaceholderCard({ isToday, onClick }: { isToday: boolean; onClick: () => void }) {
+  const tone = isToday ? 'text-[var(--app-accent)]' : 'text-[#4a4a4a]';
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label="Add task"
+      className={`mx-[6px] mb-[4px] rounded-[3.333px] min-h-[45px] w-[calc(100%-12px)] flex flex-row items-center gap-[6px] px-[10px] ${isToday ? '' : 'bg-white/[0.03]'} hover:brightness-125 transition-[filter]`}
+      style={isToday ? { backgroundColor: 'rgb(from var(--app-accent) r g b / 0.1)' } : undefined}
+    >
+      <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] ${tone}`}>Add</span>
+      <Plus size={12} className={tone} />
+    </button>
+  );
+}
+
 // NextBandHeader — the Next Week column's sticky "Category: Client" bar.
 //
 // The Next column groups its cards by client (by PROJECT under Personal), so
@@ -4440,6 +4465,8 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
   onToggle: () => void; onRename: (title: string) => void; onDelete: () => void; onEdit: () => void;
   onQuickEdit?: () => void;
   onAddSibling?: () => void;
+  /** Suppress the client (or project) chip when the column already groups by it. */
+  hideClient?: boolean; hideProject?: boolean;
   // Date-chip actions: dblclick the date → shiftForward (+1 day); right-click → mini menu
   // (Today / Tomorrow / Next Week / Remove Date).
   onRescheduleDate?: (kind: CardDateAction) => void;
@@ -4895,6 +4922,11 @@ function WeekCalendarMode({
                       </button>
                     </div>
                     {dayMilestones.length > 0 && dayMilestones.map((t) => <MilestoneCard key={`m-${t.id}`} task={t} showDate={false} categoryDimmed={categoryDimmed} />)}
+                    {/* Empty band → the Add invitation. Hidden mid-drag so the droppable's
+                        own empty slot stays the clean target. */}
+                    {bucket.length === 0 && dayMilestones.length === 0 && !isAnyDragging && (
+                      <AddPlaceholderCard isToday={isToday} onClick={() => onAddTaskOnDay(listId, iso)} />
+                    )}
                     <SortableContext items={items} strategy={verticalListSortingStrategy}>
                         {bucket.map((t, index) => {
                           let displacementOffset = 0;
@@ -5043,6 +5075,10 @@ function WeekCalendarMode({
                         addAriaLabel={`Add ${label} task next week`}
                       />
                       {bandMilestones.length > 0 && bandMilestones.map((t) => <MilestoneCard key={`m-${t.id}`} task={t} showDate categoryDimmed={categoryDimmed} />)}
+                      {/* Next Week is never the Today column, so this is always the gray tone. */}
+                      {bucket.length === 0 && bandMilestones.length === 0 && !isAnyDragging && (
+                        <AddPlaceholderCard isToday={false} onClick={() => onAddTaskOnDay(listId, nwStartIso)} />
+                      )}
                       <SortableContext items={items} strategy={verticalListSortingStrategy}>
                         {nwGroups.map((g, gi) => (
                           <Fragment key={`g-${g.name}`}>
@@ -11005,6 +11041,13 @@ export default function App() {
                             cal:<day>:<list> target — without it, focus-mode drops fell through and
                             snapped back to Next. min-h keeps empty bands droppable. */}
                         <CalendarDayDroppable id={cellId} isEmpty={cellTasks.length === 0}>
+                          {/* Empty band → Add invitation, purple in the Today column. */}
+                          {cellTasks.length === 0 && !activeTask && (
+                            <AddPlaceholderCard
+                              isToday={colKey === 'fc-today'}
+                              onClick={() => addBlankTaskInSection(listId, section, focusProjectId ? { projectId: focusProjectId } : focusClientId ? { clientId: focusClientId } : undefined)}
+                            />
+                          )}
                           <SortableContext items={cellTasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
                             {cellTasks.map((t, index) => {
                               let insertionGap = 0;

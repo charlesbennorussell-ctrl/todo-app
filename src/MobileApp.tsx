@@ -961,10 +961,12 @@ export default function MobileApp() {
                         <button
                           type="button"
                           onClick={() => openNewTaskSheet(createTask({ title: '', list: listId, section: p.section }))}
-                          className="mx-[10px] mb-[5px] min-h-[44px] w-[calc(100%-20px)] rounded-[3.333px] bg-white/[0.03] flex flex-row items-center justify-center gap-[6px]"
+                          aria-label={`Add ${LIST_TITLES[listId]} task`}
+                          className={`mx-[10px] mb-[5px] min-h-[44px] w-[calc(100%-20px)] rounded-[3.333px] flex flex-row items-center gap-[6px] px-[10px] ${i === 0 ? '' : 'bg-white/[0.03]'}`}
+                          style={i === 0 ? { backgroundColor: 'rgb(from var(--app-accent) r g b / 0.1)' } : undefined}
                         >
-                          <span className="font-['Univers_BQ:55_Regular',sans-serif] text-[13px] tracking-[0.08em] text-[#4a4a4a]">ADD</span>
-                          <Plus size={13} className="text-[#4a4a4a]" />
+                          <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] ${i === 0 ? 'text-[var(--app-accent)]' : 'text-[#4a4a4a]'}`}>Add</span>
+                          <Plus size={13} className={i === 0 ? 'text-[var(--app-accent)]' : 'text-[#4a4a4a]'} />
                         </button>
                       )}
                     </BandDroppable>
