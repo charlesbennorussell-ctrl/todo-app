@@ -621,7 +621,7 @@ function CustomScroll({
         // a quiet "your drop lands below this fold" cue. No text, no arrow.
         <div
           data-drop-beacon={bandIndicator.list}
-          className="pointer-events-none absolute bottom-[4px] left-[22px] right-[36px] z-40 rounded-[3.333px] h-[118px]"
+          className="pointer-events-none absolute bottom-0 left-[2px] right-[16px] z-40 rounded-t-[3px] h-[114px]"
           style={{
             background: 'linear-gradient(to bottom, transparent, rgb(from var(--app-accent) r g b / 0.1) 45%, rgb(from var(--app-accent) r g b / 0.16))',
           }}
@@ -4058,31 +4058,43 @@ function CardDateMenu({ x, y, onPick, onClose }: { x: number; y: number; onPick:
   );
 }
 
-function CalendarDayDroppable({ id, children, isEmpty, className = '', slotHeight = 54 }: { id: string; children: React.ReactNode; isEmpty: boolean; className?: string; slotHeight?: number }) {
+function CalendarDayDroppable({ id, children, header, isEmpty, className = '', slotHeight = 54 }: { id: string; children: React.ReactNode; header?: React.ReactNode; isEmpty: boolean; className?: string; slotHeight?: number }) {
   const { setNodeRef, isOver, active } = useDroppable({ id });
-  // Drag feedback: while a TASK hovers this band cell, tint it faint gray with an ease
-  // fade in/out — the category-lock collision redirects `over` to the dragged task's own
-  // band, so the tinted cell is exactly where a drop lands. transition-colors carries the
-  // fade both directions (isOver → transparent).
+  // Drag feedback: while a TASK hovers this band cell, wash it in the accent — the
+  // category-lock collision redirects `over` to the dragged task's own band, so the tinted
+  // cell is exactly where a drop lands. transition-colors carries the fade both directions.
   const taskOver = isOver && (active?.data.current?.type === 'task' || active?.data.current?.type === 'projTask');
   return (
-    <div
-      ref={setNodeRef}
-      className={`${isEmpty ? 'min-h-[37px]' : ''} ${className} rounded-[3px] transition-colors duration-200 ease-in-out`}
-      style={taskOver ? { backgroundColor: 'rgb(from var(--app-accent) r g b / 0.1)' } : undefined}
-    >
-      {children}
-      {/* Empty band: when a same-category drag hovers here (category-lock has already routed
-          the drop to this band), grow a full card-height slot so the target isn't a cramped
-          37px sliver — it opens the real space the card will occupy and pushes the next
-          category down. Height eases in/out so the displacement is smooth. */}
-      {isEmpty && (
+    <div ref={setNodeRef} className={className}>
+      {/* The band label stays OUTSIDE the wash: highlighting the between-band gap and the
+          header row made the tint look like a misaligned slab. */}
+      {header}
+      <div className={`relative ${isEmpty ? 'min-h-[37px]' : ''}`}>
+        {/* Wash layer, painted BEHIND the cards (DOM order) and sized off them rather than
+            off the band box: inset 2px from the column edges so it never runs edge-to-edge
+            into the neighbouring column, and bleeding 4px past the cards top/bottom — the
+            same 4px that separates one card from the next, so the halo reads even on all
+            four sides. Negative insets keep it purely visual: nothing in the layout moves. */}
         <div
-          className="overflow-hidden transition-[height] duration-200 ease-in-out"
-          style={{ height: taskOver ? slotHeight : 0 }}
+          className="absolute left-[2px] right-[2px] top-[-4px] bottom-[-4px] rounded-[3px] transition-colors duration-200 ease-in-out"
+          style={taskOver ? { backgroundColor: 'rgb(from var(--app-accent) r g b / 0.1)' } : undefined}
           aria-hidden
         />
-      )}
+        <div className="relative">
+          {children}
+          {/* Empty band: when a same-category drag hovers here (category-lock has already routed
+              the drop to this band), grow a full card-height slot so the target isn't a cramped
+              37px sliver — it opens the real space the card will occupy and pushes the next
+              category down. Height eases in/out so the displacement is smooth. */}
+          {isEmpty && (
+            <div
+              className="overflow-hidden transition-[height] duration-200 ease-in-out"
+              style={{ height: taskOver ? slotHeight : 0 }}
+              aria-hidden
+            />
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -5038,18 +5050,26 @@ function WeekCalendarMode({
                 // so the source category and matching drop targets stay visually loud.
                 const categoryDimmed = !!activeTask && activeTask.list !== listId;
                 return (
-                  <CalendarDayDroppable key={listId} id={`cal:${iso}:${listId}`} isEmpty={bucket.length === 0 && dayMilestones.length === 0} slotHeight={activeSlotHeight} className="pt-[15px]">
-                    <div data-band-list={listId} className="group/band h-[26px] mb-[18px] px-[16px] flex items-center gap-2 sticky top-0 z-10 bg-[var(--app-bg)]">
-                      <p onClick={scrollBandToTop} className={`${bodyFont} text-[#5e5e5e] cursor-pointer`}>{label}</p>
-                      <button
-                        type="button"
-                        onClick={() => onAddTaskOnDay(listId, iso)}
-                        className="opacity-0 group-hover/band:opacity-100 text-[#656464] hover:text-white transition-opacity"
-                        aria-label={`Add ${label} task on ${iso}`}
-                      >
-                        <Plus size={14} />
-                      </button>
-                    </div>
+                  <CalendarDayDroppable
+                    key={listId}
+                    id={`cal:${iso}:${listId}`}
+                    isEmpty={bucket.length === 0 && dayMilestones.length === 0}
+                    slotHeight={activeSlotHeight}
+                    className="pt-[15px]"
+                    header={(
+                      <div data-band-list={listId} className="group/band h-[26px] mb-[18px] px-[16px] flex items-center gap-2 sticky top-0 z-10 bg-[var(--app-bg)]">
+                        <p onClick={scrollBandToTop} className={`${bodyFont} text-[#5e5e5e] cursor-pointer`}>{label}</p>
+                        <button
+                          type="button"
+                          onClick={() => onAddTaskOnDay(listId, iso)}
+                          className="opacity-0 group-hover/band:opacity-100 text-[#656464] hover:text-white transition-opacity"
+                          aria-label={`Add ${label} task on ${iso}`}
+                        >
+                          <Plus size={14} />
+                        </button>
+                      </div>
+                    )}
+                  >
                     {dayMilestones.length > 0 && dayMilestones.map((t) => <MilestoneCard key={`m-${t.id}`} task={t} showDate={false} categoryDimmed={categoryDimmed} />)}
                     {/* Empty band → the Add invitation. Stays mounted during drags
                         (hiding it left card-shaped holes) but goes quiet/dim. */}
@@ -5195,15 +5215,23 @@ function WeekCalendarMode({
                   return (
                     // Major category gap carries an EXTRA space unit (one label row on top of the
                     // one-card slot) so a category break reads louder than a client sub-break.
-                    <CalendarDayDroppable key={listId} id={cellId} isEmpty={bucket.length === 0 && bandMilestones.length === 0} slotHeight={activeSlotHeight} className="pt-[41px] first:pt-[15px]">
-                      <NextBandHeader
-                        bandList={listId}
-                        label={label}
-                        bodyFont={bodyFont}
-                        onLabelClick={scrollBandToTop}
-                        onAdd={() => onAddTaskOnDay(listId, nwStartIso)}
-                        addAriaLabel={`Add ${label} task next week`}
-                      />
+                    <CalendarDayDroppable
+                      key={listId}
+                      id={cellId}
+                      isEmpty={bucket.length === 0 && bandMilestones.length === 0}
+                      slotHeight={activeSlotHeight}
+                      className="pt-[41px] first:pt-[15px]"
+                      header={(
+                        <NextBandHeader
+                          bandList={listId}
+                          label={label}
+                          bodyFont={bodyFont}
+                          onLabelClick={scrollBandToTop}
+                          onAdd={() => onAddTaskOnDay(listId, nwStartIso)}
+                          addAriaLabel={`Add ${label} task next week`}
+                        />
+                      )}
+                    >
                       {bandMilestones.length > 0 && bandMilestones.map((t) => <MilestoneCard key={`m-${t.id}`} task={t} showDate categoryDimmed={categoryDimmed} />)}
                       {/* Next Week is never the Today column, so this is always the gray tone. */}
                       {bucket.length === 0 && bandMilestones.length === 0 && (
