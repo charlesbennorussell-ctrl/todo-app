@@ -408,7 +408,10 @@ import {
 // overflow-y-auto` so it fills the outer and scrolls. Pill + triangles are
 // absolutely positioned on the outer's right edge.
 const CUSTOM_SCROLL_THUMB_H = 15;
-const CUSTOM_SCROLL_TOP_PAD = 8;     // space at top above the up triangle
+// One grid unit down, so the up-triangle's top edge lands exactly on the top
+// of the FIRST CARD rather than floating beside the category label above it
+// (the band label occupies the first unit of every column).
+const CUSTOM_SCROLL_TOP_PAD = 37;    // = GRID: aligns the arrow with the first card
 const CUSTOM_SCROLL_BOTTOM_PAD = 15; // space at bottom below the down triangle (= 15px from bottom bar)
 const CUSTOM_SCROLL_ARROW_BOX = 14;  // clickable area for each triangle button
 const CUSTOM_SCROLL_TRACK_GAP = 2;   // gap between arrow and pill at the extremes
@@ -428,14 +431,26 @@ const CUSTOM_SCROLL_LINE_PX = 40;     // deltaMode=1 (lines) → px conversion
 // against a 42px card slot.
 //   gap = prevCard.mb(4) + pt + labelRow(26) + mb  ===  cardH + 4 + 4
 //   centred => mb = pt + 4
-const BAND_LABEL_ROW = 26;
-export function bandSpacing(oneRow: boolean) {
-  const cardH = oneRow ? 34 : 55;          // rendered heights, measured
-  const total = cardH + 8;                 // one card slot, card-bottom to card-top
-  const pad = total - 4 - BAND_LABEL_ROW;  // pt + mb
-  const pt = Math.max(0, Math.round((pad - 4) / 2));
-  const mb = pad - pt;
-  return { pt, mb, slot: total };
+// ONE grid unit for the whole document = ROW_PX (37px). Every row, label and
+// card occupies a WHOLE number of units, so every line of text lands on the
+// same baseline no matter which column or view it is in:
+//   list / milestone / client / assignee row .. 1 unit (h-37)
+//   category label row ....................... 1 unit (h-37)
+//   one-row card ............................. 1 unit (33 + 4 margin)
+//   two-row card ............................. 2 units (70 + 4 margin)
+// Cards previously rendered 33.59px tall (13px text at natural line-height,
+// no explicit height), giving a 37.59px pitch — a 0.59px drift per row that
+// pulled every column out of register with the 37px rows beside it. Heights
+// are now explicit so the pitch is exact.
+export const GRID = 37;                   // the one unit: ROW_PX is derived from this
+export const CARD_H_ONE = GRID - 4;       // 33 → pitch 37 = 1 unit (literal 'h-[33px]' in the card classes: Tailwind only sees source text)
+export const CARD_H_TWO = GRID * 2 - 4;   // 70 → pitch 74 = 2 units (literal 'h-[70px]')
+
+// With the label row itself being a full unit, the band needs no extra
+// padding: gap from one card's bottom to the next card's top is simply the
+// card's own margin (4) + the label unit (37) = 41, on grid either way.
+export function bandSpacing(_oneRow: boolean) {
+  return { pt: 0, mb: 0, slot: GRID };
 }
 
 // Beacon target height — two card slots (55px card + 4px gap, twice). The
@@ -1064,7 +1079,7 @@ const DISPLACE_TRANSITION = `transform ${MOTION.displace}ms ${MOTION.easeOut}, m
 //   "cr"    / "1"     → SPACING.cr (one blank line)
 //   "double" / "2"    → SPACING.dcr (paragraph break)
 // "Move that to a CR" = use SPACING.cr; "give it a double" = use SPACING.dcr.
-const ROW_PX = 37;
+const ROW_PX = GRID;
 const SPACING = {
   tight: 0,
   cr: ROW_PX,         // one carriage return = 37px
@@ -4520,7 +4535,7 @@ function AddPlaceholderCard({ isToday, onClick, stacked = false, dimmed = false 
       aria-label="Add task"
       // Card-shaped, so it is a valid snap target for the drop beacon's top edge.
       data-add-card
-      className={`mx-[6px] mb-[4px] rounded-[3.333px] ${singleLine ? 'min-h-[34px]' : 'min-h-[55px]'} w-[calc(100%-12px)] flex flex-row items-center gap-[6px] px-[10px] ${isToday ? '' : 'bg-white/[0.03]'} hover:brightness-125 transition-[filter]`}
+      className={`mx-[6px] mb-[4px] rounded-[3.333px] ${singleLine ? 'h-[33px]' : 'h-[70px]'} w-[calc(100%-12px)] flex flex-row items-center gap-[6px] px-[10px] ${isToday ? '' : 'bg-white/[0.03]'} hover:brightness-125 transition-[filter]`}
       style={isToday ? { backgroundColor: 'rgb(from var(--app-accent) r g b / 0.1)' } : undefined}
     >
       <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] ${tone}`}>Add</span>
@@ -4582,7 +4597,7 @@ function NextBandHeader({ label, bodyFont, onLabelClick, onAdd, addAriaLabel, ba
     };
   }, []);
   return (
-    <div ref={rowRef} data-band-list={bandList} className="group/band h-[26px] px-[16px] flex items-center gap-2 sticky top-0 z-10 bg-[var(--app-bg)]" style={{ marginBottom: labelMb }}>
+    <div ref={rowRef} data-band-list={bandList} className="group/band h-[37px] px-[16px] flex items-center gap-2 sticky top-0 z-10 bg-[var(--app-bg)]" style={{ marginBottom: labelMb }}>
       <p onClick={onLabelClick} className={`${bodyFont} text-[#5e5e5e] cursor-pointer`}>
         {label}
         {active ? <span className="text-[#454545]">{': '}</span> : null}
@@ -4757,7 +4772,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
       ref={setNodeRef}
       style={style}
       data-cal-card={task.id}
-      className={`relative mx-[6px] mb-[4px] group rounded-[3.333px] ${singleLine ? 'min-h-[30px]' : 'min-h-[45px]'} flex ${isTodayCard ? '' : 'bg-white/[0.03]'} ${dimmed ? 'opacity-60' : ''}`}
+      className={`relative mx-[6px] mb-[4px] group rounded-[3.333px] ${singleLine ? 'h-[33px]' : 'h-[70px]'} flex ${isTodayCard ? '' : 'bg-white/[0.03]'} ${dimmed ? 'opacity-60' : ''}`}
       animate={{ opacity: isDragging ? 0 : 1 }}
       transition={{ opacity: { duration: 0.12, ease: 'easeOut' } }}
     >
@@ -5112,7 +5127,7 @@ function WeekCalendarMode({
                     className=""
                     style={{ paddingTop: bandGap.pt }}
                     header={(
-                      <div data-band-list={listId} className="group/band h-[26px] px-[16px] flex items-center gap-2 sticky top-0 z-10 bg-[var(--app-bg)]" style={{ marginBottom: bandGap.mb }}>
+                      <div data-band-list={listId} className="group/band h-[37px] px-[16px] flex items-center gap-2 sticky top-0 z-10 bg-[var(--app-bg)]" style={{ marginBottom: bandGap.mb }}>
                         <p onClick={scrollBandToTop} className={`${bodyFont} text-[#5e5e5e] cursor-pointer`}>{label}</p>
                         <button
                           type="button"
@@ -5303,7 +5318,7 @@ function WeekCalendarMode({
                                 card-slot of air above it. */}
                             <div data-group-name={g.name} style={gi === 0 ? undefined : { paddingTop: bandGap.pt }}>
                               {gi > 0 && (
-                                <div className="h-[26px] px-[16px] flex items-center" style={{ marginBottom: bandGap.mb }}>
+                                <div className="h-[37px] px-[16px] flex items-center" style={{ marginBottom: bandGap.mb }}>
                                   <p className={`${bodyFont} text-[#7a7a7a]`}>{g.name}</p>
                                 </div>
                               )}
@@ -11256,7 +11271,7 @@ export default function App() {
                             category labels (grey, 26px row, 16px inset) + hover +.
                             mb mirrors the container's pt so the label sits centered
                             in the gap between bands. */}
-                        <div data-band-list={listId} className="group/band h-[26px] px-[16px] flex items-center gap-2 sticky top-0 z-10 bg-[var(--app-bg)]" style={{ marginBottom: bandSpacing(cardRows === 1).mb }}>
+                        <div data-band-list={listId} className="group/band h-[37px] px-[16px] flex items-center gap-2 sticky top-0 z-10 bg-[var(--app-bg)]" style={{ marginBottom: bandSpacing(cardRows === 1).mb }}>
                           <p onClick={scrollBandToTop} className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap text-[#5e5e5e] cursor-pointer">{bandLabel}</p>
                           <button
                             type="button"
