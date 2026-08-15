@@ -3855,7 +3855,17 @@ function EditableText({ value, onChange, className, autoFocus = false, placehold
         if (e.key === 'Escape') { e.preventDefault(); (e.currentTarget as HTMLSpanElement).textContent = value; setEditing(false); }
       }}
       className={`outline-none cursor-text ${className || ''}`}
-      style={{ ...(value ? null : { minWidth: '1px' }), ...(style || null) }}
+      // The placeholder has TWO render paths and both need the colour:
+      //   • not editing → the inline span below
+      //   • editing (caret in an empty field) → the global
+      //     [data-placeholder]:empty:before rule, which reads --placeholder-color
+      // Only wiring the inline span left the dummy line grey exactly when it is
+      // most visible: the moment a new task is created and focused.
+      style={{
+        ...(value ? null : { minWidth: '1px' }),
+        ...(placeholderColor ? ({ '--placeholder-color': placeholderColor } as React.CSSProperties) : null),
+        ...(style || null),
+      }}
     >{value || (placeholder && !editing ? <span className="text-[#383838]" style={placeholderColor ? { color: placeholderColor } : undefined}>{placeholder}</span> : null)}</span>
   );
 }
