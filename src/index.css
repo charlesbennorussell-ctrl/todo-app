@@ -308,14 +308,20 @@ textarea:focus-visible,
    on roll-off they LINGER ~4s, then fade out over 500ms — an asymmetric reveal the user
    liked. Tailwind's delay utilities top out at 1000ms, so the 4s delay lives here. The
    parent CalendarCard carries the bare `group` class, so `.group:hover` is the card. */
+/* Assignee reveal. The reveal is INSTANT (duration 0) rather than a 200ms ramp:
+   with a ramp, a quick pass across a card left the badges part-lit, and the
+   roll-off rule below then HELD that partial value for the whole linger instead
+   of finishing the fade — so it took several passes to reach full brightness.
+   With no intermediate state there is nothing to get stuck at. The fade OUT
+   stays gentle, after a 30s linger. */
 .linger-reveal {
   opacity: 0;
   transition: opacity 500ms ease;
-  transition-delay: 4000ms;
+  transition-delay: 30000ms;
 }
 .group:hover .linger-reveal {
   opacity: 1;
-  transition-duration: 200ms;
+  transition-duration: 0ms;
   transition-delay: 0ms;
 }
 

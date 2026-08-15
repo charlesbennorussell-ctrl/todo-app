@@ -115,30 +115,47 @@ if (typeof console !== 'undefined') {
 // "Connecting…" text, and — via SplashGate below — stays up for one beat after
 // the app mounts so the two cross-fade instead of cutting.
 const SPLASH_FADE_MS = 480;
+const SPLASH_ENTER_MS = 320;
 // The quintic curve the rest of the app settles on.
 const SPLASH_EASE = 'cubic-bezier(0.86, 0, 0.07, 1)';
 
-const SplashScreen = ({ fading = false }: { fading?: boolean }) => (
-  <div
-    aria-hidden
-    style={{
-      position: 'fixed', inset: 0, zIndex: 9999,
-      background: '#000',
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      opacity: fading ? 0 : 1,
-      transition: `opacity ${SPLASH_FADE_MS}ms ${SPLASH_EASE}`,
-      pointerEvents: 'none',
-    }}
-  >
-    <img
-      // BASE_URL keeps this correct under the '/todo-app/' production base and
-      // '/' in dev, on desktop and phone alike.
-      src={`${import.meta.env.BASE_URL || '/'}icons/icon-512.png`}
-      alt=""
-      style={{ width: 'min(34vw, 104px)', height: 'auto', display: 'block' }}
-    />
-  </div>
-);
+// The mark fades UP on first paint. Module-scoped so it happens exactly once per
+// launch: the splash is rendered by two different owners (Loading while the room
+// connects, then SplashGate during the hand-off), and without this the second
+// mount would fade in all over again — a visible blink mid-boot.
+let splashHasEntered = false;
+
+const SplashScreen = ({ fading = false }: { fading?: boolean }) => {
+  const [entered, setEntered] = useState(splashHasEntered);
+  useEffect(() => {
+    if (splashHasEntered) return;
+    // rAF for the smooth case, timer for the non-compositing one (see SplashGate).
+    const r = requestAnimationFrame(() => { splashHasEntered = true; setEntered(true); });
+    const t = window.setTimeout(() => { splashHasEntered = true; setEntered(true); }, 60);
+    return () => { cancelAnimationFrame(r); window.clearTimeout(t); };
+  }, []);
+  return (
+    <div
+      aria-hidden
+      style={{
+        position: 'fixed', inset: 0, zIndex: 9999,
+        background: '#000',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        opacity: fading ? 0 : entered ? 1 : 0,
+        transition: `opacity ${fading ? SPLASH_FADE_MS : SPLASH_ENTER_MS}ms ${SPLASH_EASE}`,
+        pointerEvents: 'none',
+      }}
+    >
+      <img
+        // BASE_URL keeps this correct under the '/todo-app/' production base and
+        // '/' in dev, on desktop and phone alike.
+        src={`${import.meta.env.BASE_URL || '/'}icons/icon-512.png`}
+        alt=""
+        style={{ width: 'min(60vw, 208px)', height: 'auto', display: 'block' }}
+      />
+    </div>
+  );
+};
 
 // Holds the black launch ground for the frames BEFORE React paints, so the app
 // opens black rather than flashing the themed page colour first.
@@ -226,7 +243,7 @@ const Loading = () => {
   const manualReset = async () => { await clearLocalCache(); window.location.reload(); };
   const btn: React.CSSProperties = { marginTop: 2, padding: '8px 16px', background: 'var(--app-accent)', color: 'white', border: 'none', borderRadius: 6, fontSize: 13, cursor: 'pointer' };
   return (
-    <div style={{ minHeight: '100vh', background: '#282828', color: '#666', display: 'flex', flexDirection: 'column', gap: 14, alignItems: 'center', justifyContent: 'center', fontFamily: 'sans-serif', padding: 40, textAlign: 'center' }}>
+    <div style={{ minHeight: '100vh', background: '#000', color: '#666', display: 'flex', flexDirection: 'column', gap: 14, alignItems: 'center', justifyContent: 'center', fontFamily: 'sans-serif', padding: 40, textAlign: 'center' }}>
       {phase === 'concurrency' ? (
         <>
           <div style={{ fontSize: 15, color: '#ccc' }}>Too many windows connected</div>

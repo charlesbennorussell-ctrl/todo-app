@@ -2011,12 +2011,13 @@ function SortableTaskItem({
           );
         })()}
         {/* Assignees — now AFTER the date. Hidden at rest; fade IN on row-hover (~200ms), and on
-            roll-off they LINGER ~1s then fade OUT over 500ms. The asymmetry is pure CSS: the
-            not-hovered class carries duration-500 + delay-[1000ms], the hovered class fades in
-            fast with no delay. Stays lit while dragging so the overlay still shows who owns it.
+            roll-off they LINGER 30s then fade OUT over 500ms. The asymmetry is pure CSS: the
+            not-hovered class carries duration-500 + delay-[30000ms], the hovered class snaps on
+            with duration-0 — a ramp here left badges part-lit after a quick pass, and the
+            roll-off rule then froze them at that partial value. Stays lit while dragging so the overlay still shows who owns it.
             opacity-only (reserved width) so appearing never nudges the row's other content. */}
         {density < 5 && task.assignees.length > 0 && (
-          <span className={`flex flex-row items-center gap-2 transition-opacity ${(isDragOverlay || isDragging || hovered) ? 'opacity-100 duration-200' : 'opacity-0 duration-500 delay-1000'}`}>
+          <span className={`flex flex-row items-center gap-2 transition-opacity ${(isDragOverlay || isDragging || hovered) ? 'opacity-100 duration-0' : 'opacity-0 duration-500 delay-[30000ms]'}`}>
             {/* Squeeze order, highest priority LAST to go: title > deadline > project > client >
                 people. People were previously ungated and survived a squeeze that had already
                 dropped the client and project, which inverted the intent — who it's assigned to
@@ -11256,7 +11257,19 @@ export default function App() {
             // columns narrow) — so selecting a filter never reshuffles this list under your cursor.
             // Search + the milestone filter still apply.
             .filter((t) => t.type === 'scheduled' && taskMatchesQuery(t, focusSearch, projects, clients))
-            .sort((a, b) => { if (msRank(a) !== msRank(b)) return msRank(a) - msRank(b); const ad = a.deadline || '￿'; const bd = b.deadline || '￿'; if (ad !== bd) return ad < bd ? -1 : 1; return a.title.localeCompare(b.title); });
+            // Dated milestones lead, in deadline order; everything undated follows
+            // alphabetically. Category rank used to sort FIRST, which buried a
+            // milestone due tomorrow under undated ones simply because its
+            // category sat later in the sequence — the opposite of what this
+            // list is for. Ties inside a date fall back to the title so the
+            // order is stable rather than array-position luck.
+            .sort((a, b) => {
+              const ad = a.deadline || '';
+              const bd = b.deadline || '';
+              if (!!ad !== !!bd) return ad ? -1 : 1;
+              if (ad && bd && ad !== bd) return ad < bd ? -1 : 1;
+              return a.title.localeCompare(b.title);
+            });
           // 62px = the milestone→search gap that lands Search exactly on the Work band's line.
           // (The day column's date→Work spacer is 74px, but Search sits in a 37px row whose text
           // centres 12px lower than Work's 20px band label, so the gap is pulled in 12px.) The
