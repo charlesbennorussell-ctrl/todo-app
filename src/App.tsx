@@ -3474,12 +3474,11 @@ function TrashBtn({ onClick }: { onClick: () => void }) {
 }
 
 function ShortInBrackets({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  const cls = "font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap text-white";
+  // Nickname capsule: the short reads as a quiet dark pill beside the name
+  // (RIV next to Rivington), still click-to-edit in place.
   return (
-    <span className="inline-flex items-baseline">
-      <span className={cls}>(</span>
-      <EditableText value={value} onChange={onChange} className={cls} />
-      <span className={cls}>)</span>
+    <span className="inline-flex items-center px-[8px] py-[1px] rounded-full bg-[#151412]">
+      <EditableText value={value} onChange={onChange} className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[12px] whitespace-nowrap text-[#a8a8a8]" />
     </span>
   );
 }
@@ -5857,7 +5856,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
               </div>
             </div>
             <div>
-              {sectionTitle('Clients', <AddPlus onClick={onAddClient} />)}
+              {sectionTitle('Clients Naming', <AddPlus onClick={onAddClient} />)}
               <div>
                 {clients.map((c) => (
                   c.id === PERSONAL_CLIENT_ID ? (
@@ -5889,7 +5888,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
                     {g.items.map((t) => {
                       const ctx = metaOf(t);
                       return (
-                        <div key={t.id} className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px] hover:bg-white/[0.03] overflow-hidden">
+                        <div key={t.id} className="group relative mx-[21px] mb-[4px] rounded-[3.333px] min-h-[33px] box-border flex flex-row gap-2 items-center px-[10px] bg-white/[0.03] hover:brightness-125 transition-[filter] overflow-hidden">
                           {ctx && <p className={`${bodyFont} text-[#656464] shrink-0`}>{ctx}</p>}
                           {ctx && <Arrowhead />}
                           <span className={`${bodyFont} text-[#656464] truncate`}>{t.title || '(untitled)'}</span>
@@ -5915,7 +5914,7 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
                     {g.items.map((t) => {
                       const ctx = metaOf(t);
                       return (
-                        <div key={t.id} className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[31px] hover:bg-white/[0.03] overflow-hidden">
+                        <div key={t.id} className="group relative mx-[21px] mb-[4px] rounded-[3.333px] min-h-[33px] box-border flex flex-row gap-2 items-center px-[10px] bg-white/[0.03] hover:brightness-125 transition-[filter] overflow-hidden">
                           <TaskCheckbox completed={t.completed} started={t.started} onToggle={() => onToggleTask(t.id)} />
                           {ctx && <p className={`${bodyFont} text-[#656464] shrink-0`}>{ctx}</p>}
                           {ctx && <Arrowhead />}
