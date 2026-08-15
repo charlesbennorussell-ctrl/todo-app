@@ -193,6 +193,67 @@ function ThemeColorPicker({ varName, storageKey, label, fallback, themeKey }: { 
   );
 }
 
+// Theme PRESETS (Settings → Colors). Three backgrounds walking from the
+// original warm gray toward a neutral near-black — the darkest stays a
+// visible gray so the darker toggle tracks still read against it — and three
+// accents from the original RGB purple toward slightly bluer. Selecting one
+// writes through useSetSharedTheme, so EVERY surface (desktop, PIP, phone)
+// repaints together; useSharedTheme on each surface applies it and caches to
+// localStorage for pre-connect paint. This is what makes mobile sync real —
+// the old color wells only synced after a manual nudge.
+const BG_PRESETS = [
+  { id: 'warm', value: '#1c1b19' },     // original — brightest, slightly warm
+  { id: 'neutral', value: '#141413' },  // midpoint, de-warmed
+  { id: 'ink', value: '#0d0d0d' },      // almost black, still visibly gray
+];
+const ACCENT_PRESETS = [
+  { id: 'purple', value: '#8465ff' },   // original RGB purple
+  { id: 'violet', value: '#7361ff' },   // slightly more blue
+  { id: 'indigo', value: '#625dff' },   // more blue again
+];
+
+function ThemePresetRow({ label, presets, themeKey, varName, storageKey }: {
+  label: string;
+  presets: { id: string; value: string }[];
+  themeKey: 'bg' | 'accent';
+  varName: string;
+  storageKey: string;
+}) {
+  const roomTheme = useStorage((root) => (root as unknown as { theme?: { bg?: string; accent?: string } }).theme);
+  const setRoomTheme = useSetSharedTheme();
+  const current = (roomTheme?.[themeKey]
+    || (typeof localStorage !== 'undefined' && localStorage.getItem(storageKey))
+    || presets[0].value).toLowerCase();
+  const apply = (v: string) => {
+    document.documentElement.style.setProperty(varName, v);
+    try { localStorage.setItem(storageKey, v); } catch { /* ignore */ }
+    setRoomTheme({ [themeKey]: v });
+  };
+  return (
+    <div className="flex flex-row items-center gap-3 text-[13px]">
+      <span className="text-white w-[84px]">{label}</span>
+      {/* The toggle language: circular swatches sitting in a darker capsule
+          track. bg-black/30 keeps the track visibly darker than ANY of the
+          three backgrounds, including the near-black one. */}
+      <div className="inline-flex flex-row items-center gap-[6px] rounded-full bg-black/30 p-[4px]">
+        {presets.map((pr) => {
+          const active = current === pr.value.toLowerCase();
+          return (
+            <button
+              key={pr.id}
+              type="button"
+              aria-label={`${label}: ${pr.id}`}
+              onClick={() => apply(pr.value)}
+              className={`size-[22px] rounded-full transition-shadow ${active ? 'ring-2 ring-white/80' : 'ring-1 ring-white/15 hover:ring-white/40'}`}
+              style={{ backgroundColor: pr.value }}
+            />
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // Card density (Settings → 1 or 2 rows). Provided once at the app root and read by CalendarCard
 // so the setting reaches every calendar/focus card without threading through every component.
 const CardRowsContext = createContext<1 | 2>(2);
@@ -5777,8 +5838,8 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
             <div>
               {sectionTitle('Colors')}
               <div className="px-[31px] flex flex-col gap-3">
-                <ThemeColorPicker varName="--app-bg" storageKey="app-bg" label="Background" fallback="#1c1b19" themeKey="bg" />
-                <ThemeColorPicker varName="--app-accent" storageKey="app-accent" label="Accent" fallback="#8465ff" themeKey="accent" />
+                <ThemePresetRow label="Background" presets={BG_PRESETS} themeKey="bg" varName="--app-bg" storageKey="app-bg" />
+                <ThemePresetRow label="Accent" presets={ACCENT_PRESETS} themeKey="accent" varName="--app-accent" storageKey="app-accent" />
               </div>
             </div>
             <div>
