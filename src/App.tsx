@@ -422,6 +422,22 @@ const CUSTOM_SCROLL_LINE_PX = 40;     // deltaMode=1 (lines) → px conversion
 // so cards became un-movable near the edges). Native scroll keeps drag-drop
 // working, and the JS-managed thumb (DOM transform writes, no React render
 // per scroll frame) keeps the feel snappy without sacrificing reliability.
+// Band spacing, derived from the CARD HEIGHT of the active row mode so a
+// category label always occupies EXACTLY one card slot. Hardcoding it for the
+// two-row card (55px) left one-row mode 1.5x too airy: 63px of label gap
+// against a 42px card slot.
+//   gap = prevCard.mb(4) + pt + labelRow(26) + mb  ===  cardH + 4 + 4
+//   centred => mb = pt + 4
+const BAND_LABEL_ROW = 26;
+export function bandSpacing(oneRow: boolean) {
+  const cardH = oneRow ? 34 : 55;          // rendered heights, measured
+  const total = cardH + 8;                 // one card slot, card-bottom to card-top
+  const pad = total - 4 - BAND_LABEL_ROW;  // pt + mb
+  const pt = Math.max(0, Math.round((pad - 4) / 2));
+  const mb = pad - pt;
+  return { pt, mb, slot: total };
+}
+
 // Beacon target height — two card slots (55px card + 4px gap, twice). The
 // snap picks the card edge nearest this, so the block lands on a boundary
 // instead of slicing a card in half.
@@ -4089,18 +4105,18 @@ function CardDateMenu({ x, y, onPick, onClose }: { x: number; y: number; onPick:
   );
 }
 
-function CalendarDayDroppable({ id, children, header, isEmpty, className = '', slotHeight = 54 }: { id: string; children: React.ReactNode; header?: React.ReactNode; isEmpty: boolean; className?: string; slotHeight?: number }) {
+function CalendarDayDroppable({ id, children, header, isEmpty, className = '', style, slotHeight = 54 }: { id: string; children: React.ReactNode; header?: React.ReactNode; isEmpty: boolean; className?: string; style?: React.CSSProperties; slotHeight?: number }) {
   const { setNodeRef, isOver, active } = useDroppable({ id });
   // Drag feedback: while a TASK hovers this band cell, wash it in the accent — the
   // category-lock collision redirects `over` to the dragged task's own band, so the tinted
   // cell is exactly where a drop lands. transition-colors carries the fade both directions.
   const taskOver = isOver && (active?.data.current?.type === 'task' || active?.data.current?.type === 'projTask');
   return (
-    <div ref={setNodeRef} className={className}>
+    <div ref={setNodeRef} className={className} style={style}>
       {/* The band label stays OUTSIDE the wash: highlighting the between-band gap and the
           header row made the tint look like a misaligned slab. */}
       {header}
-      <div className={`relative ${isEmpty ? 'min-h-[37px]' : ''}`}>
+      <div className="relative">
         {/* Wash layer, painted BEHIND the cards (DOM order) and sized off them rather than
             off the band box: inset 2px from the column edges so it never runs edge-to-edge
             into the neighbouring column, and bleeding 4px past the cards top/bottom — the
@@ -4504,7 +4520,7 @@ function AddPlaceholderCard({ isToday, onClick, stacked = false, dimmed = false 
       aria-label="Add task"
       // Card-shaped, so it is a valid snap target for the drop beacon's top edge.
       data-add-card
-      className={`mx-[6px] mb-[4px] rounded-[3.333px] ${singleLine ? 'min-h-[30px]' : 'min-h-[55px]'} w-[calc(100%-12px)] flex flex-row items-center gap-[6px] px-[10px] ${isToday ? '' : 'bg-white/[0.03]'} hover:brightness-125 transition-[filter]`}
+      className={`mx-[6px] mb-[4px] rounded-[3.333px] ${singleLine ? 'min-h-[34px]' : 'min-h-[55px]'} w-[calc(100%-12px)] flex flex-row items-center gap-[6px] px-[10px] ${isToday ? '' : 'bg-white/[0.03]'} hover:brightness-125 transition-[filter]`}
       style={isToday ? { backgroundColor: 'rgb(from var(--app-accent) r g b / 0.1)' } : undefined}
     >
       <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] ${tone}`}>Add</span>
@@ -4523,8 +4539,8 @@ function AddPlaceholderCard({ isToday, onClick, stacked = false, dimmed = false 
 // currently at the top of the column. Sub-groups mark themselves with
 // data-group-name; we read those positions off the DOM rather than threading
 // scroll state through the render tree.
-function NextBandHeader({ label, bodyFont, onLabelClick, onAdd, addAriaLabel, bandList }: {
-  label: string; bodyFont: string; bandList?: string;
+function NextBandHeader({ label, bodyFont, onLabelClick, onAdd, addAriaLabel, bandList, labelMb = 18 }: {
+  label: string; bodyFont: string; bandList?: string; labelMb?: number;
   onLabelClick: (e: React.MouseEvent<HTMLElement>) => void;
   onAdd: () => void; addAriaLabel: string;
 }) {
@@ -4566,7 +4582,7 @@ function NextBandHeader({ label, bodyFont, onLabelClick, onAdd, addAriaLabel, ba
     };
   }, []);
   return (
-    <div ref={rowRef} data-band-list={bandList} className="group/band h-[26px] mb-[18px] px-[16px] flex items-center gap-2 sticky top-0 z-10 bg-[var(--app-bg)]">
+    <div ref={rowRef} data-band-list={bandList} className="group/band h-[26px] px-[16px] flex items-center gap-2 sticky top-0 z-10 bg-[var(--app-bg)]" style={{ marginBottom: labelMb }}>
       <p onClick={onLabelClick} className={`${bodyFont} text-[#5e5e5e] cursor-pointer`}>
         {label}
         {active ? <span className="text-[#454545]">{': '}</span> : null}
@@ -4916,6 +4932,11 @@ function WeekCalendarMode({
   // "Next Week" look-ahead/drop column rendered after the map.
   const days = Array.from({ length: 5 }, (_, i) => addDaysToDate(weekStart, i));
   const dayNameShort = (d: Date) => d.toLocaleDateString('en-US', { weekday: 'short' });
+  // Category labels must occupy exactly one CARD SLOT. The WEEK CALENDAR always
+  // renders two-line cards (every card here passes `stacked`, ignoring the
+  // one-row setting), so its band gap is always the two-row slot — reading the
+  // setting here made calendar bands 42px against 55px cards.
+  const bandGap = bandSpacing(false);
   const bodyFont = "font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap";
   const todayIso = dateToISO(new Date());
 
@@ -5088,9 +5109,10 @@ function WeekCalendarMode({
                     id={`cal:${iso}:${listId}`}
                     isEmpty={bucket.length === 0 && dayMilestones.length === 0}
                     slotHeight={activeSlotHeight}
-                    className="pt-[15px]"
+                    className=""
+                    style={{ paddingTop: bandGap.pt }}
                     header={(
-                      <div data-band-list={listId} className="group/band h-[26px] mb-[18px] px-[16px] flex items-center gap-2 sticky top-0 z-10 bg-[var(--app-bg)]">
+                      <div data-band-list={listId} className="group/band h-[26px] px-[16px] flex items-center gap-2 sticky top-0 z-10 bg-[var(--app-bg)]" style={{ marginBottom: bandGap.mb }}>
                         <p onClick={scrollBandToTop} className={`${bodyFont} text-[#5e5e5e] cursor-pointer`}>{label}</p>
                         <button
                           type="button"
@@ -5253,9 +5275,11 @@ function WeekCalendarMode({
                       id={cellId}
                       isEmpty={bucket.length === 0 && bandMilestones.length === 0}
                       slotHeight={activeSlotHeight}
-                      className="pt-[15px]"
+                      className=""
+                      style={{ paddingTop: bandGap.pt }}
                       header={(
                         <NextBandHeader
+                          labelMb={bandGap.mb}
                           bandList={listId}
                           label={label}
                           bodyFont={bodyFont}
@@ -5277,9 +5301,9 @@ function WeekCalendarMode({
                                 Group 0 needs no inline label — the sticky bar already says
                                 "Work: <that client>". Later groups get their own name, one
                                 card-slot of air above it. */}
-                            <div data-group-name={g.name} className={gi === 0 ? '' : 'pt-[15px]'}>
+                            <div data-group-name={g.name} style={gi === 0 ? undefined : { paddingTop: bandGap.pt }}>
                               {gi > 0 && (
-                                <div className="h-[26px] mb-[18px] px-[16px] flex items-center">
+                                <div className="h-[26px] px-[16px] flex items-center" style={{ marginBottom: bandGap.mb }}>
                                   <p className={`${bodyFont} text-[#7a7a7a]`}>{g.name}</p>
                                 </div>
                               )}
@@ -11227,12 +11251,12 @@ export default function App() {
                     // category on ANY day — the label carries a hover-reveal +. Empty bands
                     // are just the quiet grey label until you hover.
                     return (
-                      <div key={`${colKey}-${listId}`} className="pt-[15px]">
+                      <div key={`${colKey}-${listId}`} style={{ paddingTop: bandSpacing(cardRows === 1).pt }}>
                         {/* Band label — same treatment as the calendar's in-column
                             category labels (grey, 26px row, 16px inset) + hover +.
                             mb mirrors the container's pt so the label sits centered
                             in the gap between bands. */}
-                        <div data-band-list={listId} className={`group/band h-[26px] mb-[18px] px-[16px] flex items-center gap-2 sticky top-0 z-10 bg-[var(--app-bg)]`}>
+                        <div data-band-list={listId} className="group/band h-[26px] px-[16px] flex items-center gap-2 sticky top-0 z-10 bg-[var(--app-bg)]" style={{ marginBottom: bandSpacing(cardRows === 1).mb }}>
                           <p onClick={scrollBandToTop} className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap text-[#5e5e5e] cursor-pointer">{bandLabel}</p>
                           <button
                             type="button"
