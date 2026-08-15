@@ -862,7 +862,7 @@ function TopHeader({ viewName }: { viewName: string }) {
   return (
     // PIP: the quick window's columns inset their text 16px, so the header matches (35px
     // reads indented there — "nudge it over to the left").
-    <div className={`${PIP_MODE ? 'px-[16px]' : (viewName === 'Focus' ? 'px-[31px]' : 'px-[35px]')} h-[37px] flex items-center`} style={{ marginBottom: SPACING.cr }}>
+    <div className={`${PIP_MODE ? 'px-[16px]' : (viewName === 'Focus' ? 'px-[31px]' : 'px-[35px]')} h-[37px] flex items-center`} style={{ marginBottom: SPACING.dcr }}>
       {/* Left-aligned. Focus uses px-31 so the header lines up with that view's Milestones column
           header (also px-31); other views keep px-35 to match their own column headers. */}
       <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">
@@ -1084,7 +1084,11 @@ const SPACING = {
   tight: 0,
   cr: ROW_PX,         // one carriage return = 37px
   dcr: ROW_PX * 2,    // two carriage returns = 74px
-  topMargin: 30,      // distance from page top to the View header (List — Mon, Apr 28th — 12:25pm)
+  // ONE blank unit above the view header — the first beat of the universal
+  // header rhythm: space / header / double space / column labels / double
+  // space / section labels / content. Was 30px (0.81 unit), which put every
+  // page half a line off the grid before its first row even rendered.
+  topMargin: ROW_PX,
 };
 
 // --- Displaced ----------------------------------------------------------------
@@ -2270,13 +2274,13 @@ function BottomBar({ mode, onSetMode, onAdd, userShort }: { mode: AppMode; onSet
         <div className="group relative flex items-center">
           <button
             type="button"
-            aria-label="Team"
+            aria-label="Members"
             onClick={() => onSetMode(mode === 'team' ? prevModeRef.current : 'team')}
             className={`size-[30px] rounded-full border-[1.75px] flex items-center justify-center select-none transition-colors ${mode === 'team' ? 'border-[var(--app-accent)]' : 'border-[#4a4a4a] hover:border-[#7a7a7a]'}`}
           >
             <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] leading-none translate-y-[0.5px] ${mode === 'team' ? 'text-white' : 'text-[#a8a8a8]'}`}>{userShort || '?'}</span>
           </button>
-          <span className="pointer-events-none absolute left-full top-1/2 -translate-y-1/2 ml-2 px-2 py-1 rounded bg-[#333333] text-white text-[11px] whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-50">Team</span>
+          <span className="pointer-events-none absolute left-full top-1/2 -translate-y-1/2 ml-2 px-2 py-1 rounded bg-[#333333] text-white text-[11px] whitespace-nowrap opacity-0 group-hover:opacity-100 transition-opacity z-50">Members</span>
         </div>
         <button title="Settings" aria-label="Settings" onClick={() => onSetMode(mode === 'settings' ? prevModeRef.current : 'settings')} className={iconClass(mode === 'settings')}><SettingsIcon size={22} /></button>
       </div>
@@ -3636,6 +3640,34 @@ function CapsuleToggle<T extends string | number>({ options, value, onChange }: 
           {o.label}
         </button>
       ))}
+    </div>
+  );
+}
+
+// GridSnap — pads its own bottom so the block it wraps always occupies a WHOLE
+// number of grid units. Content-sized blocks (a Settings section body, whose
+// height depends on how many colours or list rows it holds) otherwise leave a
+// remainder that pushes everything below them off the baseline. Measured with
+// a ResizeObserver, so it re-snaps when content changes.
+function GridSnap({ children, className = '' }: { children: React.ReactNode; className?: string }) {
+  const innerRef = useRef<HTMLDivElement>(null);
+  const [pad, setPad] = useState(0);
+  useLayoutEffect(() => {
+    const el = innerRef.current;
+    if (!el) return;
+    const compute = () => {
+      const h = el.getBoundingClientRect().height;
+      const rem = h % GRID;
+      setPad(rem < 0.5 ? 0 : +(GRID - rem).toFixed(2));
+    };
+    compute();
+    const ro = new ResizeObserver(compute);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  return (
+    <div className={className} style={{ paddingBottom: pad }}>
+      <div ref={innerRef}>{children}</div>
     </div>
   );
 }
@@ -5075,7 +5107,7 @@ function WeekCalendarMode({
           const isToday = iso === todayIso;
           return (
             <CalendarColumnDroppable key={iso} date={iso}>
-              <div className={`shrink-0 h-[37px] flex items-center gap-2 px-[16px] mb-[37px] ${isToday ? 'text-[var(--app-accent)]' : (d.getDay() === 0 || d.getDay() === 6 ? 'text-[#656464]' : 'text-white')}`}>
+              <div className={`shrink-0 h-[37px] flex items-center gap-2 px-[16px] mb-[74px] ${isToday ? 'text-[var(--app-accent)]' : (d.getDay() === 0 || d.getDay() === 6 ? 'text-[#656464]' : 'text-white')}`}>
                 <p className="font-['NB_International:Regular',sans-serif]">{dayNameShort(d)}</p>
                 <p className={bodyFont}>{d.getDate()}</p>
                 {isToday && <p className={bodyFont}>(Today)</p>}
@@ -5229,7 +5261,7 @@ function WeekCalendarMode({
             .sort((a, b) => ((a.deadline || '￿') < (b.deadline || '￿') ? -1 : (a.deadline || '￿') > (b.deadline || '￿') ? 1 : a.order - b.order));
           return (
             <CalendarColumnDroppable key="nextweek" date={nwToken}>
-              <div className="shrink-0 h-[37px] flex items-center gap-2 px-[16px] mb-[37px] text-white">
+              <div className="shrink-0 h-[37px] flex items-center gap-2 px-[16px] mb-[74px] text-white">
                 <p className="font-['NB_International:Regular',sans-serif]">Next Week</p>
               </div>
               <CustomScroll bandIndicator={activeTask ? { list: activeTask.list, label: LIST_TITLES[activeTask.list] } : null}>
@@ -5579,7 +5611,9 @@ function TeamMode({ projects, people, currentUserShort, onSetCurrentUser }: {
   const isAdmin = membership?.role === 'admin';
   const bodyFont = "font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap";
   const sectionTitle = (title: string, add?: React.ReactNode) => (
-    <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]">
+    // Section titles sit on the column-label tier: one unit tall, one blank
+    // unit beneath, so their bodies start on the grid like every other view.
+    <div className="group h-[37px] mb-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]">
       <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">{title}</p>
       {add}
     </div>
@@ -5682,7 +5716,7 @@ function TeamMode({ projects, people, currentUserShort, onSetCurrentUser }: {
 
   return (
     <div className="h-full flex flex-col" style={{ paddingTop: SPACING.topMargin, paddingBottom: 12 }}>
-      <div className="shrink-0"><TopHeader viewName="Team" /></div>
+      <div className="shrink-0"><TopHeader viewName="Members" /></div>
       <div className="flex-1 min-h-0 grid grid-cols-3 gap-0">
         {/* COLUMN 1 — You. */}
         <div className="min-w-0 h-full flex flex-col"><CustomScroll innerClassName="flex flex-col gap-[37px] pb-[37px]">
@@ -5932,7 +5966,9 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
   const [showDebug, setShowDebug] = useState(false);
 
   const sectionTitle = (title: string, add?: React.ReactNode) => (
-    <div className="group h-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]">
+    // Section titles sit on the column-label tier: one unit tall, one blank
+    // unit beneath, so their bodies start on the grid like every other view.
+    <div className="group h-[37px] mb-[37px] w-full box-border flex flex-row gap-2 items-center px-[35px]">
       <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">{title}</p>
       {add}
     </div>
@@ -5980,7 +6016,8 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
           <div className="min-w-0 h-full flex flex-col"><CustomScroll innerClassName="flex flex-col gap-[37px] pb-[37px]">
             <div>
               {sectionTitle('About')}
-              <div className="mx-[21px] px-[10px] py-[10px] rounded-[3.333px] bg-white/[0.03] flex flex-col gap-2 text-[13px]">
+              <GridSnap>
+              <div className="mx-[21px] px-[10px] rounded-[3.333px] bg-white/[0.03] [&>*]:min-h-[37px] [&>*]:flex [&>*]:flex-col [&>*]:justify-center flex flex-col text-[13px]">
                 {(() => {
                   const buildDate = new Date(__BUILD_TIME__);
                   const ageMs = Date.now() - buildDate.getTime();
@@ -5999,17 +6036,21 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
                   );
                 })()}
               </div>
+              </GridSnap>
             </div>
             <div>
               {sectionTitle('Colors')}
-              <div className="mx-[21px] px-[10px] py-[10px] rounded-[3.333px] bg-white/[0.03] flex flex-col gap-3">
+              <GridSnap>
+              <div className="mx-[21px] px-[10px] rounded-[3.333px] bg-white/[0.03] [&>*]:min-h-[37px] [&>*]:flex [&>*]:flex-col [&>*]:justify-center flex flex-col">
                 <ThemePresetRow label="Background" presets={BG_PRESETS} themeKey="bg" varName="--app-bg" storageKey="app-bg" />
                 <ThemePresetRow label="Accent" presets={ACCENT_PRESETS} themeKey="accent" varName="--app-accent" storageKey="app-accent" />
               </div>
+              </GridSnap>
             </div>
             <div>
               {sectionTitle('Task Order')}
-              <div className="mx-[21px] px-[10px] py-[10px] rounded-[3.333px] bg-white/[0.03] flex flex-col gap-2">
+              <GridSnap>
+              <div className="mx-[21px] px-[10px] rounded-[3.333px] bg-white/[0.03] [&>*]:min-h-[37px] [&>*]:flex [&>*]:flex-col [&>*]:justify-center flex flex-col">
                 {([{ id: 'cpt' as TaskOrder, parts: ['Client - Project', 'Task'] as const }, { id: 'ptc' as TaskOrder, parts: ['Project', 'Task', 'Client'] as const }, { id: 'tcp' as TaskOrder, parts: ['Task', 'Client - Project'] as const }]).map((opt) => {
                   const active = taskOrder === opt.id;
                   return (
@@ -6019,10 +6060,12 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
                   );
                 })}
               </div>
+              </GridSnap>
             </div>
             <div>
               {sectionTitle('Section Sequence')}
-              <div className="mx-[21px] px-[10px] py-[10px] rounded-[3.333px] bg-white/[0.03] flex flex-col gap-2">
+              <GridSnap>
+              <div className="mx-[21px] px-[10px] rounded-[3.333px] bg-white/[0.03] [&>*]:min-h-[37px] [&>*]:flex [&>*]:flex-col [&>*]:justify-center flex flex-col">
                 {listSequence.map((l, i) => (
                   <div key={l} className="flex flex-row items-center gap-3 h-[26px]">
                     <span className="text-[13px] text-white w-[90px]">{LIST_TITLES[l]}</span>
@@ -6031,30 +6074,39 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
                   </div>
                 ))}
               </div>
+              </GridSnap>
             </div>
             <div>
               {sectionTitle('Quick Window Shortcut')}
-              <div className="mx-[21px] px-[10px] py-[10px] rounded-[3.333px] bg-white/[0.03] flex flex-col gap-2 items-start"><PipShortcutSetting /></div>
+              <GridSnap>
+              <div className="mx-[21px] px-[10px] rounded-[3.333px] bg-white/[0.03] [&>*]:min-h-[37px] [&>*]:flex [&>*]:flex-col [&>*]:justify-center flex flex-col items-start"><PipShortcutSetting /></div>
+              </GridSnap>
             </div>
             <div>
               {sectionTitle('Title Case Auto-Correct')}
-              <div className="mx-[21px] px-[10px] py-[10px] rounded-[3.333px] bg-white/[0.03] flex flex-row gap-4">
+              <GridSnap>
+              <div className="mx-[21px] px-[10px] rounded-[3.333px] bg-white/[0.03] [&>*]:min-h-[37px] [&>*]:flex [&>*]:flex-col [&>*]:justify-center flex flex-col">
                 <CapsuleToggle options={[{ v: 'off', label: 'Off' }, { v: 'title', label: 'On' }]} value={caseMode} onChange={(v) => onSetCaseMode(v as 'off' | 'title')} />
               </div>
+              </GridSnap>
             </div>
             <div>
               {sectionTitle('Card Layout')}
-              <div className="mx-[21px] px-[10px] py-[10px] rounded-[3.333px] bg-white/[0.03] flex flex-col gap-1">
+              <GridSnap>
+              <div className="mx-[21px] px-[10px] rounded-[3.333px] bg-white/[0.03] [&>*]:min-h-[37px] [&>*]:flex [&>*]:flex-col [&>*]:justify-center flex flex-col">
                 <CapsuleToggle options={[{ v: 2, label: 'Two rows' }, { v: 1, label: 'One row' }]} value={cardRows} onChange={(v) => onSetCardRows(v as 1 | 2)} />
                 <p className="text-[11px] text-[#5e5e5e]">One row collapses title + client › project + deadline onto a single line and truncates the title first.</p>
               </div>
+              </GridSnap>
             </div>
             <div>
               {sectionTitle('Sort by Client / Project')}
-              <div className="mx-[21px] px-[10px] py-[10px] rounded-[3.333px] bg-white/[0.03] flex flex-col gap-1">
+              <GridSnap>
+              <div className="mx-[21px] px-[10px] rounded-[3.333px] bg-white/[0.03] [&>*]:min-h-[37px] [&>*]:flex [&>*]:flex-col [&>*]:justify-center flex flex-col">
                 <CapsuleToggle options={[{ v: 'off', label: 'Off' }, { v: 'on', label: 'On' }]} value={sortByCP ? 'on' : 'off'} onChange={(v) => onSetSortByCP(v === 'on')} />
                 <p className="text-[11px] text-[#5e5e5e]">Groups the Focus day columns by client › project, then by deadline and started-first within each group.</p>
               </div>
+              </GridSnap>
             </div>
           </CustomScroll></div>
           {/* COLUMN 2 — people & clients. (Members/account management lives on
