@@ -700,8 +700,8 @@ function CustomScroll({
     // would suck the view down past the category label.
     let snapTimer: number | null = null;
     let snapRaf: number | null = null;
-    const SNAP_IDLE_MS = 130;   // quiet time that means "the gesture is over"
-    const SNAP_MS = 320;        // the ease itself
+    const SNAP_IDLE_MS = 200;   // quiet time that means "the gesture is over"
+    const SNAP_MS = 220;        // short on purpose — the settle should feel decisive
     // Quintic in/out — the curve the drop beacon already settles on.
     const easeInOutQuint = (t: number) => (t < 0.5 ? 16 * t * t * t * t * t : 1 - Math.pow(-2 * t + 2, 5) / 2);
     const cancelSnap = () => {
@@ -715,6 +715,23 @@ function CustomScroll({
       if (maxScroll <= 1) return;
       const from = el.scrollTop;
       const erTop = el.getBoundingClientRect().top;
+      // THE RESTING LINE IS NOT THE CONTAINER'S TOP. Category headers are
+      // `sticky top-0` with an OPAQUE background, so one of them always covers
+      // the first ~37px of the column. Snapping a card to the container's top
+      // parked it UNDERNEATH that label — which is exactly the half-sliced card
+      // at the top of the screenshot. The real resting line is the bottom edge
+      // of whatever header is currently pinned.
+      //
+      // Measured, not assumed: only headers at or above the container's top can
+      // occlude, and one mid-transition (scrolling away, top slightly negative)
+      // covers less than its full height.
+      let occlusion = 0;
+      for (const head of el.querySelectorAll<HTMLElement>('[data-band-list]')) {
+        const hr = head.getBoundingClientRect();
+        if (hr.top > erTop + 0.5) continue;            // still below the fold
+        occlusion = Math.max(occlusion, hr.bottom - erTop);
+      }
+      const restLine = erTop + Math.max(0, occlusion);
       // Every card-shaped box contributes its own 4px halo line, the same edge
       // the drop beacon snaps to — so the two features agree on where a
       // boundary is.
@@ -734,7 +751,7 @@ function CustomScroll({
       // 4px away — a permanent phantom that would drag the column on every settle.
       for (const box of el.querySelectorAll<HTMLElement>('[data-cal-card], [data-add-card], [data-group-name]')) {
         if (box.getBoundingClientRect().height < 1) continue;   // group markers can be zero-height
-        consider(from + (box.getBoundingClientRect().top - 4 - erTop));
+        consider(from + (box.getBoundingClientRect().top - 4 - restLine));
       }
       // Nothing card-shaped in this column (Settings, the filter panel) → the
       // nearest candidate is an extreme, so this correctly no-ops mid-scroll.
@@ -745,7 +762,7 @@ function CustomScroll({
       // declines the blank stretch at a category break, where the nearest edge
       // can be 45px+ away and yanking the view there reads as a lurch. Resting
       // in that gap shows empty space, not a sliced card, so it is harmless.
-      if (best === Infinity || best < 0.5 || best > 34) return;
+      if (best === Infinity || best < 0.5 || best > 45) return;
       if (typeof document !== 'undefined' && document.hidden) { el.scrollTop = to; return; }
       const t0 = performance.now();
       const step = (now: number) => {
@@ -834,7 +851,7 @@ function CustomScroll({
             end makes that upward snap reachable. Only when the column already
             overflows — adding it unconditionally would manufacture a scrollbar
             on columns that fit. */}
-        {hasOverflow && <div style={{ height: CAL_SLOT }} aria-hidden />}
+        {hasOverflow && <div style={{ height: CAL_SLOT + GRID }} aria-hidden />}
       </div>
       {/* Sticky label overlay — pinned at the top of the column, crossfades date
           and category labels by opacity as the user scrolls. Inert if the
