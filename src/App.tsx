@@ -467,8 +467,16 @@ export const CARD_H_TWO = GRID * 2 - 4;   // 70 → pitch 74 = 2 units (literal 
 // padding: gap from one card's bottom to the next card's top is simply the
 // card's own margin (4) + the label unit (37) = 41, on grid either way.
 export function bandSpacing(_oneRow: boolean) {
-  // A section break is a DOUBLE space: one blank unit, then the label unit at
-  // the BOTTOM of that space, sitting directly above its own cards.
+  // A CATEGORY label occupies exactly one unit and nothing more — no air above
+  // it. (A stint with pt: GRID here put a blank unit above every label in
+  // Focus, which the categories don't need.)
+  return { pt: 0, mb: 0, slot: GRID };
+}
+
+// A CLIENT sub-break inside the Next column is the one place that needs more:
+// one blank unit, then the label unit at the BOTTOM of it, sitting directly
+// above its own cards. That reads as a level change rather than a new category.
+export function subBandSpacing() {
   return { pt: GRID, mb: 0, slot: GRID * 2 };
 }
 
@@ -5448,10 +5456,13 @@ function WeekCalendarMode({
                                 Group 0 needs no inline label — the sticky bar already says
                                 "Work: <that client>". Later groups get their own name, one
                                 card-slot of air above it. */}
-                            <div data-group-name={g.name} style={gi === 0 ? undefined : { paddingTop: bandGap.pt }}>
+                            <div data-group-name={g.name} style={gi === 0 ? undefined : { paddingTop: CAL_SLOT }}>
                               {gi > 0 && (
                                 <div className="h-[56px] mb-[4px] pb-[6px] px-[16px] flex flex-col justify-end">
-                                  <p className={`${bodyFont} text-[#7a7a7a] h-[22px] flex items-center`}>{g.name}</p>
+                                  {/* Breadcrumb — see the focus column's note. */}
+                                  <p className={`${bodyFont} text-[#5e5e5e] h-[22px] flex items-center`}>
+                                    {label}<Arrowhead /><span className="text-[#7a7a7a]">{g.name}</span>
+                                  </p>
                                 </div>
                               )}
                             </div>
@@ -11485,10 +11496,16 @@ export default function App() {
                                 <Fragment key={`fg-${g.name}`}>
                                   {/* Marker the sticky header reads; group 0 needs no inline
                                       label because the header already names it. */}
-                                  <div data-group-name={g.name} style={gi === 0 ? undefined : { paddingTop: bandSpacing(cardRows === 1).pt }}>
+                                  <div data-group-name={g.name} style={gi === 0 ? undefined : { paddingTop: subBandSpacing().pt }}>
                                     {gi > 0 && (
                                       <div className="h-[37px] px-[16px] flex items-center">
-                                        <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap text-[#7a7a7a]">{g.name}</p>
+                                        {/* Full breadcrumb, not just the client: in a long category
+                                            the sticky header scrolls out of reach and you lose which
+                                            category you're in. Category dim, client bright — same
+                                            weighting the sticky bar uses. */}
+                                        <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap text-[#5e5e5e]">
+                                          {bandLabel}<Arrowhead /><span className="text-[#7a7a7a]">{g.name}</span>
+                                        </p>
                                       </div>
                                     )}
                                   </div>
@@ -11541,7 +11558,7 @@ export default function App() {
                                 onDelete={() => deleteTask(t.id)}
                                 onEdit={() => openEdit(t)}
                                 onQuickEdit={() => openQuick(t)}
-                                onAddSibling={() => addSiblingTask(t, section === 'next' ? undefined : isos[0])}
+                                onAddSibling={() => addSiblingTask(t, isos[0])}
                                 onRescheduleDate={(k) => rescheduleOrClearDate(t.id, k)}
                                 isAnyDragging={!!activeTask}
                                 categoryDimmed={!!activeTask && activeTask.list !== listId}
