@@ -4560,16 +4560,23 @@ function MilestoneCardView({ task, projects, clients, showDate, categoryDimmed =
       {...(cellId ? drag.attributes : {})}
       {...(cellId ? drag.listeners : {})}
       onClick={onClick} onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} onContextMenu={(e) => { e.preventDefault(); e.stopPropagation(); onQuickEdit?.(); }} style={cardBgStyle} className={`relative mx-[6px] mb-[4px] group ${cellId ? 'cursor-grab active:cursor-grabbing' : 'cursor-pointer'} ${drag.isDragging ? 'opacity-40' : ''} ${stacked ? 'h-[56px] pt-[6px]' : 'h-[33px]'} rounded-[3.333px]`}>
-      {/* One continuous line — title (truncates first), then client › project, assignees, date, +.
+      {/* One continuous line. Squeeze ladder, first to yield → last: assignees,
+          client, project, date, title. This used to be inverted — the title was
+          the only shrinkable element and absorbed every shortfall while the
+          assignees never gave up a pixel.
           Coming-Up cards stay ONE line in BOTH the calendar and focus views. */}
       <div className={`px-[10px] flex flex-row items-center gap-[6px] ${stacked ? 'h-[22px]' : 'h-full'}`}>
-        <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis min-w-0 shrink ${titleClass}`}>{task.title}</span>
-        {client?.short && project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap shrink-0 ${titleClass}`}>{client.short}<Arrowhead dim={task.completed || categoryDimmed} tone="milestone" faint={isExpired} />{project.name}</p>}
-        {client?.short && !project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap shrink-0 ${titleClass}`}>{client.short}</p>}
-        {!client?.short && project?.name && <p className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap shrink-0 ${titleClass}`}>{project.name}</p>}
-        {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone="scheduled" hollow={isPersonal} dim={task.completed || categoryDimmed} faint={isExpired} />)}
+        <span style={{ flexShrink: 1 }} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis min-w-0 ${titleClass}`}>{task.title}</span>
+        {client?.short && project?.name && <p style={{ flexShrink: 1000 }} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap min-w-0 overflow-hidden text-ellipsis ${titleClass}`}>{client.short}<Arrowhead dim={task.completed || categoryDimmed} tone="milestone" faint={isExpired} />{project.name}</p>}
+        {client?.short && !project?.name && <p style={{ flexShrink: 10000 }} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap min-w-0 overflow-hidden text-ellipsis ${titleClass}`}>{client.short}</p>}
+        {!client?.short && project?.name && <p style={{ flexShrink: 1000 }} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap min-w-0 overflow-hidden text-ellipsis ${titleClass}`}>{project.name}</p>}
+        {task.assignees.length > 0 && (
+          <span className="flex flex-row items-center gap-[6px] min-w-0 overflow-hidden" style={{ flexShrink: 100000 }}>
+            {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone="scheduled" hollow={isPersonal} dim={task.completed || categoryDimmed} faint={isExpired} />)}
+          </span>
+        )}
         {showDate && task.deadline && <DeadlineArrow dim={task.completed || categoryDimmed} color={isExpired ? '#4f4290' : 'var(--app-accent)'} />}
-        {showDate && task.deadline && <p className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap shrink-0 ${titleClass}`}>{formatDeadline(task.deadline)}</p>}
+        {showDate && task.deadline && <p style={{ flexShrink: 10 }} className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap min-w-0 overflow-hidden text-ellipsis ${titleClass}`}>{formatDeadline(task.deadline)}</p>}
         {onAddSibling && (
           <button
             type="button"
@@ -4950,14 +4957,18 @@ function CalendarCardBody({ task, projects, clients, taskOrder = 'ptc', isTodayC
             <TaskCheckbox completed={task.completed} started={task.started} onToggle={() => {}} doneColor={done ? doneCol : undefined} accent={isTodayCard ? 'var(--app-accent)' : undefined} />
           </div>
         )}
-        <span style={doneStyle} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleColor}`}>{task.title}</span>
+        <span style={{ ...doneStyle, flexShrink: 1 }} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis min-w-0 ${titleColor}`}>{task.title}</span>
       </div>
       <div className={`flex flex-row items-center gap-[6px] ${stacked ? 'h-[22px] shrink-0' : ''}`}>
-        {client && project && <p style={doneStyle} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${metaColor}`}>{client.short}<Arrowhead tone={(isScheduled || isTodayCard) ? 'milestone' : 'default'} color={done ? doneCol : undefined} dim={task.completed} />{project.name}</p>}
-        {client && !project && <p style={doneStyle} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${metaColor}`}>{client.short}</p>}
-        {!client && project && <p style={doneStyle} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${metaColor}`}>{project.name}</p>}
-        {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={(isScheduled || isTodayCard) ? 'scheduled' : 'todo'} hollow={isPersonal} dimColor={done ? doneCol : undefined} dim={task.completed} />)}
-        {task.deadline && <p style={doneStyle} className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${(isScheduled || isTodayCard) ? 'text-[var(--app-accent)]' : isLateDeadline(task.deadline) ? 'text-white' : 'text-[#656464]'}`}>{formatDeadline(task.deadline)}</p>}
+        {client && project && <p style={{ ...doneStyle, flexShrink: 1000 }} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap min-w-0 overflow-hidden text-ellipsis ${metaColor}`}>{client.short}<Arrowhead tone={(isScheduled || isTodayCard) ? 'milestone' : 'default'} color={done ? doneCol : undefined} dim={task.completed} />{project.name}</p>}
+        {client && !project && <p style={{ ...doneStyle, flexShrink: 10000 }} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap min-w-0 overflow-hidden text-ellipsis ${metaColor}`}>{client.short}</p>}
+        {!client && project && <p style={{ ...doneStyle, flexShrink: 1000 }} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap min-w-0 overflow-hidden text-ellipsis ${metaColor}`}>{project.name}</p>}
+        {task.assignees.length > 0 && (
+          <span className="flex flex-row items-center gap-[6px] min-w-0 overflow-hidden" style={{ flexShrink: 100000 }}>
+            {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={(isScheduled || isTodayCard) ? 'scheduled' : 'todo'} hollow={isPersonal} dimColor={done ? doneCol : undefined} dim={task.completed} />)}
+          </span>
+        )}
+        {task.deadline && <p style={{ ...doneStyle, flexShrink: 10 }} className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap min-w-0 overflow-hidden text-ellipsis ${(isScheduled || isTodayCard) ? 'text-[var(--app-accent)]' : isLateDeadline(task.deadline) ? 'text-white' : 'text-[#656464]'}`}>{formatDeadline(task.deadline)}</p>}
       </div>
     </div>
   );
@@ -5061,10 +5072,17 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
   const titleSlotIdx = cpSlots.indexOf('title');
   const beforeTitleSlots = cpSlots.slice(0, titleSlotIdx);
   const afterTitleSlots = cpSlots.slice(titleSlotIdx + 1);
-  const renderMetaSlot = (slot: TaskMetaSlot, key: string) => {
-    const cls = `font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : metaColor}`;
-    const st = doneStyle;
-    if (slot === 'cp' && client?.short && project?.name) return <p key={key} style={st} className={cls}>{client.short}<Arrowhead color={done ? doneCol : undefined} dim={task.completed || categoryDimmed} tone={isTodayCard ? 'milestone' : 'default'} color={undefined} />{project.name}</p>;
+  // Squeeze ladder. Order-of-magnitude gaps so flex freezes one item at zero
+  // before the next gives up anything — sequential, not proportional. Priority
+  // (last to yield) is title > deadline > project > client > assignees, matching
+  // what the list rows already do via density gating. These cards can't use
+  // density: it is derived from window.innerWidth / 4 for the dashboard, which
+  // has no relation to a calendar day column's real width.
+  const META_SHRINK: Partial<Record<TaskMetaSlot, number>> = { client: 10000, project: 1000, cp: 1000 };
+  const renderMetaSlot = (slot: TaskMetaSlot, key: string, shrink?: number) => {
+    const cls = `font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${shrink ? 'min-w-0 overflow-hidden text-ellipsis' : ''} ${categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : metaColor}`;
+    const st = shrink ? { ...doneStyle, flexShrink: shrink } : doneStyle;
+    if (slot === 'cp' && client?.short && project?.name) return <p key={key} style={st} className={cls}>{client.short}<Arrowhead color={done ? doneCol : undefined} dim={task.completed || categoryDimmed} tone={isTodayCard ? 'milestone' : 'default'} />{project.name}</p>;
     if (slot === 'client' && client?.short) return <p key={key} style={st} className={cls}>{client.short}</p>;
     if (slot === 'project' && project?.name) return <p key={key} style={st} className={cls}>{project.name}</p>;
     return null;
@@ -5160,14 +5178,14 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
               STACKED mode the meta sits on its own second line and competes with nothing, so it
               keeps the original shrink-0 and its reserved min-height. */}
           <div
-            className={`flex flex-row items-center gap-[6px] ${singleLine ? 'min-w-0 overflow-hidden' : stacked ? 'shrink-0 h-[22px]' : 'shrink-0 h-[35px]'}`}
+            className={`flex flex-row items-center gap-[6px] ${singleLine ? 'min-w-0 overflow-hidden' : stacked ? 'shrink-0 h-[22px] overflow-hidden' : 'shrink-0 h-[35px] overflow-hidden'}`}
             style={singleLine ? { flexShrink: 1000 } : undefined}
           >
             {/* When completed, all line-2 meta drops to the same faint #383838 — visually quieted to match the title.
                 Only render the client/project paragraph when there's actual non-empty text to show; otherwise an
                 empty <p> sits at the start of the row and the gap-[6px] pushes the next item (e.g. an assignee
                 circle) 6px to the right, making it look indented. */}
-            {afterTitleSlots.map((s, i) => renderMetaSlot(s, `at-${i}`))}
+            {afterTitleSlots.map((s, i) => renderMetaSlot(s, `at-${i}`, META_SHRINK[s]))}
             {/* Deadline arrow — the same glyph list view puts before dates (small variant for
                 the tighter card meta). Milestones get it too, tinted milestone purple. */}
             {task.deadline && <DeadlineArrow dim={task.completed || (categoryDimmed && !isTodayCard)} dimColor={done ? doneCol : undefined} color={categoryDimmed ? undefined : (isScheduled || isTodayCard) ? 'var(--app-accent)' : undefined} />}
@@ -5179,8 +5197,8 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
                 onPointerDown={(e) => e.stopPropagation()}
                 onDoubleClick={onRescheduleDate ? (e) => { e.stopPropagation(); onRescheduleDate('shiftForward'); } : undefined}
                 onContextMenu={onRescheduleDate ? (e) => { e.preventDefault(); e.stopPropagation(); setDateMenu({ x: e.clientX, y: e.clientY }); } : undefined}
-                className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap ${onRescheduleDate ? 'cursor-pointer' : ''} ${categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : isScheduled ? 'text-[var(--app-accent)]' : isLateDeadline(task.deadline) ? 'text-white' : isTodayCard ? 'text-[var(--app-accent)]' : 'text-[#656464]'}`}
-                style={doneStyle}
+                className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap min-w-0 overflow-hidden text-ellipsis ${onRescheduleDate ? 'cursor-pointer' : ''} ${categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : isScheduled ? 'text-[var(--app-accent)]' : isLateDeadline(task.deadline) ? 'text-white' : isTodayCard ? 'text-[var(--app-accent)]' : 'text-[#656464]'}`}
+                style={{ ...doneStyle, flexShrink: 10 }}
               >
                 {formatDeadline(task.deadline)}
               </p>
@@ -5189,7 +5207,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
             {/* Assignees AFTER the date — hidden at rest, fade in on card-hover (~200ms), and on
                 roll-off linger ~1s then fade out over 500ms (asymmetric group-hover transition). */}
             {task.assignees.length > 0 && (
-              <span className="flex flex-row items-center gap-[6px] linger-reveal">
+              <span className="flex flex-row items-center gap-[6px] linger-reveal min-w-0 overflow-hidden" style={{ flexShrink: 100000 }}>
                 {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={(isScheduled || isTodayCard) ? 'scheduled' : 'todo'} hollow={isPersonal} dimColor={done ? doneCol : undefined} dim={task.completed || categoryDimmed} />)}
               </span>
             )}
