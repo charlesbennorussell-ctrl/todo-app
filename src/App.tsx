@@ -5082,19 +5082,27 @@ function WeekCalendarMode({
     // flex-1 overflow-y-auto body — every column scrolls independently while the day names,
     // week-range bar, and TopHeader stay pinned at the top.
     <div className="h-full flex flex-col" style={{ paddingTop: SPACING.topMargin, paddingBottom: 12 }}>
-      <div className="shrink-0">
+      {/* The week navigator rides ON the header line rather than owning a tier of
+          its own. That removes a whole 3-unit tier from this view, so the day
+          names land on the same line as Focus's Search row and the first card
+          lands at the same y in BOTH views — toggling between modes no longer
+          shifts the content down. It is laid out with the calendar's own grid
+          (same cols / px-[19px]) and dropped in the THIRD column, so it sits
+          exactly under that column's day name. */}
+      <div className="shrink-0 relative">
         <TopHeader viewName="Calendar" />
-      </div>
-      {/* Week-range navigator — same px-[35px] as TopHeader so it lines up vertically. h-[37px]
-          matches the standard header row. DOUBLE carriage-return below so the day-name row
-          gets the same paragraph-break gap that column titles in List + Project use. */}
-      <div className="shrink-0 flex items-center gap-3 px-[35px] h-[37px]" style={{ marginBottom: SPACING.dcr }}>
-        <button onClick={() => setWeekOffset((o) => o - 1)} className="p-1 text-[#656464] hover:text-white transition-colors"><ChevronLeft size={20} /></button>
-        <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px]">{formatRange()}</p>
-        <button onClick={() => setWeekOffset((o) => o + 1)} className="p-1 text-[#656464] hover:text-white transition-colors"><ChevronRight size={20} /></button>
-        {weekOffset !== 0 && (
-          <button onClick={() => setWeekOffset(0)} className={`${bodyFont} text-[#656464] hover:text-white ml-2 transition-colors`}>Today</button>
-        )}
+        <div className="absolute top-0 left-0 right-0 h-[37px] grid grid-cols-6 gap-0 px-[19px] min-w-[1200px] items-center pointer-events-none">
+          <div aria-hidden />
+          <div aria-hidden />
+          <div className="flex items-center gap-3 px-[16px] pointer-events-auto">
+            <button onClick={() => setWeekOffset((o) => o - 1)} className="p-1 text-[#656464] hover:text-white transition-colors" aria-label="Previous week"><ChevronLeft size={20} /></button>
+            <p className="font-['NB_International:Regular',sans-serif] text-white text-[14.333px] whitespace-nowrap">{formatRange()}</p>
+            <button onClick={() => setWeekOffset((o) => o + 1)} className="p-1 text-[#656464] hover:text-white transition-colors" aria-label="Next week"><ChevronRight size={20} /></button>
+            {weekOffset !== 0 && (
+              <button onClick={() => setWeekOffset(0)} className={`${bodyFont} text-[#656464] hover:text-white ml-2 transition-colors whitespace-nowrap`}>Today</button>
+            )}
+          </div>
+        </div>
       </div>
       {/* Grid wrapper padding = 35 (TopHeader inset) - 16 (column header's own px-16) so the
           first column's day-name lines up at 35px from the page edge — matching TopHeader.
