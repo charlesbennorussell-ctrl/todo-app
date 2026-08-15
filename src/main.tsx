@@ -111,6 +111,78 @@ if (typeof console !== 'undefined') {
   };
 }
 
+// Launch screen: pure black with the app mark centred. Replaces the old
+// "Connecting…" text, and — via SplashGate below — stays up for one beat after
+// the app mounts so the two cross-fade instead of cutting.
+const SPLASH_FADE_MS = 480;
+// The quintic curve the rest of the app settles on.
+const SPLASH_EASE = 'cubic-bezier(0.86, 0, 0.07, 1)';
+
+const SplashScreen = ({ fading = false }: { fading?: boolean }) => (
+  <div
+    aria-hidden
+    style={{
+      position: 'fixed', inset: 0, zIndex: 9999,
+      background: '#000',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      opacity: fading ? 0 : 1,
+      transition: `opacity ${SPLASH_FADE_MS}ms ${SPLASH_EASE}`,
+      pointerEvents: 'none',
+    }}
+  >
+    <img
+      // BASE_URL keeps this correct under the '/todo-app/' production base and
+      // '/' in dev, on desktop and phone alike.
+      src={`${import.meta.env.BASE_URL || '/'}icons/icon-512.png`}
+      alt=""
+      style={{ width: 'min(34vw, 104px)', height: 'auto', display: 'block' }}
+    />
+  </div>
+);
+
+// Holds the black launch ground for the frames BEFORE React paints, so the app
+// opens black rather than flashing the themed page colour first.
+if (typeof document !== 'undefined') document.body.classList.add('booting');
+
+// Mounts the app immediately, then dissolves the splash over it. The app fades
+// UP as the splash fades OUT, both on the same curve, so there is no cut and no
+// moment of empty background between them.
+const SplashGate = ({ children }: { children: React.ReactNode }) => {
+  const [revealed, setRevealed] = useState(false);
+  const [removed, setRemoved] = useState(false);
+  useEffect(() => {
+    // Two frames: one for the app to lay out, one for it to paint. Starting the
+    // fade in the same frame it mounts can catch a half-drawn first frame.
+    //
+    // The TIMER is not belt-and-braces, it is the safety net: requestAnimationFrame
+    // does not fire at all while a window is not compositing (backgrounded at
+    // launch, a hidden tab, some remote/virtual displays). Without it the reveal
+    // never runs and the user is left staring at a permanent black screen with a
+    // fully-loaded app behind it. Whichever fires first wins; setRevealed is
+    // idempotent.
+    let r2 = 0;
+    const r1 = requestAnimationFrame(() => { r2 = requestAnimationFrame(() => setRevealed(true)); });
+    const safety = window.setTimeout(() => setRevealed(true), 400);
+    return () => { cancelAnimationFrame(r1); if (r2) cancelAnimationFrame(r2); window.clearTimeout(safety); };
+  }, []);
+  useEffect(() => {
+    if (!revealed) return;
+    const t = window.setTimeout(() => {
+      setRemoved(true);
+      document.body.classList.remove('booting');
+    }, SPLASH_FADE_MS + 80);
+    return () => window.clearTimeout(t);
+  }, [revealed]);
+  return (
+    <>
+      <div style={{ height: '100%', opacity: revealed ? 1 : 0, transition: `opacity ${SPLASH_FADE_MS}ms ${SPLASH_EASE}` }}>
+        {children}
+      </div>
+      {!removed && <SplashScreen fading={revealed} />}
+    </>
+  );
+};
+
 const Loading = () => {
   const [phase, setPhase] = useState<'connecting' | 'stuck' | 'concurrency' | 'authTrouble'>('connecting');
   const [authDetail, setAuthDetail] = useState('');
@@ -181,7 +253,8 @@ const Loading = () => {
           <button onClick={manualReset} style={btn}>Reset local data &amp; reload</button>
         </>
       ) : (
-        'Connecting…'
+        // Normal path: no copy, no spinner — just the launch screen.
+        <SplashScreen />
       )}
     </div>
   );
@@ -233,7 +306,9 @@ const Providers = ({ member }: { member: Membership | null }) => (
         }}
       >
         <ClientSideSuspense fallback={<Loading />}>
-          <Connected />
+          <SplashGate>
+            <Connected />
+          </SplashGate>
         </ClientSideSuspense>
       </RoomProvider>
     </LiveblocksProvider>

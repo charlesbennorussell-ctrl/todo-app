@@ -31,6 +31,10 @@ html, body, #root { height: 100%; margin: 0; }
 /* Uses the themeable page ground, so any sliver not covered by the app shell (iOS rubber-band,
    the area behind a standalone PWA's safe areas) matches instead of showing a stale grey. */
 body { background: var(--app-bg, #1c1b19); color: white; }
+/* Launch ground. Set on <body> at module load and removed once the splash has
+   dissolved, so the very first painted frame is black — matching the splash —
+   instead of flashing the themed page colour before React mounts. */
+body.booting { background: #000; }
 
 /* Themeable palette — the Settings → Colors module overrides these at runtime (persisted to
    localStorage, re-applied on load). Defaults reproduce the original palette exactly, so the app
