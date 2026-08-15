@@ -1067,7 +1067,7 @@ function TopHeader({ viewName }: { viewName: string }) {
   );
 }
 
-export function TaskCheckbox({ completed, started = false, onToggle, accent }: { completed: boolean; started?: boolean; onToggle: () => void; accent?: string }) {
+export function TaskCheckbox({ completed, started = false, onToggle, accent, doneColor }: { completed: boolean; started?: boolean; onToggle: () => void; accent?: string; doneColor?: string }) {
   // Three visual states (cycled by repeated clicks — see toggleTask):
   //   pending   → empty box with grey 1.5px stroke
   //   started   → solid mid-grey fill (no tick), reading as "in progress" / "I've begun this"
@@ -1076,11 +1076,14 @@ export function TaskCheckbox({ completed, started = false, onToggle, accent }: {
   // apart at a glance — pending=#0 fill, started=#656464 fill (matches the idle stroke), and
   // completed=#383838 fill (matches the faded text). Pre-2-stage tasks (no `started` property)
   // default to pending — backwards-compatible with existing storage.
-  // `accent` (today-card purple) recolors the pending stroke + started fill; the completed
-  // fill keeps the universal faded-done look so "done" reads the same everywhere.
+  // `accent` (today-card purple) recolors the pending stroke + started fill.
+  // `doneColor` overrides the COMPLETED fill: it used to be hard-wired to the
+  // universal gray, which left the tick as the one grey thing on an otherwise
+  // faint-purple finished Today card. Unset everywhere else, so "done" still
+  // reads identically on every other surface.
   const idleStroke = accent || '#656464';
   const startedFill = accent || '#656464';
-  const doneFill = '#383838';
+  const doneFill = doneColor || '#383838';
   // Tick stroke is the page background color so the check reads as a cut-out shape from the
   // muted fill — same look as the original design, just on the dimmer fill.
   const tickStroke = 'var(--app-bg)';
@@ -4934,7 +4937,7 @@ function CalendarCardBody({ task, projects, clients, taskOrder = 'ptc', isTodayC
       <div className={`flex flex-row items-center gap-[10px] ${stacked ? 'h-[22px] shrink-0' : ''}`}>
         {!isScheduled && (
           <div className="shrink-0 flex items-center justify-center">
-            <TaskCheckbox completed={task.completed} started={task.started} onToggle={() => {}} accent={done ? doneCol : isTodayCard ? 'var(--app-accent)' : undefined} />
+            <TaskCheckbox completed={task.completed} started={task.started} onToggle={() => {}} doneColor={done ? doneCol : undefined} accent={isTodayCard ? 'var(--app-accent)' : undefined} />
           </div>
         )}
         <span style={doneStyle} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleColor}`}>{task.title}</span>
@@ -5082,7 +5085,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
         <div className={`flex flex-row items-center gap-[10px] ${singleLine ? 'min-w-0 shrink' : stacked ? 'w-full pr-5 h-[22px] shrink-0' : 'w-full pr-5 h-[35px] shrink-0'}`}>
           {!isScheduled && (
             <div onPointerDown={(e) => e.stopPropagation()} className="shrink-0 flex items-center justify-center">
-              <TaskCheckbox completed={task.completed} started={task.started} onToggle={onToggle} accent={done ? doneCol : isTodayCard && !categoryDimmed ? 'var(--app-accent)' : undefined} />
+              <TaskCheckbox completed={task.completed} started={task.started} onToggle={onToggle} doneColor={done ? doneCol : undefined} accent={isTodayCard && !categoryDimmed ? 'var(--app-accent)' : undefined} />
             </div>
           )}
           {/* TITLE HAS PRIORITY over everything sharing its row. Two separate competitions:
@@ -5177,7 +5180,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
                 roll-off linger ~1s then fade out over 500ms (asymmetric group-hover transition). */}
             {task.assignees.length > 0 && (
               <span className="flex flex-row items-center gap-[6px] linger-reveal">
-                {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={(isScheduled || isTodayCard) ? 'scheduled' : 'todo'} hollow={isPersonal} dimColor={done ? doneCol : undefined} dim={task.completed || categoryDimmed} dimColor={'#383838'} />)}
+                {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={(isScheduled || isTodayCard) ? 'scheduled' : 'todo'} hollow={isPersonal} dimColor={done ? doneCol : undefined} dim={task.completed || categoryDimmed} />)}
               </span>
             )}
             {/* One-line layout: the + is the LAST item in the content lineup — right after the

@@ -153,7 +153,7 @@ function MobileCardBody({ task, projects, clients, isTodayCard }: {
   );
   const checkbox = !isScheduled && (
     <div className="shrink-0 flex items-center justify-center">
-      <TaskCheckbox completed={task.completed} started={task.started} onToggle={() => {}} accent={done ? doneCol : isTodayCard ? 'var(--app-accent)' : undefined} />
+      <TaskCheckbox completed={task.completed} started={task.started} onToggle={() => {}} doneColor={done ? doneCol : undefined} accent={isTodayCard ? 'var(--app-accent)' : undefined} />
     </div>
   );
   const title = <span style={doneStyle} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleColor}`}>{task.title || 'New Task'}</span>;
