@@ -5700,7 +5700,11 @@ function WeekCalendarMode({
           );
         })}
         {(() => {
-          // ── 6th column: NEXT WEEK ──────────────────────────────────────────
+          // ── 6th column: NEXT ───────────────────────────────────────────────
+          // Was "Next Week": it listed only tasks dated inside next week plus the
+          // undated queue, so anything dated FURTHER out appeared nowhere and
+          // could not be pulled back — it quietly hid work. It is now the queue
+          // proper: everything not already placed in a visible day column.
           // Now a FULL calendar column just like the day columns: broken into the
           // three category bands (Admin / Work / Projects), each a real drop target
           // with draggable cards + displacement. Dropping a card here schedules it
@@ -5724,13 +5728,15 @@ function WeekCalendarMode({
           // queue remainder for that list. Milestones are pinned above (dayMilestones).
           const nwBucketFor = (listId: ListId) => tasks
             .filter((t) => !t.completed && t.type !== 'scheduled' && t.list === listId
-              && ((t.deadline && t.deadline >= nwStartIso && t.deadline <= nwEndIso)
-                  || (!t.deadline && (t.section === 'next' || t.section === 'inbox') && !placedIds.has(t.id))))
+              && !placedIds.has(t.id)
+              && (t.deadline
+                    ? t.deadline > lastVisibleIso            // anything beyond the visible days
+                    : (t.section === 'next' || t.section === 'inbox')))
             .sort((a, b) => ((a.deadline || '￿') < (b.deadline || '￿') ? -1 : (a.deadline || '￿') > (b.deadline || '￿') ? 1 : a.order - b.order));
           return (
             <CalendarColumnDroppable key="nextweek" date={nwToken}>
               <div className="shrink-0 h-[37px] flex items-center gap-2 px-[16px] mb-[74px] text-white">
-                <p className="font-['NB_International:Regular',sans-serif]">Next Week</p>
+                <p className="font-['NB_International:Regular',sans-serif]">Next</p>
               </div>
               <CustomScroll bandIndicator={activeTask ? { list: activeTask.list, label: LIST_TITLES[activeTask.list] } : null}>
                 {/* Coming-Up milestones (dated beyond the visible window) stay pinned at the
@@ -6391,7 +6397,9 @@ function TeamMode({ projects, people, currentUserShort, onSetCurrentUser }: {
   );
 }
 
-function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePersonShort, onDeletePerson, currentUserShort, onSetCurrentUser, taskOrder, onSetTaskOrder, listSequence, onSetListSequence, caseMode, onSetCaseMode, cardRows, onSetCardRows, sortByCP, onSetSortByCP, trashedTasks, completedTasks, projects, clients, onUntrashTask, onPurgeTask, onToggleTask, onPurgeEmptyProjects, onListClosedOutProjects, onRemoveProjectsByIds, onListStragglerProjects, onDeleteStragglerProject, liveBackupAt, dailyBackupAt, onDownloadBackup, onRecoverImages, onRestoreFromFile, onRestoreFromSlot, onAddClient, onRenameClient, onRenameClientShort, onDeleteClient }: {
+function SettingsMode({ subGroup, onSetSubGroup, people, newId, onAddPerson, onRenamePerson, onRenamePersonShort, onDeletePerson, currentUserShort, onSetCurrentUser, taskOrder, onSetTaskOrder, listSequence, onSetListSequence, caseMode, onSetCaseMode, cardRows, onSetCardRows, sortByCP, onSetSortByCP, trashedTasks, completedTasks, projects, clients, onUntrashTask, onPurgeTask, onToggleTask, onPurgeEmptyProjects, onListClosedOutProjects, onRemoveProjectsByIds, onListStragglerProjects, onDeleteStragglerProject, liveBackupAt, dailyBackupAt, onDownloadBackup, onRecoverImages, onRestoreFromFile, onRestoreFromSlot, onAddClient, onRenameClient, onRenameClientShort, onDeleteClient }: {
+  subGroup: { today: boolean; tomorrow: boolean; next: boolean };
+  onSetSubGroup: (k: 'today' | 'tomorrow' | 'next', v: boolean) => void;
   people: Person[]; newId: string | null;
   onAddPerson: () => void;
   onRenamePerson: (id: string, name: string) => void;
@@ -6518,6 +6526,30 @@ function SettingsMode({ people, newId, onAddPerson, onRenamePerson, onRenamePers
               <div className="mx-[21px] px-[10px] py-[8px] rounded-[3.333px] bg-white/[0.03] flex flex-col items-start gap-[8px] [&>*]:w-full">
                 <ThemePresetRow label="Background" presets={BG_PRESETS} themeKey="bg" varName="--app-bg" storageKey="app-bg" />
                 <ThemePresetRow label="Accent" presets={ACCENT_PRESETS} themeKey="accent" varName="--app-accent" storageKey="app-accent" />
+              </div>
+              </GridSnap>
+            </div>
+            <div>
+              {sectionTitle('Sub-grouping')}
+              <GridSnap>
+              {/* Per SCOPE, not per column, so a column means the same thing in
+                  Focus and Calendar. Calendar's middle day columns (tomorrow and
+                  the three after it) follow the Tomorrow switch. */}
+              <div className="mx-[21px] px-[10px] py-[8px] rounded-[3.333px] bg-white/[0.03] flex flex-col items-start gap-[8px] [&>*]:w-full">
+                {([
+                  { k: 'today' as const, label: 'Today' },
+                  { k: 'tomorrow' as const, label: 'Tomorrow + next 3 days' },
+                  { k: 'next' as const, label: 'Next' },
+                ]).map((row) => (
+                  <div key={row.k} className="flex flex-row items-center gap-3 text-[13px]">
+                    <span className="text-white w-[168px]">{row.label}</span>
+                    <CapsuleToggle
+                      options={[{ v: 'off', label: 'Off' }, { v: 'on', label: 'Group by client' }]}
+                      value={subGroup[row.k] ? 'on' : 'off'}
+                      onChange={(v) => onSetSubGroup(row.k, v === 'on')}
+                    />
+                  </div>
+                ))}
               </div>
               </GridSnap>
             </div>
@@ -7387,6 +7419,32 @@ export default function App() {
   //   'cpt' = Client-Project Task    (e.g. FOG-Essentialist  Send Comps)
   //   'ptc' = Project  Task  Client  (current default — e.g. Essentialist Send Comps  FOG)
   //   'tcp' = Task Client-Project    (e.g. Send Comps  FOG-Essentialist)
+  // Client sub-grouping, per SCOPE rather than per column, so a column means the
+  // same thing in Focus and in Calendar. Calendar's middle day columns (tomorrow
+  // + the three after it) follow the 'tomorrow' switch. Defaults reproduce
+  // today's behaviour exactly: only Next is grouped.
+  const [subGroup, setSubGroupState] = useState<{ today: boolean; tomorrow: boolean; next: boolean }>(() => {
+    const fallback = { today: false, tomorrow: false, next: true };
+    if (typeof window === 'undefined') return fallback;
+    try {
+      const raw = window.localStorage.getItem('todo-app-subgroup');
+      if (!raw) return fallback;
+      const v = JSON.parse(raw) as Partial<typeof fallback>;
+      return { ...fallback, ...v };
+    } catch { return fallback; }
+  });
+  const setSubGroup = useCallback((k: 'today' | 'tomorrow' | 'next', v: boolean) => {
+    setSubGroupState((prev) => {
+      const next = { ...prev, [k]: v };
+      try { window.localStorage.setItem('todo-app-subgroup', JSON.stringify(next)); } catch {}
+      return next;
+    });
+  }, []);
+  // A calendar day column maps onto one of the three scopes by its offset.
+  const subGroupForOffset = useCallback((offset: number) => (
+    offset <= 0 ? subGroup.today : subGroup.tomorrow
+  ), [subGroup]);
+
   const [taskOrder, setTaskOrderState] = useState<'cpt' | 'ptc' | 'tcp'>(() => {
     if (typeof window === 'undefined') return 'ptc';
     const v = window.localStorage.getItem('todo-app-task-order');
@@ -11815,6 +11873,11 @@ export default function App() {
                   // One band block (label + cards) per CAL_LIST, aggregated over the
                   // column's iso set. Mirrors WeekCalendarMode's per-day band rendering.
                   const dayBands = (isos: string[], colKey: string, section: SectionId) => listSequence.map((listId, bandIdx) => {
+                    // Sub-grouping is per SCOPE now (Settings -> Sub-grouping), not
+                    // hard-wired to the Next column. 'inbox' can't reach here.
+                    const grouped = section === 'today' ? subGroup.today
+                                  : section === 'tomorrow' ? subGroup.tomorrow
+                                  : subGroup.next;
                     const bandLabel = LIST_TITLES[listId];
                     const isoSet = new Set(isos);
                     // Filter helper — project narrows to one, else client narrows to all its tasks.
@@ -11866,7 +11929,7 @@ export default function App() {
                             category labels (grey, 26px row, 16px inset) + hover +.
                             mb mirrors the container's pt so the label sits centered
                             in the gap between bands. */}
-                        {section === 'next' ? (
+                        {grouped ? (
                           <NextBandHeader
                             bandList={listId}
                             label={bandLabel}
@@ -11908,7 +11971,7 @@ export default function App() {
                                 Personal) with the group name above each run. Build one ORDERED
                                 list of labels + tasks so a label always sits with its own cards. */}
                             {(() => {
-                              if (section !== 'next') return null;
+                              if (!grouped) return null;
                               const groups: { name: string; tasks: Task[] }[] = [];
                               for (const t of cellTasks) {
                                 const proj = t.projectId ? projects.find((pp) => pp.id === t.projectId) : undefined;
@@ -11977,7 +12040,7 @@ export default function App() {
                                 </Fragment>
                               ));
                             })()}
-                            {section !== 'next' && cellTasks.map((t, index) => {
+                            {!grouped && cellTasks.map((t, index) => {
                               let insertionGap = 0;
                               if (dSameCategory && activeTask && overTask && t.id !== activeTask.id && !dActiveInBucket && dOverInBucket && index === dOIdx) {
                                 insertionGap = dSlotH;
@@ -12963,6 +13026,8 @@ export default function App() {
         )}
         {!PIP_MODE && mode === 'settings' && (
           <SettingsMode
+            subGroup={subGroup}
+            onSetSubGroup={setSubGroup}
             people={people}
             newId={newId}
             onAddPerson={addPerson}
