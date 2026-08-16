@@ -5143,6 +5143,9 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
   const client = hideClient ? undefined : rawClient;
   // Right-click-on-date mini menu anchor (viewport coords; rendered via portal).
   const [dateMenu, setDateMenu] = useState<{ x: number; y: number } | null>(null);
+  // Hover drives BOTH the reserved gutter and whether the assignee icons exist.
+  // CSS group-hover can restyle, but only React state can decline to RENDER.
+  const [hovered, setHovered] = useState(false);
   // 1-row mode (Settings): collapse to a single continuous line, title truncates first.
   const oneRow = useContext(CardRowsContext) === 1;
   // But the one-line layout only applies to FOCUS cards. Calendar day cards pass `stacked` to
@@ -5236,6 +5239,8 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
       ref={setNodeRef}
       style={style}
       data-cal-card={task.id}
+      onMouseEnter={() => setHovered(true)}
+      onMouseLeave={() => setHovered(false)}
       className={`relative mx-[6px] mb-[4px] group rounded-[3.333px] ${singleLine ? 'h-[33px]' : stacked ? 'h-[56px]' : 'h-[70px]'} flex ${isTodayCard ? '' : 'bg-white/[0.03]'} ${dimmed ? 'opacity-60' : ''}`}
       animate={{ opacity: isDragging ? 0 : 1 }}
       transition={{ opacity: { duration: 0.12, ease: 'easeOut' } }}
@@ -5245,7 +5250,12 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
             setting doesn't apply here. Line 1: checkbox + title. Line 2: client › project,
             assignees, deadline, + button. Checkbox is INLINE with the title so it stays aligned
             with the title cap-height when the whole content block is vertically centered. */}
-        <div className={`flex flex-row items-center gap-[10px] ${singleLine ? 'min-w-0 shrink' : stacked ? 'w-full pr-5 h-[22px] shrink-0' : 'w-full pr-5 h-[35px] shrink-0'}`}>
+        {/* The right gutter is HOVER-ONLY now. pr-5 used to be permanent — its own
+            comment said it "keeps everything clear of the absolute trash button" —
+            so every card gave up 20px at all times for a button that only appears
+            on hover. That is the empty space to the right of the text. It now
+            opens on the same quintic/150ms as everything else. */}
+        <div className={`flex flex-row items-center gap-[10px] transition-[padding] duration-150 ease-[cubic-bezier(0.86,0,0.07,1)] ${hovered ? 'pr-5' : 'pr-0'} ${singleLine ? 'min-w-0 shrink' : stacked ? 'w-full h-[22px] shrink-0' : 'w-full h-[35px] shrink-0'}`}>
           {!isScheduled && (
             <div onPointerDown={(e) => e.stopPropagation()} className="shrink-0 flex items-center justify-center">
               <TaskCheckbox completed={task.completed} started={task.started} onToggle={onToggle} doneColor={done ? doneCol : undefined} accent={isTodayCard && !categoryDimmed ? 'var(--app-accent)' : undefined} />
@@ -5342,7 +5352,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
             {/* Assignees AFTER the date — hidden at rest, fade in on card-hover (~200ms), and on
                 roll-off linger ~1s then fade out over 500ms (asymmetric group-hover transition). */}
             {task.assignees.length > 0 && (
-              <span className="flex flex-row items-center gap-[6px] linger-reveal shrink-0">
+              <span className={`flex flex-row items-center gap-[6px] linger-reveal shrink-0 ${hovered ? 'hidden' : ''}`}>
                 {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={(isScheduled || isTodayCard) ? 'scheduled' : 'todo'} hollow={isPersonal} dimColor={done ? doneCol : undefined} dim={task.completed || categoryDimmed} />)}
               </span>
             )}
