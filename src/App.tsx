@@ -5313,7 +5313,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
               keeps the original shrink-0 and its reserved min-height. */}
           <div
             className={`flex flex-row items-center gap-[6px] overflow-hidden ${singleLine ? 'min-w-0' : stacked ? 'shrink-0 h-[22px]' : 'shrink-0 h-[35px]'}`}
-            style={singleLine ? { flexShrink: 1 } : undefined}
+            style={singleLine ? { flexShrink: 20 } : undefined}
           >
             {/* When completed, all line-2 meta drops to the same faint #383838 — visually quieted to match the title.
                 Only render the client/project paragraph when there's actual non-empty text to show; otherwise an
