@@ -5082,7 +5082,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
   const renderMetaSlot = (slot: TaskMetaSlot, key: string, shrink?: number) => {
     const cls = `font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap ${shrink ? 'min-w-0 overflow-hidden text-ellipsis' : ''} ${categoryDimmed ? DIM : task.completed ? 'text-[#383838]' : metaColor}`;
     const st = shrink ? { ...doneStyle, flexShrink: shrink } : doneStyle;
-    if (slot === 'cp' && client?.short && project?.name) return <p key={key} style={st} className={cls}>{client.short}<Arrowhead color={done ? doneCol : undefined} dim={task.completed || categoryDimmed} tone={isTodayCard ? 'milestone' : 'default'} />{project.name}</p>;
+    if (slot === 'cp' && client?.short && project?.name) return <p key={key} style={st} className={cls}>{client.short}<Arrowhead color={done ? doneCol : undefined} dim={task.completed || categoryDimmed} tone={(isScheduled || isTodayCard) ? 'milestone' : 'default'} />{project.name}</p>;
     if (slot === 'client' && client?.short) return <p key={key} style={st} className={cls}>{client.short}</p>;
     if (slot === 'project' && project?.name) return <p key={key} style={st} className={cls}>{project.name}</p>;
     return null;
@@ -11459,7 +11459,7 @@ export default function App() {
                           className={`group shrink-0 h-[37px] w-full text-left box-border flex flex-row gap-2 items-center px-[31px] transition-colors ${active ? '' : 'hover:bg-white/[0.03]'}`}
                         >
                           <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap overflow-hidden text-ellipsis ${active ? 'text-white' : 'text-[#656464]'}`}>{p.name || '(unnamed)'}</span>
-                          <span className={`inline-flex items-center px-[8px] py-[1px] rounded-full ${active ? 'bg-[var(--app-accent)] text-white' : 'bg-[#151412] text-[#656464]'} text-[12px]`}>{p.short}</span>
+                          <AssigneeBadge letter={p.short as Assignee} tone={active ? 'scheduled' : 'todo'} />
                           {active && <X size={14} className="ml-auto text-[#a8a8a8]" />}
                         </button>
                       );
