@@ -1408,7 +1408,7 @@ const Displaced = memo(function Displaced({
 });
 
 function SortableTaskItem({
-  task, onToggle, onRename, onDelete, onEdit, onQuickEdit, onAddSibling, onReschedule, onCancelPendingRename, onSelect, isSelected = false, hasFocusContent = false, onOpenFocus, autoFocus = false, isDragOverlay = false, displacementOffset = 0, insertionGap = 0, isAnyDragging = false, collapsed = false, projects = [], clients = [], nonDraggable = false, idPrefix = '', taskOrder = 'ptc', density = 0,
+  task, onToggle, onRename, onDelete, onEdit, onQuickEdit, onAddSibling, onReschedule, onCancelPendingRename, onSelect, isSelected = false, hasFocusContent = false, onOpenFocus, autoFocus = false, isDragOverlay = false, displacementOffset = 0, insertionGap = 0, isAnyDragging = false, collapsed = false, projects = [], clients = [], nonDraggable = false, idPrefix = '', taskOrder = 'ptc', density: rawDensity = 0,
   showIndent = false, hideContext = false,
 }: {
   task: Task; onToggle: () => void; onRename?: (title: string) => void; onDelete?: () => void; onEdit?: (e?: React.MouseEvent) => void; onQuickEdit?: (e?: React.MouseEvent) => void; onAddSibling?: () => void; onReschedule?: (kind: 'today' | 'tomorrow' | 'nextWeek' | 'shiftBack' | 'shiftForward' | 'sectionForward' | 'sectionBack') => void;
@@ -1464,6 +1464,10 @@ function SortableTaskItem({
   // mousemove acts as a backstop: if the browser throttles or drops mouseenter on a fast
   // sweep, mousemove will still fire as the cursor crosses pixels and re-set hovered=true.
   const [hovered, setHovered] = useState(false);
+  // See above: hovering costs the row ~52px of chrome, so it behaves as a
+  // narrower row while the pointer is on it. Clamped to the bottom of the ladder.
+  const density = hovered ? Math.min(6, rawDensity + 2) : rawDensity;
+
   const [fading, setFading] = useState(false);
   const fadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const cancelFade = () => {
@@ -1738,7 +1742,15 @@ function SortableTaskItem({
               // half-grey / half-purple on a milestone with both a client and a project.
               const metaCls = `font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap ${metaColor}`;
               // Progressive truncation: project name truncates first (density >= 1).
-              const projectTruncate = density >= 1 ? 'truncate min-w-0 max-w-[120px]' : '';
+              // ALWAYS truncatable, not just at density >= 1. At density 0 the
+              // project and client spans were rigid (min-width:auto), so a long
+              // title or project over-constrained the line, the tail spilled, and
+              // the row's overflow-hidden cut whatever landed on the boundary —
+              // an assignee badge sliced in half on a row that is otherwise wide.
+              // Letting the meta text absorb the pressure first means the badges
+              // are never the thing at the clip edge. The max-width cap still
+              // only applies once the column is genuinely tight.
+              const projectTruncate = density >= 1 ? 'truncate min-w-0 max-w-[120px]' : 'truncate min-w-0';
               if (slot === 'project' && project && project.name) {
                 const sep = sepIfMilestone(`sep-p-${i}`);
                 prevHadContent = true;
@@ -2065,7 +2077,12 @@ function SortableTaskItem({
             durations, which a single utility class cannot express. */}
         {density < 3 && task.assignees.length > 0 && (
           <span
-            className="flex flex-row items-center gap-2 overflow-hidden"
+            // shrink-0 is LOAD-BEARING. overflow-hidden makes this a scroll
+            // container, which per Flexbox 4.5 waives the automatic minimum size —
+            // so without it the run shrinks BELOW its own content under flex
+            // pressure and slices a badge, even when the row as a whole fits.
+            // The collapse is driven by maxWidth, which we control, not by flex.
+            className="flex flex-row items-center gap-2 overflow-hidden shrink-0"
             style={{
               maxWidth: (hovered && !isDragOverlay && !isDragging) ? 0 : 80,
               opacity: (hovered && !isDragOverlay && !isDragging) ? 0 : 1,
@@ -2135,7 +2152,7 @@ function SortableTaskItem({
             type="button"
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => { e.stopPropagation(); onDelete(); }}
-            className="ml-auto -mr-[22px] p-1 opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity duration-150 ease-[cubic-bezier(0.86,0,0.07,1)]"
+            className={`ml-auto p-1 opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-[opacity,margin] duration-150 ease-[cubic-bezier(0.86,0,0.07,1)] ${hovered || TOUCH_DEVICE ? "mr-0" : "-mr-[22px]"}`}
             aria-label="Delete task"
           >
             <Trash2 size={14} />
@@ -7346,10 +7363,33 @@ export default function App() {
   // it shorter than the breakpoint and Milestones pops out into its own second column.
   const [winH, setWinH] = useState<number>(typeof window === 'undefined' ? 900 : window.innerHeight);
   useEffect(() => {
-    const update = () => { setColumnPx(window.innerWidth / 4); setWinH(window.innerHeight); };
+    // Measure a REAL rendered row. Every row in a column shares its width, so one
+    // sample is the column width — no per-row observer. The old
+    // `window.innerWidth / 4` was a model of the four-column dashboard and bore no
+    // relation to the actual column, so the cascade fired at the wrong moments
+    // (usually never): the row over-constrained, the tail spilled, and the row's
+    // overflow-hidden cut whatever landed on the boundary — a half assignee badge.
+    const update = () => {
+      setWinH(window.innerHeight);
+      const row = document.querySelector('[data-task-row]') as HTMLElement | null;
+      const w = row ? row.getBoundingClientRect().width : 0;
+      setColumnPx(w > 40 ? w : window.innerWidth / 4);
+    };
     update();
+    // Rows are not on screen for the first paint, and they come and go as lists
+    // change — re-measure on both.
+    const t1 = window.setTimeout(update, 60);
+    const t2 = window.setTimeout(update, 400);
+    const ro = new ResizeObserver(update);
+    ro.observe(document.documentElement);
+    const mo = new MutationObserver(update);
+    mo.observe(document.body, { childList: true, subtree: true });
     window.addEventListener('resize', update);
-    return () => window.removeEventListener('resize', update);
+    return () => {
+      window.clearTimeout(t1); window.clearTimeout(t2);
+      ro.disconnect(); mo.disconnect();
+      window.removeEventListener('resize', update);
+    };
   }, []);
   const density: number = columnPx >= 460 ? 0 : columnPx >= 420 ? 1 : columnPx >= 380 ? 2 : columnPx >= 340 ? 3 : columnPx >= 300 ? 4 : columnPx >= 260 ? 5 : 6;
 
