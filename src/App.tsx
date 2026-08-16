@@ -5245,7 +5245,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
       animate={{ opacity: isDragging ? 0 : 1 }}
       transition={{ opacity: { duration: 0.12, ease: 'easeOut' } }}
     >
-      <div onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} onContextMenu={(e) => { if (onQuickEdit) { e.preventDefault(); e.stopPropagation(); onQuickEdit(); } }} {...attributes} {...listeners} className={`cursor-grab active:cursor-grabbing pl-[10px] pr-[44px] overflow-hidden flex-1 ${singleLine ? 'flex flex-row items-center gap-[4px]' : stacked ? 'flex flex-col gap-0 py-[6px]' : 'flex flex-col gap-0'}`}>
+      <div onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} onContextMenu={(e) => { if (onQuickEdit) { e.preventDefault(); e.stopPropagation(); onQuickEdit(); } }} {...attributes} {...listeners} className={`cursor-grab active:cursor-grabbing pl-[10px] overflow-hidden flex-1 transition-[padding] duration-150 ease-[cubic-bezier(0.86,0,0.07,1)] ${hovered ? 'pr-[44px]' : 'pr-[10px]'} ${singleLine ? 'flex flex-row items-center gap-[4px]' : stacked ? 'flex flex-col gap-0 py-[6px]' : 'flex flex-col gap-0'}`}>
         {/* Calendar cards always render Title on line 1, all other meta on line 2 — taskOrder
             setting doesn't apply here. Line 1: checkbox + title. Line 2: client › project,
             assignees, deadline, + button. Checkbox is INLINE with the title so it stays aligned
