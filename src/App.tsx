@@ -1467,6 +1467,44 @@ function SortableTaskItem({
   // See above: hovering costs the row ~52px of chrome, so it behaves as a
   // narrower row while the pointer is on it. Clamped to the bottom of the ladder.
   const density = hovered ? Math.min(6, rawDensity + 2) : rawDensity;
+  // ASSIGNEES GO FIRST — the rule, enforced per ROW rather than per column.
+  // A column-wide density number cannot know whether THIS row's title and client
+  // fit, so badges kept surviving next to truncated text. Now: if any text on the
+  // row is ellipsised, the badges are gone. They only return when there is
+  // genuinely enough slack for the whole run.
+  const lineRef = useRef<HTMLDivElement | null>(null);
+  const runRef = useRef<HTMLSpanElement | null>(null);
+  const needRef = useRef(0);
+  const [badgesFit, setBadgesFit] = useState(true);
+  useLayoutEffect(() => {
+    const line = lineRef.current;
+    if (!line) return;
+    const measure = () => {
+      const run = runRef.current;
+      // Natural width of the run, captured while it is laid out and kept in a ref
+      // so it survives being hidden — re-reading it later would give 0.
+      if (run && run.offsetWidth > 0) needRef.current = run.offsetWidth + 8;
+      const need = needRef.current || 0;
+      if (!need) return;
+      const texts = Array.from(line.querySelectorAll<HTMLElement>('p, [data-task-title], .assignee-skip'));
+      const truncated = texts.some((el) => el.scrollWidth > el.clientWidth + 1);
+      // Free space on the line, ignoring the run itself.
+      let used = 0;
+      for (const ch of Array.from(line.children)) {
+        if (ch === run) continue;
+        used += (ch as HTMLElement).offsetWidth;
+      }
+      const free = line.clientWidth - used - 8 * Math.max(0, line.children.length - 1);
+      // Hysteresis: shown -> hide the moment anything clips. Hidden -> only come
+      // back when the whole run fits in the free space. The two conditions use
+      // different measures on purpose, so it cannot oscillate.
+      setBadgesFit((prev) => (prev ? !truncated : free >= need));
+    };
+    measure();
+    const ro = new ResizeObserver(measure);
+    ro.observe(line);
+    return () => ro.disconnect();
+  });
 
   const [fading, setFading] = useState(false);
   const fadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -1683,7 +1721,7 @@ function SortableTaskItem({
         backgroundColor: { duration: hovered || TOUCH_DEVICE ? 0.06 : 0.3, ease: [0.85, 0, 0.15, 1] },
       }}
     >
-      <div onDoubleClick={(e) => { if (onEdit && !editing) { e.stopPropagation(); onEdit(e); } }} onContextMenu={(e) => { if (onQuickEdit) { e.preventDefault(); e.stopPropagation(); onQuickEdit(e); } }} className={`relative box-border flex flex-row gap-2 h-[37px] items-center pr-[31px] w-full ${showIndent ? 'pl-[43px]' : 'pl-[31px]'}`}>
+      <div ref={lineRef} onDoubleClick={(e) => { if (onEdit && !editing) { e.stopPropagation(); onEdit(e); } }} onContextMenu={(e) => { if (onQuickEdit) { e.preventDefault(); e.stopPropagation(); onQuickEdit(e); } }} className={`relative box-border flex flex-row gap-2 h-[37px] items-center pr-[31px] w-full ${showIndent ? 'pl-[43px]' : 'pl-[31px]'}`}>
         {/* Project-view-2 rows render the LIndent ⌐ glyph just before the checkbox. */}
         {showIndent && <LIndent />}
         {/* Visual grab affordance only â€” absolutely positioned so it doesn't take flex layout space.
@@ -1741,16 +1779,18 @@ function SortableTaskItem({
               // for milestone rows. That made e.g. "NwLvng > Website > Meet About" render
               // half-grey / half-purple on a milestone with both a client and a project.
               const metaCls = `font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap ${metaColor}`;
-              // Progressive truncation: project name truncates first (density >= 1).
-              // ALWAYS truncatable, not just at density >= 1. At density 0 the
-              // project and client spans were rigid (min-width:auto), so a long
-              // title or project over-constrained the line, the tail spilled, and
-              // the row's overflow-hidden cut whatever landed on the boundary —
-              // an assignee badge sliced in half on a row that is otherwise wide.
-              // Letting the meta text absorb the pressure first means the badges
-              // are never the thing at the clip edge. The max-width cap still
-              // only applies once the column is genuinely tight.
-              const projectTruncate = density >= 1 ? 'truncate min-w-0 max-w-[120px]' : 'truncate min-w-0';
+              // Meta text fills the room it has and ellipsises exactly when it
+              // would overflow — never before. `min-w-0` removes the intrinsic
+              // floor so it CAN shrink; `truncate` degrades it legibly.
+              //
+              // There is deliberately NO max-width. A 120px cap used to apply from
+              // density >= 1, which truncated at a constant width no matter how
+              // much space the row actually had: a row would read "HumnC…" with
+              // 70px of empty space sitting beside it. That was the wasted buffer
+              // on the right — not the trash/+ gutter, which had already been
+              // reclaimed. A cap can only ever cut early; flex is what knows where
+              // the room ends.
+              const projectTruncate = 'truncate min-w-0';
               if (slot === 'project' && project && project.name) {
                 const sep = sepIfMilestone(`sep-p-${i}`);
                 prevHadContent = true;
@@ -2075,13 +2115,14 @@ function SortableTaskItem({
 
             Inline rather than Tailwind because the two properties need DIFFERENT
             durations, which a single utility class cannot express. */}
-        {density < 3 && task.assignees.length > 0 && (
+        {density < 3 && badgesFit && task.assignees.length > 0 && (
           <span
             // shrink-0 is LOAD-BEARING. overflow-hidden makes this a scroll
             // container, which per Flexbox 4.5 waives the automatic minimum size —
             // so without it the run shrinks BELOW its own content under flex
             // pressure and slices a badge, even when the row as a whole fits.
             // The collapse is driven by maxWidth, which we control, not by flex.
+            ref={runRef}
             className="flex flex-row items-center gap-2 overflow-hidden shrink-0"
             style={{
               maxWidth: (hovered && !isDragOverlay && !isDragging) ? 0 : 80,
@@ -7391,7 +7432,11 @@ export default function App() {
       window.removeEventListener('resize', update);
     };
   }, []);
-  const density: number = columnPx >= 460 ? 0 : columnPx >= 420 ? 1 : columnPx >= 380 ? 2 : columnPx >= 340 ? 3 : columnPx >= 300 ? 4 : columnPx >= 260 ? 5 : 6;
+  // Calibrated against MEASURED row widths, not the old window.innerWidth/4
+  // proxy. Under the proxy a typical row reported ~450; measured it is ~400, so
+  // the old thresholds fired one to two steps early and truncated content that
+  // had room — the wasted buffer on the right.
+  const density: number = columnPx >= 380 ? 0 : columnPx >= 340 ? 1 : columnPx >= 300 ? 2 : columnPx >= 265 ? 3 : columnPx >= 230 ? 4 : columnPx >= 200 ? 5 : 6;
 
   // Tomorrow section toggle. When ON: a "Tomorrow" section sits between Today and Next.
   // When OFF: tasks tagged section='tomorrow' visually fall back into Next (data is preserved
