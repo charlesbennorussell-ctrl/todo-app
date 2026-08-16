@@ -77,14 +77,18 @@ const SHOW_TITLEBAR = false && IS_TAURI && !PIP_MODE;
 // the room adopts a current value the next time a swatch is picked.
 const RETIRED_ACCENTS: Record<string, string> = {
   '#8465ff': '#7666fc',
-  '#7361ff': '#6e66fc',
-  '#625dff': '#6666fc',
+  '#7361ff': '#4f65eb',
+  '#625dff': '#3f79d4',
   // The first pass at the blue end landed either side of 240 by eye; these are
   // the same two swatches re-derived exactly on the hue walk.
-  '#6d66fc': '#6e66fc',
-  '#6668fc': '#6666fc',
-  '#8171ff': '#6e66fc',
-  '#726dff': '#6666fc',
+  '#6d66fc': '#4f65eb',
+  '#6668fc': '#3f79d4',
+  '#8171ff': '#4f65eb',
+  '#726dff': '#3f79d4',
+  // The pure-RGB-blue end (hue 240 at the purple's saturation) read as another
+  // violet rather than a blue; replaced by the sampled #3f79d4.
+  '#6e66fc': '#4f65eb',
+  '#6666fc': '#3f79d4',
 };
 export function migrateAccent<T extends string | null | undefined>(v: T): T {
   return (v ? (RETIRED_ACCENTS[v.toLowerCase()] ?? v) : v) as T;
@@ -227,15 +231,14 @@ const BG_PRESETS = [
   { id: 'ink', value: '#121212' },      // almost black — dark as it can be while the pure-black toggle tracks still read against it
 ];
 const ACCENT_PRESETS = [
-  // The ramp is one hue walk. Purple is the app's own add-button colour; the
-  // other two hold its EXACT saturation (96.15%) and lightness (69.41%) and
-  // only rotate hue toward 240 — the hue of pure RGB blue. So they read as the
-  // same colour family at the same weight, just bluer, instead of three
-  // unrelated swatches. Every accent surface reads var(--app-accent), so
-  // desktop, web and phone all follow whichever is picked.
-  { id: 'purple', value: '#7666fc' },   // H 246.40 — baseline
-  { id: 'violet', value: '#6e66fc' },   // H 243.20 — halfway
-  { id: 'blue',   value: '#6666fc' },   // H 240.00 — pure blue's hue
+  // Purple is the app's own add-button colour; blue is sampled from the terminal
+  // glyph the user pointed at. They are NOT a pure hue rotation — the blue is
+  // markedly less saturated and darker — so the middle swatch is the true HSL
+  // midpoint of the two ends rather than a hue step, which keeps the ramp
+  // reading as one family instead of a purple, a blue and something adrift.
+  { id: 'purple', value: '#7666fc' },   // H 246.4  S 96.2  L 69.4
+  { id: 'violet', value: '#4f65eb' },   // H 231.5  S 79.8  L 61.7 — midpoint
+  { id: 'blue',   value: '#3f79d4' },   // H 216.6  S 63.4  L 53.9 — sampled
 ];
 
 function ThemePresetRow({ label, presets, themeKey, varName, storageKey }: {
@@ -2047,8 +2050,28 @@ function SortableTaskItem({
             with duration-0 — a ramp here left badges part-lit after a quick pass, and the
             roll-off rule then froze them at that partial value. Stays lit while dragging so the overlay still shows who owns it.
             opacity-only (reserved width) so appearing never nudges the row's other content. */}
+        {/* ASSIGNEES ARE THE FIRST THING TO GO. On hover the row needs room for the
+            + and the trash, so this run collapses to zero width and hands its space
+            to the truncation line — one move, same quintic, same 150ms as the gutter
+            opening and the icons fading in.
+
+            OPACITY LEADS WIDTH (90ms vs 150ms) and that ordering is the whole point:
+            the run has to clip in order to collapse, and a clip through a 12.333px
+            circle is a half-badge. Fading to zero BEFORE the width finishes means the
+            clip is never on screen while anything is still visible, so a badge is only
+            ever whole or absent.
+
+            Inline rather than Tailwind because the two properties need DIFFERENT
+            durations, which a single utility class cannot express. */}
         {density < 3 && task.assignees.length > 0 && (
-          <span className={`flex flex-row items-center gap-2 transition-opacity ${(isDragOverlay || isDragging || hovered) ? 'opacity-100 duration-0' : 'opacity-0 duration-500 delay-[30000ms]'}`}>
+          <span
+            className="flex flex-row items-center gap-2 overflow-hidden"
+            style={{
+              maxWidth: (hovered && !isDragOverlay && !isDragging) ? 0 : 80,
+              opacity: (hovered && !isDragOverlay && !isDragging) ? 0 : 1,
+              transition: 'max-width 150ms cubic-bezier(0.86,0,0.07,1), opacity 90ms cubic-bezier(0.86,0,0.07,1)',
+            }}
+          >
             {/* Squeeze order, highest priority LAST to go: title > deadline > project > client >
                 people. People were previously ungated and survived a squeeze that had already
                 dropped the client and project, which inverted the intent — who it's assigned to
