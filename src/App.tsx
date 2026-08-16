@@ -1147,11 +1147,21 @@ export function AssigneeBadge({ letter, tone, hollow = false, dim = false, activ
   return (
     // -mt-[2px] matches the typographic alignment used on TaskCheckbox + DeadlineArrow so the
     // badge sits at the text's cap-to-baseline band, not centered on the row's bounding box.
-    <div className="relative shrink-0 -mt-[2px] flex items-center justify-center" title={letter} style={{ width: widthPx, height: 12.333, borderRadius: 999, backgroundColor: hollow ? 'transparent' : color, border: hollow ? `1px solid ${color}` : 'none' }}>
-      <span
-        className="assignee-initial font-['Untitled_Sans:Heavy',sans-serif] font-extrabold leading-none not-italic text-[7.5px] text-center"
-        style={{ color: hollow ? color : 'var(--app-bg)' }}
-      >{letter}</span>
+    // The 2px optical lift used to be a NEGATIVE TOP MARGIN, which paints the
+    // circle 2px above the element's own border box. Any ancestor with
+    // overflow-hidden that hugged the badge run therefore sliced the top off
+    // every circle — constant, not intermittent. The lift is now internal: the
+    // box is 2px taller than the circle with the circle pinned to the top.
+    // Pixel-identical in any items-center row (old: margin box 10.333 centred →
+    // circle centre at H/2 - 1; new: box 14.333 centred → same), but nothing
+    // paints outside the element any more.
+    <div className="relative shrink-0 flex items-start justify-center" title={letter} style={{ width: widthPx, height: 14.333, paddingBottom: 2 }}>
+      <div className="flex items-center justify-center" style={{ width: widthPx, height: 12.333, borderRadius: 999, backgroundColor: hollow ? 'transparent' : color, border: hollow ? `1px solid ${color}` : 'none' }}>
+        <span
+          className="assignee-initial font-['Untitled_Sans:Heavy',sans-serif] font-extrabold leading-none not-italic text-[7.5px] text-center"
+          style={{ color: hollow ? color : 'var(--app-bg)' }}
+        >{letter}</span>
+      </div>
     </div>
   );
 }
@@ -1253,7 +1263,7 @@ export function FilterGlyph() {
 export const doneTint = (isTodayCard: boolean) =>
   (isTodayCard ? 'rgb(from var(--app-accent) r g b / 0.55)' : '#383838');
 
-export function DeadlineArrow({ dim = false, small = false, color, dimColor = '#383838' }: { dim?: boolean; small?: boolean; color?: string; dimColor?: string }) {
+export function DeadlineArrow({ dim = false, small = false, squeeze = false, color, dimColor = '#383838' }: { dim?: boolean; small?: boolean; squeeze?: boolean; color?: string; dimColor?: string }) {
   // Custom inline SVG so we can shorten the LINE while keeping the arrowhead size and the
   // line's stroke thickness constant. `small` (responsive density 3+) cuts the line length
   // by ~50% (line goes from x=0..14 → x=7..14). Total wrapper width drops 18 → 11.
@@ -1262,6 +1272,24 @@ export function DeadlineArrow({ dim = false, small = false, color, dimColor = '#
   // `color` overrides the resting tone (milestone purple etc.); dim always wins.
   const fill = dim ? dimColor : (color || '#656464');
   const wrapW = small ? 11 : 18;
+  // `squeeze`: become a flex item that may shrink 18 -> 11, clipping from the
+  // LEFT with the SVG pinned to the right edge. Shortening a horizontal stroke
+  // loses nothing — it is a continuous version of `small`, so a tight row gets a
+  // shorter arrow instead of a chopped one. The big shrink factor makes the
+  // arrow surrender its 7px before any text gives up a character.
+  // right-0 (not inset-0) matters: with inset-0 plus an explicit width the box is
+  // over-constrained and the UA drops `right` in LTR, pinning the SVG LEFT and
+  // clipping the arrowhead instead of the line.
+  if (squeeze) {
+    return (
+      <div className="relative shrink-0 overflow-hidden -mt-[2px]" style={{ width: 18, minWidth: 11, flexShrink: 1000 }}>
+        <svg className="absolute right-0 top-0 block" width="18" height="12" viewBox="0 0 18 12" fill="none">
+          <line x1="0" y1="6" x2="14" y2="6" style={{ stroke: fill }} strokeWidth="1" />
+          <polygon points="14,2 18,6 14,10" style={{ fill }} />
+        </svg>
+      </div>
+    );
+  }
   // Coordinates inside a virtual 18×12 grid: arrowhead at right, line on its left.
   const lineStart = small ? 7 : 0;
   return (
@@ -1977,7 +2005,7 @@ function SortableTaskItem({
           const cls = `font-['NB_International:Regular',sans-serif] leading-[normal] not-italic text-[14.333px] whitespace-nowrap ${colorCls} ${clickable ? 'cursor-pointer' : ''}`;
           return (
             <>
-              {hasDeadline && !isScheduled && <DeadlineArrow dim={task.completed} small={density >= 3} />}
+              {hasDeadline && !isScheduled && <DeadlineArrow dim={task.completed} small={density >= 3} squeeze />}
               <p
                 className={cls}
                 onClick={clickable ? (e) => { if (e.altKey) { e.stopPropagation(); onReschedule!('nextWeek'); } } : undefined}
@@ -2019,7 +2047,7 @@ function SortableTaskItem({
             with duration-0 — a ramp here left badges part-lit after a quick pass, and the
             roll-off rule then froze them at that partial value. Stays lit while dragging so the overlay still shows who owns it.
             opacity-only (reserved width) so appearing never nudges the row's other content. */}
-        {density < 5 && task.assignees.length > 0 && (
+        {density < 3 && task.assignees.length > 0 && (
           <span className={`flex flex-row items-center gap-2 transition-opacity ${(isDragOverlay || isDragging || hovered) ? 'opacity-100 duration-0' : 'opacity-0 duration-500 delay-[30000ms]'}`}>
             {/* Squeeze order, highest priority LAST to go: title > deadline > project > client >
                 people. People were previously ungated and survived a squeeze that had already
@@ -2049,17 +2077,34 @@ function SortableTaskItem({
         )}
         {/* + sits inline right after the task info (assignees / deadline) so it always hugs the content.
             We blur() the button immediately so its focus state doesn't compete with the new task's
-            title focus (which fires from a setTimeout in SortableTaskItem's useLayoutEffect). */}
+            title focus (which fires from a setTimeout in SortableTaskItem's useLayoutEffect).
+
+            THE WRAPPER IS THE ROW'S RECLAIMED GUTTER. This 22px button plus its
+            8px gap — and the trash's 8px gap, which -ml-2/-mr-2 also swallow —
+            used to be reserved permanently for chrome that is invisible at rest:
+            38px of every row spent on nothing. At rest the wrapper collapses to
+            0; on hover it opens to 22px over 150ms and the title re-truncates
+            into the ellipsis it already had. Width lives on the WRAPPER, not the
+            button: with border-box, a w-0 button would still measure 8px because
+            its padding floors the border box.
+
+            Rows with slack don't move at all — the trash's ml-auto is holding
+            that space, so the expansion eats slack. Only rows already truncating
+            shift, and by at most 38px. TOUCH_DEVICE pins it open where hover
+            never fires and a 0-width button would be an unreachable tap target;
+            focus-within keeps it Tab-reachable. */}
         {!isDragOverlay && onAddSibling && (
+          <span className={`shrink-0 overflow-hidden transition-[width,margin] duration-150 ease-out focus-within:w-[22px] focus-within:ml-0 focus-within:mr-0 ${hovered || TOUCH_DEVICE ? 'w-[22px] ml-0 mr-0' : 'w-0 -ml-2 -mr-2'}`}>
           <button
             type="button"
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => { e.stopPropagation(); (e.currentTarget as HTMLButtonElement).blur(); onAddSibling(); }}
-            className="p-1 opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity"
+            className="block p-1 opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity"
             aria-label="Add task in same project"
           >
             <Plus size={14} />
           </button>
+          </span>
         )}
         {/* Trash is the last element and uses ml-auto so it always pins to the right edge of the row. */}
         {!isDragOverlay && onDelete && (
@@ -4571,11 +4616,11 @@ function MilestoneCardView({ task, projects, clients, showDate, categoryDimmed =
         {client?.short && !project?.name && <p style={{ flexShrink: 10000 }} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap min-w-0 overflow-hidden text-ellipsis ${titleClass}`}>{client.short}</p>}
         {!client?.short && project?.name && <p style={{ flexShrink: 1000 }} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap min-w-0 overflow-hidden text-ellipsis ${titleClass}`}>{project.name}</p>}
         {task.assignees.length > 0 && (
-          <span className="flex flex-row items-center gap-[6px] min-w-0 overflow-hidden" style={{ flexShrink: 100000 }}>
+          <span className="flex flex-row items-center gap-[6px] shrink-0">
             {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone="scheduled" hollow={isPersonal} dim={task.completed || categoryDimmed} faint={isExpired} />)}
           </span>
         )}
-        {showDate && task.deadline && <DeadlineArrow dim={task.completed || categoryDimmed} color={isExpired ? '#4f4290' : 'var(--app-accent)'} />}
+        {showDate && task.deadline && <DeadlineArrow squeeze dim={task.completed || categoryDimmed} color={isExpired ? '#4f4290' : 'var(--app-accent)'} />}
         {showDate && task.deadline && <p style={{ flexShrink: 10 }} className={`font-['NB_International:Regular',sans-serif] text-[11.5px] whitespace-nowrap min-w-0 overflow-hidden text-ellipsis ${titleClass}`}>{formatDeadline(task.deadline)}</p>}
         {onAddSibling && (
           <button
@@ -4964,7 +5009,7 @@ function CalendarCardBody({ task, projects, clients, taskOrder = 'ptc', isTodayC
         {client && !project && <p style={{ ...doneStyle, flexShrink: 10000 }} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap min-w-0 overflow-hidden text-ellipsis ${metaColor}`}>{client.short}</p>}
         {!client && project && <p style={{ ...doneStyle, flexShrink: 1000 }} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap min-w-0 overflow-hidden text-ellipsis ${metaColor}`}>{project.name}</p>}
         {task.assignees.length > 0 && (
-          <span className="flex flex-row items-center gap-[6px] min-w-0 overflow-hidden" style={{ flexShrink: 100000 }}>
+          <span className="flex flex-row items-center gap-[6px] shrink-0">
             {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={(isScheduled || isTodayCard) ? 'scheduled' : 'todo'} hollow={isPersonal} dimColor={done ? doneCol : undefined} dim={task.completed} />)}
           </span>
         )}
@@ -5188,7 +5233,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
             {afterTitleSlots.map((s, i) => renderMetaSlot(s, `at-${i}`, META_SHRINK[s]))}
             {/* Deadline arrow — the same glyph list view puts before dates (small variant for
                 the tighter card meta). Milestones get it too, tinted milestone purple. */}
-            {task.deadline && <DeadlineArrow dim={task.completed || (categoryDimmed && !isTodayCard)} dimColor={done ? doneCol : undefined} color={categoryDimmed ? undefined : (isScheduled || isTodayCard) ? 'var(--app-accent)' : undefined} />}
+            {task.deadline && <DeadlineArrow squeeze dim={task.completed || (categoryDimmed && !isTodayCard)} dimColor={done ? doneCol : undefined} color={categoryDimmed ? undefined : (isScheduled || isTodayCard) ? 'var(--app-accent)' : undefined} />}
             {/* Overdue dates render WHITE (red read as alarmist next to the purple wash).
                 The date chip is interactive: dblclick kicks it +1 day; right-click opens the
                 mini date menu. pointer-down stays local so pressing the date never starts a drag. */}
@@ -5207,7 +5252,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
             {/* Assignees AFTER the date — hidden at rest, fade in on card-hover (~200ms), and on
                 roll-off linger ~1s then fade out over 500ms (asymmetric group-hover transition). */}
             {task.assignees.length > 0 && (
-              <span className="flex flex-row items-center gap-[6px] linger-reveal min-w-0 overflow-hidden" style={{ flexShrink: 100000 }}>
+              <span className="flex flex-row items-center gap-[6px] linger-reveal shrink-0">
                 {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={(isScheduled || isTodayCard) ? 'scheduled' : 'todo'} hollow={isPersonal} dimColor={done ? doneCol : undefined} dim={task.completed || categoryDimmed} />)}
               </span>
             )}
@@ -6678,7 +6723,7 @@ function ProjectTaskRow({ task, listId, onToggle, onRename, onDelete, onEdit, on
         </div>
         {/* Assignee circles hidden at rest, fade in on row-hover (opacity only — reserved
             width keeps the row from shifting). Matches SortableTaskItem. */}
-        {density < 5 && task.assignees.length > 0 && (
+        {density < 3 && task.assignees.length > 0 && (
           <span className="flex flex-row items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity duration-200">
             {/* Same squeeze order as the list row: people go first. */}
             {density < 3 && task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={isScheduled ? 'scheduled' : 'todo'} hollow={isPersonal} dim={task.completed} />)}
