@@ -5255,7 +5255,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
             so every card gave up 20px at all times for a button that only appears
             on hover. That is the empty space to the right of the text. It now
             opens on the same quintic/150ms as everything else. */}
-        <div className={`flex flex-row items-center gap-[10px] transition-[padding] duration-150 ease-[cubic-bezier(0.86,0,0.07,1)] ${hovered ? 'pr-5' : 'pr-0'} ${singleLine ? 'min-w-0 shrink' : stacked ? 'w-full h-[22px] shrink-0' : 'w-full h-[35px] shrink-0'}`}>
+        <div className={`flex flex-row items-center gap-[10px] transition-[padding] duration-150 ease-[cubic-bezier(0.86,0,0.07,1)] ${hovered ? 'pr-[46px]' : 'pr-0'} ${singleLine ? 'min-w-0 shrink' : stacked ? 'w-full h-[22px] shrink-0' : 'w-full h-[35px] shrink-0'}`}>
           {!isScheduled && (
             <div onPointerDown={(e) => e.stopPropagation()} className="shrink-0 flex items-center justify-center">
               <TaskCheckbox completed={task.completed} started={task.started} onToggle={onToggle} doneColor={done ? doneCol : undefined} accent={isTodayCard && !categoryDimmed ? 'var(--app-accent)' : undefined} />
@@ -5301,17 +5301,6 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
               next to the trash it read as unrelated). Hover-reveal; the title wrapper is
               content-sized (no flex-1) so the + sits right after the name, and the row's
               pr-5 keeps everything clear of the absolute trash button. */}
-          {!singleLine && onAddSibling && (
-            <button
-              type="button"
-              onPointerDown={(e) => e.stopPropagation()}
-              onClick={(e) => { e.stopPropagation(); onAddSibling(); }}
-              className={`shrink-0 p-[2px] opacity-0 group-hover:opacity-100 ${iconColor} hover:text-white transition-opacity`}
-              aria-label="Add task in same project"
-            >
-              <Plus size={12} />
-            </button>
-          )}
         </div>
         {/* Meta row indents past the checkbox + gap so it lines up under the title text, not under
             the checkbox. 22px = checkbox width (12) + title-row gap (10). When there's no checkbox
@@ -5358,28 +5347,36 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
             )}
             {/* One-line layout: the + is the LAST item in the content lineup — right after the
                 assignee circles. (Two-line layout keeps it up on line 1 next to the title.) */}
-            {singleLine && onAddSibling && (
-              <button
-                type="button"
-                onPointerDown={(e) => e.stopPropagation()}
-                onClick={(e) => { e.stopPropagation(); onAddSibling(); }}
-                className={`shrink-0 p-[2px] opacity-0 group-hover:opacity-100 ${iconColor} hover:text-white transition-opacity`}
-                aria-label="Add task in same project"
-              >
-                <Plus size={12} />
-              </button>
-            )}
           </div>
       </div>
-      <button
-        type="button"
-        onPointerDown={(e) => e.stopPropagation()}
-        onClick={(e) => { e.stopPropagation(); onDelete(); }}
-        className={`absolute top-2 right-1 p-1 opacity-0 group-hover:opacity-100 ${iconColor} hover:text-white transition-opacity`}
-        aria-label="Delete task"
-      >
-        <Trash2 size={12} />
-      </button>
+      {/* THE RIGHT CLUSTER. + and trash live together, absolutely pinned to the
+          card's right edge, so they never move: previously the + was inline in
+          the content flow (twice — once per layout branch), which is why it
+          drifted around and docked itself after whatever text happened to be
+          last. Absolute means they also cost the content NOTHING at rest; the
+          hover padding above is what makes room for them. */}
+      <div className="absolute top-2 right-1 flex flex-row items-center gap-[2px]">
+        {onAddSibling && (
+          <button
+            type="button"
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => { e.stopPropagation(); onAddSibling(); }}
+            className={`p-1 opacity-0 group-hover:opacity-100 ${iconColor} hover:text-white transition-opacity duration-150 ease-[cubic-bezier(0.86,0,0.07,1)]`}
+            aria-label="Add task in same project"
+          >
+            <Plus size={12} />
+          </button>
+        )}
+        <button
+          type="button"
+          onPointerDown={(e) => e.stopPropagation()}
+          onClick={(e) => { e.stopPropagation(); onDelete(); }}
+          className={`p-1 opacity-0 group-hover:opacity-100 ${iconColor} hover:text-white transition-opacity duration-150 ease-[cubic-bezier(0.86,0,0.07,1)]`}
+          aria-label="Delete task"
+        >
+          <Trash2 size={12} />
+        </button>
+      </div>
     </motion.div>
     </Displaced>
   );
