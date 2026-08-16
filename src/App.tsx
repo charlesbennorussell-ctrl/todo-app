@@ -5245,7 +5245,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
       animate={{ opacity: isDragging ? 0 : 1 }}
       transition={{ opacity: { duration: 0.12, ease: 'easeOut' } }}
     >
-      <div onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} onContextMenu={(e) => { if (onQuickEdit) { e.preventDefault(); e.stopPropagation(); onQuickEdit(); } }} {...attributes} {...listeners} className={`cursor-grab active:cursor-grabbing px-[10px] overflow-hidden flex-1 ${singleLine ? 'flex flex-row items-center gap-[4px] pr-[26px]' : stacked ? 'flex flex-col gap-0 py-[6px]' : 'flex flex-col gap-0'}`}>
+      <div onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} onContextMenu={(e) => { if (onQuickEdit) { e.preventDefault(); e.stopPropagation(); onQuickEdit(); } }} {...attributes} {...listeners} className={`cursor-grab active:cursor-grabbing pl-[10px] pr-[44px] overflow-hidden flex-1 ${singleLine ? 'flex flex-row items-center gap-[4px]' : stacked ? 'flex flex-col gap-0 py-[6px]' : 'flex flex-col gap-0'}`}>
         {/* Calendar cards always render Title on line 1, all other meta on line 2 — taskOrder
             setting doesn't apply here. Line 1: checkbox + title. Line 2: client › project,
             assignees, deadline, + button. Checkbox is INLINE with the title so it stays aligned
@@ -5292,7 +5292,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
               // (which has always passed onEnter). Without this, Enter here just blurred and the
               // rapid-entry chain died after one task.
               onEnter={onAddSibling}
-              className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis ${titleColor}`}
+              className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis min-w-0 ${titleColor}`}
               style={doneStyle}
               placeholderColor={placeholderColor}
             />
@@ -5313,7 +5313,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
               keeps the original shrink-0 and its reserved min-height. */}
           <div
             className={`flex flex-row items-center gap-[6px] overflow-hidden ${singleLine ? 'min-w-0' : stacked ? 'shrink-0 h-[22px]' : 'shrink-0 h-[35px]'}`}
-            style={singleLine ? { flexShrink: 1000 } : undefined}
+            style={singleLine ? { flexShrink: 1 } : undefined}
           >
             {/* When completed, all line-2 meta drops to the same faint #383838 — visually quieted to match the title.
                 Only render the client/project paragraph when there's actual non-empty text to show; otherwise an
@@ -5355,7 +5355,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
           drifted around and docked itself after whatever text happened to be
           last. Absolute means they also cost the content NOTHING at rest; the
           hover padding above is what makes room for them. */}
-      <div className="absolute top-0 bottom-0 right-1 pl-[10px] flex flex-row items-center gap-[2px] bg-inherit pointer-events-none [&>button]:pointer-events-auto">
+      <div className="absolute top-0 bottom-0 right-1 flex flex-row items-center gap-[2px] pointer-events-none [&>button]:pointer-events-auto">
         {onAddSibling && (
           <button
             type="button"
