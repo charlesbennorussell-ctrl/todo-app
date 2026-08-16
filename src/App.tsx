@@ -1282,7 +1282,7 @@ export function DeadlineArrow({ dim = false, small = false, squeeze = false, col
   // clipping the arrowhead instead of the line.
   if (squeeze) {
     return (
-      <div className="relative shrink-0 overflow-hidden -mt-[2px]" style={{ width: 18, minWidth: 11, flexShrink: 1000 }}>
+      <div className="relative h-[12px] overflow-hidden -mt-[2px]" style={{ width: 18, minWidth: 11, flexShrink: 1000 }}>
         <svg className="absolute right-0 top-0 block" width="18" height="12" viewBox="0 0 18 12" fill="none">
           <line x1="0" y1="6" x2="14" y2="6" style={{ stroke: fill }} strokeWidth="1" />
           <polygon points="14,2 18,6 14,10" style={{ fill }} />
@@ -2094,12 +2094,12 @@ function SortableTaskItem({
             never fires and a 0-width button would be an unreachable tap target;
             focus-within keeps it Tab-reachable. */}
         {!isDragOverlay && onAddSibling && (
-          <span className={`shrink-0 overflow-hidden transition-[width,margin] duration-150 ease-out focus-within:w-[22px] focus-within:ml-0 focus-within:mr-0 ${hovered || TOUCH_DEVICE ? 'w-[22px] ml-0 mr-0' : 'w-0 -ml-2 -mr-2'}`}>
+          <span className={`shrink-0 overflow-hidden transition-[width,margin] duration-150 ease-[cubic-bezier(0.86,0,0.07,1)] focus-within:w-[22px] focus-within:ml-0 focus-within:mr-0 ${hovered || TOUCH_DEVICE ? 'w-[22px] ml-0 mr-0' : 'w-0 -ml-2 -mr-2'}`}>
           <button
             type="button"
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => { e.stopPropagation(); (e.currentTarget as HTMLButtonElement).blur(); onAddSibling(); }}
-            className="block p-1 opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity"
+            className="block p-1 opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity duration-150 ease-[cubic-bezier(0.86,0,0.07,1)]"
             aria-label="Add task in same project"
           >
             <Plus size={14} />
@@ -2112,7 +2112,7 @@ function SortableTaskItem({
             type="button"
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => { e.stopPropagation(); onDelete(); }}
-            className="ml-auto -mr-[22px] p-1 opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity"
+            className="ml-auto -mr-[22px] p-1 opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity duration-150 ease-[cubic-bezier(0.86,0,0.07,1)]"
             aria-label="Delete task"
           >
             <Trash2 size={14} />
@@ -2985,7 +2985,7 @@ function SortableSubtaskRow({
         type="button"
         onPointerDown={(e) => e.stopPropagation()}
         onClick={(e) => { e.stopPropagation(); onDelete(); }}
-        className="ml-auto -mr-[22px] p-1 opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity"
+        className="ml-auto -mr-[22px] p-1 opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity duration-150 ease-[cubic-bezier(0.86,0,0.07,1)]"
         aria-label="Delete sub-task"
       >
         <Trash2 size={14} />
@@ -4024,7 +4024,7 @@ function ClientRow({ client, autoFocus, bodyFont, onRenameName, onRenameShort, o
         <button
           type="button"
           onClick={onDelete}
-          className="ml-auto -mr-[22px] p-1 opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity"
+          className="ml-auto -mr-[22px] p-1 opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity duration-150 ease-[cubic-bezier(0.86,0,0.07,1)]"
           aria-label="Delete client"
         >
           <Trash2 size={14} />
@@ -4055,7 +4055,7 @@ function ResourceRow({ person, bodyFont, onDelete }: { person: Person; bodyFont:
       <button
         type="button"
         onClick={onDelete}
-        className="ml-auto -mr-[22px] p-1 opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity"
+        className="ml-auto -mr-[22px] p-1 opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity duration-150 ease-[cubic-bezier(0.86,0,0.07,1)]"
         aria-label="Delete resource"
       >
         <Trash2 size={14} />
@@ -6754,7 +6754,7 @@ function ProjectTaskRow({ task, listId, onToggle, onRename, onDelete, onEdit, on
             type="button"
             onPointerDown={(e) => e.stopPropagation()}
             onClick={(e) => { e.stopPropagation(); onDelete(); }}
-            className="ml-auto -mr-[22px] p-1 opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity"
+            className="ml-auto -mr-[22px] p-1 opacity-0 group-hover:opacity-100 text-[#5e5e5e] hover:text-white transition-opacity duration-150 ease-[cubic-bezier(0.86,0,0.07,1)]"
             aria-label="Delete task"
           >
             <Trash2 size={14} />
