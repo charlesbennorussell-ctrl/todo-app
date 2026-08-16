@@ -5255,7 +5255,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
             so every card gave up 20px at all times for a button that only appears
             on hover. That is the empty space to the right of the text. It now
             opens on the same quintic/150ms as everything else. */}
-        <div className={`flex flex-row items-center gap-[10px] transition-[padding] duration-150 ease-[cubic-bezier(0.86,0,0.07,1)] ${hovered ? 'pr-[46px]' : 'pr-0'} ${singleLine ? 'min-w-0 shrink' : stacked ? 'w-full h-[22px] shrink-0' : 'w-full h-[35px] shrink-0'}`}>
+        <div className={`flex flex-row items-center gap-[10px] ${singleLine ? 'min-w-0 shrink' : stacked ? 'w-full h-[22px] shrink-0' : 'w-full h-[35px] shrink-0'}`}>
           {!isScheduled && (
             <div onPointerDown={(e) => e.stopPropagation()} className="shrink-0 flex items-center justify-center">
               <TaskCheckbox completed={task.completed} started={task.started} onToggle={onToggle} doneColor={done ? doneCol : undefined} accent={isTodayCard && !categoryDimmed ? 'var(--app-accent)' : undefined} />
@@ -5355,7 +5355,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
           drifted around and docked itself after whatever text happened to be
           last. Absolute means they also cost the content NOTHING at rest; the
           hover padding above is what makes room for them. */}
-      <div className="absolute top-2 right-1 flex flex-row items-center gap-[2px]">
+      <div className="absolute top-0 bottom-0 right-1 pl-[10px] flex flex-row items-center gap-[2px] bg-inherit pointer-events-none [&>button]:pointer-events-auto">
         {onAddSibling && (
           <button
             type="button"
