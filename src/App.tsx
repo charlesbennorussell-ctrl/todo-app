@@ -7217,6 +7217,17 @@ export default function App() {
     }).catch(() => {});
     return () => { cancelled = true; };
   }, []);
+  // Strip the reload cache-buster (?rv=) once we're up, so it doesn't linger in
+  // the URL beside ?pip= / ?invite=. Purely cosmetic — nothing reads it — but a
+  // URL that grows a parameter every update is its own small mess.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const u = new URL(window.location.href);
+    if (!u.searchParams.has('rv')) return;
+    u.searchParams.delete('rv');
+    window.history.replaceState({}, '', u.toString());
+  }, []);
+
   // Periodic version poll. Every 3 minutes (and once on mount), fetch the
   // version.json manifest the build step writes. If its buildTime is newer
   // than the constant baked into the running bundle, surface a banner so
@@ -11171,11 +11182,23 @@ export default function App() {
       {newBuildTime && newBuildTime !== dismissedBuildTime && (
         <div className="fixed top-0 left-0 right-0 z-[1000] bg-[var(--app-accent)] text-white px-[35px] py-2 flex flex-row items-center gap-3 text-[13px] shadow-lg">
           <span className="font-bold">New version available</span>
-          <span className="text-white/80">deployed {new Date(newBuildTime).toLocaleString()}</span>
+          <span className="text-white/80">running v{__APP_VERSION__} · deployed {new Date(newBuildTime).toLocaleString()}</span>
           <div className="ml-auto flex flex-row gap-2 items-center">
             <button
               type="button"
-              onClick={() => window.location.reload()}
+              // A PLAIN reload does not get you the new build. GitHub Pages
+              // serves index.html with Cache-Control: max-age=600 and the JS
+              // filename is content-hashed, so for ten minutes after a deploy
+              // window.location.reload() re-serves the CACHED html pointing at
+              // the OLD bundle — you press Reload and nothing changes, which is
+              // exactly how this looked from the outside. Navigating with a
+              // fresh query bypasses the HTTP cache for that navigation, so the
+              // new index.html (and therefore the new hashed bundle) is fetched.
+              onClick={() => {
+                const u = new URL(window.location.href);
+                u.searchParams.set('rv', Date.now().toString(36));
+                window.location.replace(u.toString());
+              }}
               className="px-3 py-1 rounded-md bg-white text-[var(--app-accent)] hover:bg-white/90 transition-colors font-bold"
             >
               Reload
