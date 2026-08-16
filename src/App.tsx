@@ -7477,35 +7477,23 @@ export default function App() {
     return () => { window.removeEventListener('keydown', dn); window.removeEventListener('keyup', up); window.removeEventListener('blur', blur); };
   }, []);
 
-  // Auto-promote INBOX tasks to 'today' when their start date arrives. Same "rest of day
-  // override" rule as the deadline auto-promote: skip Next + Tomorrow so user drags into
-  // those sections aren't fought back to Today (e.g. drag from Today to Next was sometimes
-  // making the task vanish — startDate effect immediately re-promoted it). The 4 AM cycle
-  // (below) re-evaluates startDate at rollover, surfacing the task back into Today.
-  useEffect(() => {
-    const today = todayISO();
-    const needsPromote = tasks.some((t) => t.startDate && t.startDate <= today && t.section === 'inbox');
-    if (needsPromote) {
-      setTasks((prev) => prev.map((t) => (t.startDate && t.startDate <= today && t.section === 'inbox' ? { ...t, section: 'today' as SectionId } : t)));
-    }
-  }, [tasks, setTasks]);
-
-  // Auto-promote INBOX tasks to 'today' when their deadline arrives — at any time, since the
-  // user hasn't placed them anywhere yet. 'next' and 'tomorrow' are NOT touched here; those are
-  // treated as a "for the rest of the day" override that the 4 AM cycle (below) re-evaluates.
-  useEffect(() => {
-    const today = todayISO();
-    const needsPromote = tasks.some((t) =>
-      t.deadline && t.deadline <= today && t.type !== 'scheduled' && t.section === 'inbox'
-    );
-    if (needsPromote) {
-      setTasks((prev) => prev.map((t) =>
-        t.deadline && t.deadline <= today && t.type !== 'scheduled' && t.section === 'inbox'
-          ? { ...t, section: 'today' as SectionId }
-          : t
-      ));
-    }
-  }, [tasks, setTasks]);
+  // NOTHING AUTOMATICALLY PUTS A TASK IN TODAY. Two auto-promote effects used to
+  // live here — one on startDate, one on deadline — each rewriting an inbox
+  // task's section to 'today' the moment its date arrived. They ran on EVERY
+  // change to tasks, not once a day, so they re-fired constantly and the user
+  // repeatedly woke to work they had not chosen sitting in Today.
+  //
+  // Deleting them costs no VISIBILITY. computeCalendarDistribution places a
+  // dated card by its date, not its section — `anc === iso || (iso === todayIso
+  // && anc < todayIso)` — so a task whose deadline has arrived (or passed) still
+  // appears in the Today column, and overdue work still piles there. Section is
+  // consulted only for UNDATED tasks the user placed by hand. So the card shows
+  // up either way; the difference is that its stored section is no longer
+  // rewritten behind the user's back.
+  //
+  // If you are about to add something that writes section: 'today' outside a
+  // direct user action — don't. Today is pulled from Tomorrow by hand, and that
+  // is the whole rule.
 
   // Migration: ensure the seeded Personal client exists AND is normalized. The Personal
   // client is a system grouping, never a real client — its short MUST stay empty so it can
@@ -9888,9 +9876,10 @@ export default function App() {
     });
   }, [membership, people, setPeople]);
 
-  // 4 AM section refill. Today is SACRED — only deadlined / date-ranged tasks land there
-  // (handled by the deadline auto-promote effect above). The refill cascade only tops up
-  // Tomorrow:
+  // 4 AM section refill. Today is SACRED and now literally untouched: NOTHING in
+  // this effect writes a task into Today, and the auto-promote effects that used
+  // to promote into it have been deleted outright. The cascade only tops up
+  // Tomorrow, which is the pool the user pulls from by hand:
   //    Next → Tomorrow (if Tomorrow < 3)
   // Day boundary is 4 AM (not midnight) so late-night work counts as the previous day — see
   // todayISO() in data.ts for the consumer-side shift. Runs on mount when last refill < today,
@@ -9902,17 +9891,10 @@ export default function App() {
       const today = todayISO();
       setTasks((prev) => {
         let next = [...prev];
-        // STEP A — surface UNPLACED (inbox) work whose deadline or start date has arrived.
-        // Restricted to 'inbox' on purpose: Tomorrow and Next are the user's own placement
-        // decisions, and hoisting those into Today every rollover was the automatic move
-        // that had to be undone by hand each morning. A dated task left in Tomorrow still
-        // DISPLAYS on Today (the distribution engine anchors dated cards to their deadline
-        // and absorbs overdue ones) — it just no longer has its section rewritten.
-        next = next.map((t) => {
-          if (t.type === 'scheduled' || t.completed || t.section !== 'inbox') return t;
-          const dueOrStarting = (t.deadline && t.deadline <= today) || (t.startDate && t.startDate <= today);
-          return dueOrStarting ? { ...t, section: 'today' as SectionId } : t;
-        });
+        // (STEP A removed — it promoted arrived-date inbox tasks into Today at
+        // rollover, the last automatic writer into Today. Dated cards still show
+        // there via the distribution engine; see the note by the deleted
+        // auto-promote effects.)
         // STEP B — snapshot fill TOMORROW ONLY from the queue (up to TARGET per list).
         // TODAY IS FULLY MANUAL (experiment, Aug 2026): the old code also pulled 3 per
         // list into Today every 4 AM, and the user spent each morning pushing them back.
@@ -9934,7 +9916,9 @@ export default function App() {
         }
         // Re-number order within each affected (list, section) so newly moved tasks land at the end.
         for (const listId of lists) {
-          for (const sec of ['today', 'tomorrow', 'next'] as SectionId[]) {
+          // 'today' deliberately excluded: STEP B only moves tasks into Tomorrow,
+          // so renumbering Today would be writing to it for no reason.
+          for (const sec of ['tomorrow', 'next'] as SectionId[]) {
             const bucket = next.filter((t) => t.list === listId && t.section === sec && t.type !== 'scheduled' && !t.completed).sort((a, b) => a.order - b.order);
             bucket.forEach((t, i) => {
               const idx = next.findIndex((x) => x.id === t.id);
