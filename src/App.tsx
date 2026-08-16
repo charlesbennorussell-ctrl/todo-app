@@ -5312,7 +5312,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
               STACKED mode the meta sits on its own second line and competes with nothing, so it
               keeps the original shrink-0 and its reserved min-height. */}
           <div
-            className={`flex flex-row items-center gap-[6px] ${singleLine ? 'min-w-0 overflow-hidden' : stacked ? 'shrink-0 h-[22px] overflow-hidden' : 'shrink-0 h-[35px] overflow-hidden'}`}
+            className={`flex flex-row items-center gap-[6px] overflow-hidden ${singleLine ? 'min-w-0' : stacked ? 'shrink-0 h-[22px]' : 'shrink-0 h-[35px]'}`}
             style={singleLine ? { flexShrink: 1000 } : undefined}
           >
             {/* When completed, all line-2 meta drops to the same faint #383838 — visually quieted to match the title.
@@ -5341,7 +5341,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
             {/* Assignees AFTER the date — hidden at rest, fade in on card-hover (~200ms), and on
                 roll-off linger ~1s then fade out over 500ms (asymmetric group-hover transition). */}
             {task.assignees.length > 0 && (
-              <span className={`flex flex-row items-center gap-[6px] linger-reveal shrink-0 ${hovered ? 'hidden' : ''}`}>
+              <span className={`flex flex-row items-center gap-[6px] linger-reveal shrink-0 ${(hovered || singleLine) ? 'hidden' : ''}`}>
                 {task.assignees.map((a, i) => <AssigneeBadge key={`${a}-${i}`} letter={a} tone={(isScheduled || isTodayCard) ? 'scheduled' : 'todo'} hollow={isPersonal} dimColor={done ? doneCol : undefined} dim={task.completed || categoryDimmed} />)}
               </span>
             )}
