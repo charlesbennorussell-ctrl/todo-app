@@ -2115,7 +2115,16 @@ function SortableTaskItem({
 
             Inline rather than Tailwind because the two properties need DIFFERENT
             durations, which a single utility class cannot express. */}
-        {density < 3 && badgesFit && task.assignees.length > 0 && (
+        {/* HOVER = NO BADGES. Unconditional, no measurement, no race. Hovering
+            brings in the + and the trash, and the assignee icons are the first
+            thing to go — so they are simply not rendered while the pointer is on
+            the row. Every previous attempt tried to make them YIELD space
+            (shrink factors, density steps, per-row fit tests) and each one left a
+            window where the badge was still on screen while the trash drew
+            through it — the half-cut circle. An element that does not exist
+            cannot be cut. They come straight back on roll-off, still lit, and
+            still linger. */}
+        {density < 3 && badgesFit && !hovered && task.assignees.length > 0 && (
           <span
             // shrink-0 is LOAD-BEARING. overflow-hidden makes this a scroll
             // container, which per Flexbox 4.5 waives the automatic minimum size —
@@ -7298,7 +7307,7 @@ export default function App() {
   const [dismissedBuildTime, setDismissedBuildTime] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
-    const POLL_MS = 3 * 60 * 1000;
+    const POLL_MS = 60 * 1000;
     const check = async () => {
       try {
         // base path on GH Pages is /todo-app/; build-time we know what `base`
@@ -7312,6 +7321,24 @@ export default function App() {
         if (cancelled) return;
         if (manifest.buildTime && manifest.buildTime > __BUILD_TIME__) {
           setNewBuildTime(manifest.buildTime);
+          // AUTO-UPDATE. A banner is only as good as the odds someone presses it,
+          // and an unpressed banner is indistinguishable from a broken deploy —
+          // an entire evening was spent re-fixing work that had already shipped
+          // because the running client could not reach it. So take the new build
+          // ourselves, with the same cache-busting navigation the button uses.
+          //
+          // Never interrupt work: skip while anything is focused for input, while
+          // text is selected, or while a drag is in flight. We just try again on
+          // the next poll — there is no hurry, only inevitability.
+          const el = document.activeElement as HTMLElement | null;
+          const typing = !!el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName));
+          const selecting = !!window.getSelection()?.toString();
+          const dragging = document.body.classList.contains('dnd-dragging');
+          if (!typing && !selecting && !dragging) {
+            const u = new URL(window.location.href);
+            u.searchParams.set('rv', Date.now().toString(36));
+            window.location.replace(u.toString());
+          }
         }
       } catch {
         // Network blip / file missing during deploy — silently retry next tick.
