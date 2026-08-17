@@ -5049,16 +5049,22 @@ function NextBandHeader({ label, bodyFont, onLabelClick, onAdd, addAriaLabel, ba
       scroller = scroller.parentElement;
     }
     // NB: a missing scroller must NOT skip the initial compute — the column
-    // still needs to name its first group before anyone scrolls anything.
+    // still needs to settle its label before anyone scrolls anything.
     let raf = 0;
     const compute = () => {
       raf = 0;
       const marks = Array.from(band.querySelectorAll<HTMLElement>('[data-group-name]'));
       if (!marks.length) { setActive(null); return; }
       const threshold = row.getBoundingClientRect().bottom + 1;
-      let cur = marks[0].dataset.groupName ?? null;
+      // This bar names a group only once that group's OWN label row has scrolled
+      // fully underneath it, so the name and its echo are never on screen at once.
+      // Seeding with marks[0] dates from when group 0 had no inline row; every
+      // group carries one now, so the seed made the bar parrot the label sitting
+      // directly beneath it — visible doubling. And `bottom`, not `top`: a row
+      // still peeking out below the bar is legible and needs no echo.
+      let cur: string | null = null;
       for (const m of marks) {
-        if (m.getBoundingClientRect().top <= threshold) cur = m.dataset.groupName ?? null;
+        if (m.getBoundingClientRect().bottom <= threshold) cur = m.dataset.groupName ?? null;
       }
       setActive((prev) => (prev === cur ? prev : cur));
     };
