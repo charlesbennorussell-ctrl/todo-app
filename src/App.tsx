@@ -4987,6 +4987,50 @@ function AddPlaceholderCard({ isToday, onClick, stacked = false, dimmed = false 
 // currently at the top of the column. Sub-groups mark themselves with
 // data-group-name; we read those positions off the DOM rather than threading
 // scroll state through the render tree.
+// A sub-group header that is also a DROP TARGET. Dropping a task on it moves the
+// task into that group — reassigning its client, or its project inside Personal.
+//
+// The id grammar is `grp:<kind>:<id>:<scope>`; kind is 'client' or 'project'.
+// As with the calendar cells, ids are parsed by splitting on ':', so neither the
+// group id nor the scope may contain one — client/project ids are generated slugs
+// and the scope is sanitised below.
+//
+// The SCOPE suffix is not decoration: every day column renders the same set of
+// group headers, and dnd-kit keys droppables by id, so without it Monday's "Turbo"
+// and Thursday's "Turbo" would be the same registration and only one would ever
+// resolve. `cell` also tells the collision resolver which column a header belongs
+// to, so a header in ANOTHER column can decline the hit and let the reschedule win.
+//
+// EVERY group carries a label row, group 0 included — it may look redundant with
+// the sticky bar directly above it when the band is scrolled to the top, which is
+// exactly how a grouped table behaves. It is also load-bearing: measuring is
+// BeforeDragging (see measuringConfig — Always caused a feedback loop with the
+// displacement transforms), which DISABLES measuring for the duration of a drag.
+// A header that is h-0 while idle is therefore measured at zero height and stays
+// that way for the whole drag, so it can never win a collision. Group 0 used to
+// collapse until a drag began and was silently undroppable. Don't reintroduce it.
+function SubGroupDrop({ kind, id, children, cell }: {
+  kind: 'client' | 'project'; id: string; children: React.ReactNode;
+  cell?: string;
+}) {
+  const scope = (cell || 'x').replace(/:/g, '_');
+  const { setNodeRef, isOver } = useDroppable({ id: `grp:${kind}:${id}:${scope}`, data: { cell } });
+  return (
+    <div
+      ref={setNodeRef}
+      data-subgroup-drop={`${kind}:${id}`}
+      className={`transition-colors duration-150 ${isOver ? 'rounded-[3px]' : ''}`}
+      // Inline, not a Tailwind arbitrary value: `bg-[rgb(from_var(--app-accent)_r_g_b_/_0.18)]`
+      // compiles to NOTHING. Tailwind reads the `/` inside the brackets as an opacity
+      // modifier, fails to parse the rest, and drops the candidate silently — the class
+      // lands on the element and paints nothing. Same technique doneTint() uses.
+      style={isOver ? { background: 'rgb(from var(--app-accent) r g b / 0.18)' } : undefined}
+    >
+      {children}
+    </div>
+  );
+}
+
 function NextBandHeader({ label, bodyFont, onLabelClick, onAdd, addAriaLabel, bandList, labelMb = 18, stacked = false }: {
   label: string; bodyFont: string; bandList?: string; labelMb?: number; stacked?: boolean;
   onLabelClick: (e: React.MouseEvent<HTMLElement>) => void;
@@ -5385,6 +5429,7 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
 function WeekCalendarMode({
   tasks, projects, clients, onToggleTask, onRenameTask, onDeleteTask, onEditTask, onQuickEditTask, onAddSiblingTask, onAddTaskOnDay, onSyncSections, isAnyDragging,
   activeTask, overTask, activeCellId, activeSlotHeight, taskOrder = 'ptc', listSequence, newTaskId = null, onRescheduleTask,
+  subGroup,
 }: {
   tasks: Task[]; projects: Project[]; clients: Client[];
   onToggleTask: (id: string) => void;
@@ -5411,6 +5456,11 @@ function WeekCalendarMode({
   // Drag context piped from App so the calendar can run the same displacement math the list view runs.
   activeTask: Task | null; overTask: Task | null; activeCellId: string | null; activeSlotHeight: number;
   taskOrder?: TaskOrder;
+  // Per-scope client/project sub-grouping (Settings). The calendar reads the SAME
+  // three switches Focus does: `today` covers the today column (and any column at
+  // or before it when the window is scrolled back), `tomorrow` covers the four
+  // day columns after it, `next` covers the 6th queue column.
+  subGroup: { today: boolean; tomorrow: boolean; next: boolean };
 }) {
   const [weekOffset, setWeekOffset] = useState(0);
   // Column 1 = today, columns 2–5 = the next 4 days (no yesterday — it read as
@@ -5430,6 +5480,33 @@ function WeekCalendarMode({
   const bandGap = { pt: 0, mb: 0 };
   const bodyFont = "font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap";
   const todayIso = dateToISO(new Date());
+
+  // One grouping rule for EVERY calendar column (day cells and the Next queue):
+  // one level deeper than the category band — by CLIENT normally, by PROJECT
+  // under Personal, which has no clients (everything there hangs off the Personal
+  // system client). Groups keep the bucket's existing order, so whatever sort the
+  // user chose still decides which group leads. The underlying id rides along with
+  // the label so the header can double as a drop target that reassigns.
+  // '' = the Misc catch-all; a drop there CLEARS the assignment.
+  const buildSubGroups = (bucket: Task[], listId: ListId) => {
+    const out: { name: string; kind: 'client' | 'project'; id: string; tasks: Task[] }[] = [];
+    for (const t of bucket) {
+      const proj = t.projectId ? projects.find((p) => p.id === t.projectId) : undefined;
+      let name: string; let kind: 'client' | 'project'; let gid: string;
+      if (listId === 'personal') {
+        name = proj?.name || 'Misc'; kind = 'project'; gid = proj?.id || '';
+      } else {
+        const cid = t.clientId ?? proj?.clientId;
+        const cl = cid && cid !== PERSONAL_CLIENT_ID ? clients.find((x) => x.id === cid) : undefined;
+        name = cl?.short || cl?.name || 'Misc'; kind = 'client'; gid = cl?.id || '';
+      }
+      const g = out.find((x) => x.name === name);
+      if (g) g.tasks.push(t); else out.push({ name, kind, id: gid, tasks: [t] });
+    }
+    return out;
+  };
+  // Ungrouped columns still run through the same renderer — one anonymous group.
+  const flatGroup = (bucket: Task[]) => [{ name: '', kind: 'client' as const, id: '', tasks: bucket }];
 
   // todayAnchor MUST track the real date. A plain useMemo([]) went stale when the app stayed
   // open across midnight (the desktop shell loads the hosted URL and never reloads): the columns
@@ -5591,6 +5668,11 @@ function WeekCalendarMode({
                 const bucket = tasksForCell(listId, d);
                 const items = bucket.map((t) => t.id);
                 const isPast = dayOffsetFromToday(d) < 0;
+                // Which switch owns this column: `today` for the today column (and
+                // anything at or before it once the window is scrolled back), otherwise
+                // the `tomorrow` switch, which governs the four following days as one.
+                const dayGrouped = dayOffsetFromToday(d) <= 0 ? subGroup.today : subGroup.tomorrow;
+                const dayGroups = dayGrouped ? buildSubGroups(bucket, listId) : flatGroup(bucket);
                 // Weekends are projects-only by default. Work/Admin sections appear only if they have
                 // content for that day, or while a drag is active so the user can drop onto them.
                 const isWeekend = d.getDay() === 0 || d.getDay() === 6;
@@ -5627,17 +5709,19 @@ function WeekCalendarMode({
                     className=""
                     style={{ paddingTop: isFirstBand ? 0 : CAL_SLOT }}
                     header={(
-                      <div data-band-list={listId} className="group/band h-[37px] px-[16px] flex items-center gap-2 sticky top-0 z-10 bg-[var(--app-bg)]">
-                        <p onClick={scrollBandToTop} className={`${bodyFont} text-[#5e5e5e] cursor-pointer`}>{label}</p>
-                        <button
-                          type="button"
-                          onClick={() => onAddTaskOnDay(listId, iso)}
-                          className="opacity-0 group-hover/band:opacity-100 text-[#656464] hover:text-white transition-opacity"
-                          aria-label={`Add ${label} task on ${iso}`}
-                        >
-                          <Plus size={14} />
-                        </button>
-                      </div>
+                      // Same sticky bar the Next column uses: with sub-grouping on it
+                      // appends the group currently at the top ("Work ▸ Turbo"), which is
+                      // what lets group 0 stay unlabelled inline. With grouping off there
+                      // are no data-group-name marks, so it renders the bare category.
+                      <NextBandHeader
+                        label={label}
+                        bodyFont={bodyFont}
+                        bandList={listId}
+                        stacked
+                        onLabelClick={scrollBandToTop}
+                        onAdd={() => onAddTaskOnDay(listId, iso)}
+                        addAriaLabel={`Add ${label} task on ${iso}`}
+                      />
                     )}
                   >
                     {dayMilestones.length > 0 && dayMilestones.map((t) => renderMilestoneCard({ key: `m-${t.id}`, task: t, showDate: false, categoryDimmed, cellId: `cal:${iso}:${listId}` }))}
@@ -5647,7 +5731,25 @@ function WeekCalendarMode({
                       <AddPlaceholderCard isToday={isToday} stacked dimmed={isAnyDragging} onClick={() => onAddTaskOnDay(listId, iso)} />
                     )}
                     <SortableContext items={items} strategy={verticalListSortingStrategy}>
-                        {bucket.map((t, index) => {
+                        {dayGroups.map((g, gi) => (
+                        <Fragment key={`dg-${g.name}`}>
+                        {dayGrouped && (
+                          // Sub-break, not a category break: one label slot, no blank unit
+                          // above it — the louder gap belongs to the band break.
+                          <div data-group-name={g.name}>
+                            <SubGroupDrop kind={g.kind} id={g.id} cell={`cal:${iso}:${listId}`}>
+                              <div className="h-[37px] px-[16px] flex items-center">
+                                <p className={`${bodyFont} text-[#5e5e5e]`}>
+                                  {label}<Arrowhead /><span className="text-[#7a7a7a]">{g.name}</span>
+                                </p>
+                              </div>
+                            </SubGroupDrop>
+                          </div>
+                        )}
+                        {g.tasks.map((t) => {
+                          // Index within the FLAT bucket — the displacement math is keyed
+                          // to that order, not to the group's local one.
+                          const index = bucket.indexOf(t);
                           let displacementOffset = 0;
                           let insertionGap = 0;
                           // CATEGORY GATE: only displace when this cell's list matches the
@@ -5691,6 +5793,8 @@ function WeekCalendarMode({
                             />
                           );
                         })}
+                        </Fragment>
+                        ))}
                     </SortableContext>
                   </CalendarDayDroppable>
                 );
@@ -5774,20 +5878,8 @@ function WeekCalendarMode({
                   // clients — everything there hangs off the Personal system client).
                   // Groups keep the bucket's existing order, so whatever sort the user
                   // chose still drives which group leads.
-                  const nwGroups: { name: string; tasks: Task[] }[] = [];
-                  for (const t of bucket) {
-                    const proj = t.projectId ? projects.find((p) => p.id === t.projectId) : undefined;
-                    let name: string;
-                    if (listId === 'personal') {
-                      name = proj?.name || 'Misc';
-                    } else {
-                      const cid = t.clientId ?? proj?.clientId;
-                      const cl = cid && cid !== PERSONAL_CLIENT_ID ? clients.find((c) => c.id === cid) : undefined;
-                      name = cl?.short || cl?.name || 'Misc';
-                    }
-                    const existing = nwGroups.find((g) => g.name === name);
-                    if (existing) existing.tasks.push(t); else nwGroups.push({ name, tasks: [t] });
-                  }
+                  const nwGrouped = subGroup.next;
+                  const nwGroups = nwGrouped ? buildSubGroups(bucket, listId) : flatGroup(bucket);
                   return (
                     // Major category gap carries an EXTRA space unit (one label row on top of the
                     // one-card slot) so a category break reads louder than a client sub-break.
@@ -5825,16 +5917,18 @@ function WeekCalendarMode({
                                 card-slot of air above it. */}
                             {/* Client sub-section: label only, no blank unit — the louder
                                 gap belongs to the category break above. */}
+                            {nwGrouped && (
                             <div data-group-name={g.name}>
-                              {gi > 0 && (
+                              <SubGroupDrop kind={g.kind} id={g.id} cell={cellId}>
                                 <div className="h-[37px] px-[16px] flex items-center">
                                   {/* Breadcrumb — see the focus column's note. */}
                                   <p className={`${bodyFont} text-[#5e5e5e]`}>
                                     {label}<Arrowhead /><span className="text-[#7a7a7a]">{g.name}</span>
                                   </p>
                                 </div>
-                              )}
+                              </SubGroupDrop>
                             </div>
+                            )}
                             {g.tasks.map((t) => {
                           const index = bucket.indexOf(t);
                           let displacementOffset = 0;
@@ -9918,6 +10012,28 @@ export default function App() {
       setSourceCollapsed(false);
       return;
     }
+    // ── Dropped on a SUB-GROUP header: reassign the task into that group.
+    //    `grp:<kind>:<id>`; an empty id is the Misc catch-all, which CLEARS the
+    //    assignment rather than setting one.
+    if (overIdStr.startsWith('grp:')) {
+      const [, kind, gid] = overIdStr.split(':');
+      const srcTask = tasks.find((t) => t.id === activeTaskId);
+      if (srcTask) {
+        setTasks((prev) => prev.map((t) => {
+          if (t.id !== activeTaskId) return t;
+          if (kind === 'project') return { ...t, projectId: gid || undefined };
+          // Client group. A project belonging to a DIFFERENT client would
+          // contradict the new client and put the card straight back where it
+          // came from, so it is cleared; a project under the same client stays.
+          const proj = t.projectId ? projects.find((pp) => pp.id === t.projectId) : undefined;
+          const keepProject = !!proj && !!gid && proj.clientId === gid;
+          return { ...t, clientId: gid || undefined, projectId: keepProject ? t.projectId : undefined };
+        }));
+      }
+      resetDragRefs();
+      clearOverlay();
+      return;
+    }
     if (overIdStr.startsWith('cal:')) {
       const [, targetDateRaw, targetListRaw] = overIdStr.split(':');
       // 'NW@<iso>' = the Next Week hotspot column — schedule for next week,
@@ -11228,6 +11344,23 @@ export default function App() {
       }
     }
     const base = edgeHits.length ? collisions.filter((c) => !String(c.id).startsWith('edge:')) : collisions;
+    // SUB-GROUP HEADERS win over the cell they sit inside. Without this the
+    // calendar branch below rewrites the hit to a `cal:` cell id and the drop
+    // reassigns nothing — the header would look like a target and do nothing.
+    // Only for task drags: a project drag has its own resolution above.
+    if (args.active.data.current?.type === 'task') {
+      const srcCell = args.active.data.current?.calendarCellId as string | undefined;
+      const grpHit = base.find((c) => {
+        if (!String(c.id).startsWith('grp:')) return false;
+        // Regrouping is a VERTICAL move: within the column you're already in.
+        // Crossing columns means "reschedule", so a header over there declines and
+        // the cell underneath takes the drop. Headers outside the calendar engine
+        // carry no cell and always qualify.
+        const cell = (c.data?.droppableContainer as { data?: { current?: { cell?: string } } } | undefined)?.data?.current?.cell;
+        return !cell || !srcCell || cell === srcCell;
+      });
+      if (grpHit) return [grpHit];
+    }
     // PROJECT drags in the projects view resolve to the whole COLUMN — one atomic target,
     // like dropping a task over a line. Task rows / headers under the pointer used to win
     // the collision and swallow the drop into a no-op ("you have to fiddle to a very
@@ -11438,6 +11571,7 @@ export default function App() {
             project view above (built off list view's drag tech). */}
         {!PIP_MODE && mode === 'calendar' && (
           <WeekCalendarMode
+            subGroup={subGroup}
             tasks={calendarTasks}
             projects={projects}
             clients={clients}
@@ -11972,27 +12106,31 @@ export default function App() {
                                 list of labels + tasks so a label always sits with its own cards. */}
                             {(() => {
                               if (!grouped) return null;
-                              const groups: { name: string; tasks: Task[] }[] = [];
+                              // Groups carry the underlying id, not just the label, so the
+                              // header can be a drop target that reassigns to THIS client
+                              // (or project, inside Personal). '' = the Misc catch-all,
+                              // which drops clear the assignment instead of setting one.
+                              const groups: { name: string; kind: 'client' | 'project'; id: string; tasks: Task[] }[] = [];
                               for (const t of cellTasks) {
                                 const proj = t.projectId ? projects.find((pp) => pp.id === t.projectId) : undefined;
-                                let name: string;
-                                if (listId === 'personal') name = proj?.name || 'Misc';
-                                else {
+                                let name: string; let kind: 'client' | 'project'; let gid: string;
+                                if (listId === 'personal') {
+                                  name = proj?.name || 'Misc'; kind = 'project'; gid = proj?.id || '';
+                                } else {
                                   const cid = t.clientId ?? proj?.clientId;
                                   const cl = cid && cid !== PERSONAL_CLIENT_ID ? clients.find((x) => x.id === cid) : undefined;
-                                  name = cl?.short || cl?.name || 'Misc';
+                                  name = cl?.short || cl?.name || 'Misc'; kind = 'client'; gid = cl?.id || '';
                                 }
                                 const g = groups.find((x) => x.name === name);
-                                if (g) g.tasks.push(t); else groups.push({ name, tasks: [t] });
+                                if (g) g.tasks.push(t); else groups.push({ name, kind, id: gid, tasks: [t] });
                               }
                               return groups.map((g, gi) => (
                                 <Fragment key={`fg-${g.name}`}>
-                                  {/* Marker the sticky header reads; group 0 needs no inline
-                                      label because the header already names it. */}
+                                  {/* Marker the sticky header reads. */}
                                   <div data-group-name={g.name} style={gi === 0 ? undefined : { paddingTop: subBandSpacing().pt }}>
                                     {/* subBandSpacing().pt is 0 — a client label is just its own
                                         slot. The blank unit belongs to the category break above. */}
-                                    {gi > 0 && (
+                                    <SubGroupDrop kind={g.kind} id={g.id} cell={cellId}>
                                       <div className="h-[37px] px-[16px] flex items-center">
                                         {/* Full breadcrumb, not just the client: in a long category
                                             the sticky header scrolls out of reach and you lose which
@@ -12002,7 +12140,7 @@ export default function App() {
                                           {bandLabel}<Arrowhead /><span className="text-[#7a7a7a]">{g.name}</span>
                                         </p>
                                       </div>
-                                    )}
+                                    </SubGroupDrop>
                                   </div>
                                   {g.tasks.map((t) => {
                                     // Index within the FLAT cell order — the drag displacement
