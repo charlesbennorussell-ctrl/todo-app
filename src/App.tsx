@@ -5055,13 +5055,18 @@ function NextBandHeader({ label, bodyFont, onLabelClick, onAdd, addAriaLabel, ba
       raf = 0;
       const marks = Array.from(band.querySelectorAll<HTMLElement>('[data-group-name]'));
       if (!marks.length) { setActive(null); return; }
-      const threshold = row.getBoundingClientRect().bottom + 1;
-      // This bar names a group only once that group's OWN label row has scrolled
-      // fully underneath it, so the name and its echo are never on screen at once.
-      // Seeding with marks[0] dates from when group 0 had no inline row; every
-      // group carries one now, so the seed made the bar parrot the label sitting
-      // directly beneath it — visible doubling. And `bottom`, not `top`: a row
-      // still peeking out below the bar is legible and needs no echo.
+      // + CAL_GAP is load-bearing, not slop. runSnap parks a card on its 4px halo
+      // line (`box.top - 4 - restLine`, and restLine IS this bar's bottom edge), and
+      // a label row's bottom is exactly the next card's top — cards carry mb-[4px]
+      // with no top margin. So at every settled rest position the top group's label
+      // row clears this bar by exactly 4px: with a bare +1 the bar rejected the group
+      // actually filling the screen and kept naming the previous one, whose cards were
+      // entirely behind the bar. Measured, not deduced.
+      const threshold = row.getBoundingClientRect().bottom + CAL_GAP + 1;
+      // The bar names a group only once that group's OWN label row is underneath it,
+      // so the name and its echo are never on screen at once. Seeding with marks[0]
+      // dates from when group 0 had no inline row; every group carries one now, so
+      // the seed made the bar parrot the label sitting directly beneath it.
       let cur: string | null = null;
       for (const m of marks) {
         if (m.getBoundingClientRect().bottom <= threshold) cur = m.dataset.groupName ?? null;
@@ -5672,13 +5677,20 @@ function WeekCalendarMode({
               {listSequence.map((listId) => {
                 const label = LIST_TITLES[listId];
                 const bucket = tasksForCell(listId, d);
-                const items = bucket.map((t) => t.id);
                 const isPast = dayOffsetFromToday(d) < 0;
                 // Which switch owns this column: `today` for the today column (and
                 // anything at or before it once the window is scrolled back), otherwise
                 // the `tomorrow` switch, which governs the four following days as one.
                 const dayGrouped = dayOffsetFromToday(d) <= 0 ? subGroup.today : subGroup.tomorrow;
                 const dayGroups = dayGrouped ? buildSubGroups(bucket, listId) : flatGroup(bucket);
+                // dnd-kit reads each card's index from `items` and displaces siblings
+                // using rects[] in THAT order, so `items` must match the order the cards
+                // are actually emitted in. Grouping permutes them (buildSubGroups is a
+                // stable partition, and the bucket interleaves clients), so deriving
+                // `items` from the flat bucket made the displacement math compare cards
+                // that are nowhere near each other — cards leapt by arbitrary amounts
+                // mid-drag. Identical to the flat list whenever grouping is off.
+                const items = dayGroups.flatMap((g) => g.tasks.map((t) => t.id));
                 // Weekends are projects-only by default. Work/Admin sections appear only if they have
                 // content for that day, or while a drag is active so the user can drop onto them.
                 const isWeekend = d.getDay() === 0 || d.getDay() === 6;
@@ -5745,9 +5757,11 @@ function WeekCalendarMode({
                           <div data-group-name={g.name}>
                             <SubGroupDrop kind={g.kind} id={g.id} cell={`cal:${iso}:${listId}`}>
                               <div className="h-[37px] px-[16px] flex items-center">
-                                <p className={`${bodyFont} text-[#5e5e5e]`}>
-                                  {label}<Arrowhead /><span className="text-[#7a7a7a]">{g.name}</span>
-                                </p>
+                                {/* Just the group name: the band header directly above already says the
+                                      category, and repeating it stacked the same word twice. The
+                                      sticky bar still shows the full "Category > Group" once this
+                                      row scrolls underneath it, which is where the context is lost. */}
+                                <p className={`${bodyFont} text-[#7a7a7a]`}>{g.name}</p>
                               </div>
                             </SubGroupDrop>
                           </div>
@@ -5796,6 +5810,9 @@ function WeekCalendarMode({
                               taskOrder={taskOrder}
                               autoFocusEdit={t.id === newTaskId}
                               stacked
+                              // The group heading already names it — don't repeat it per card.
+                              hideClient={dayGrouped && listId !== 'personal'}
+                              hideProject={dayGrouped && listId === 'personal'}
                             />
                           );
                         })}
@@ -5862,7 +5879,6 @@ function WeekCalendarMode({
                 {listSequence.map((listId, bandIdx) => {
                   const label = LIST_TITLES[listId];
                   const bucket = nwBucketFor(listId);
-                  const items = bucket.map((t) => t.id);
                   // Milestones dated next week (or beyond, minus the Coming-Up ones already
                   // shown) matched to this band by effective list — pinned above the cards.
                   const bandMilestones = (tasks.filter((t) => {
@@ -5886,6 +5902,8 @@ function WeekCalendarMode({
                   // chose still drives which group leads.
                   const nwGrouped = subGroup.next;
                   const nwGroups = nwGrouped ? buildSubGroups(bucket, listId) : flatGroup(bucket);
+                  // Must follow the RENDERED order — see the day column's note.
+                  const items = nwGroups.flatMap((g) => g.tasks.map((t) => t.id));
                   return (
                     // Major category gap carries an EXTRA space unit (one label row on top of the
                     // one-card slot) so a category break reads louder than a client sub-break.
@@ -5927,10 +5945,8 @@ function WeekCalendarMode({
                             <div data-group-name={g.name}>
                               <SubGroupDrop kind={g.kind} id={g.id} cell={cellId}>
                                 <div className="h-[37px] px-[16px] flex items-center">
-                                  {/* Breadcrumb — see the focus column's note. */}
-                                  <p className={`${bodyFont} text-[#5e5e5e]`}>
-                                    {label}<Arrowhead /><span className="text-[#7a7a7a]">{g.name}</span>
-                                  </p>
+                                  {/* Group name only — see the day column's note. */}
+                                  <p className={`${bodyFont} text-[#7a7a7a]`}>{g.name}</p>
                                 </div>
                               </SubGroupDrop>
                             </div>
@@ -5970,8 +5986,10 @@ function WeekCalendarMode({
                               autoFocusEdit={t.id === newTaskId}
                               stacked
                               // The group heading already names it — don't repeat it per card.
-                              hideClient={listId !== 'personal'}
-                              hideProject={listId === 'personal'}
+                              // Gated: with sub-grouping off there IS no heading, and hiding
+                              // it anyway left the client showing nowhere in the column.
+                              hideClient={nwGrouped && listId !== 'personal'}
+                              hideProject={nwGrouped && listId === 'personal'}
                             />
                           );
                             })}
@@ -10028,11 +10046,15 @@ export default function App() {
         setTasks((prev) => prev.map((t) => {
           if (t.id !== activeTaskId) return t;
           if (kind === 'project') return { ...t, projectId: gid || undefined };
-          // Client group. A project belonging to a DIFFERENT client would
-          // contradict the new client and put the card straight back where it
-          // came from, so it is cleared; a project under the same client stays.
+          // Client group. A project whose client MATCHES the target group stays;
+          // one under a different client is cleared, since it would contradict the
+          // new client and put the card straight back where it came from.
+          // `?? ''` matters: '' is the Misc (no-client) group, and a project with no
+          // client belongs there. Treating no-client as falsy detached such a project
+          // whenever its card was dropped on its OWN heading — a silent data loss on
+          // an ordinary reorder, since Portfolio/Mindmap/Dome-0/Vectron have no client.
           const proj = t.projectId ? projects.find((pp) => pp.id === t.projectId) : undefined;
-          const keepProject = !!proj && !!gid && proj.clientId === gid;
+          const keepProject = !!proj && (proj.clientId ?? '') === gid;
           return { ...t, clientId: gid || undefined, projectId: keepProject ? t.projectId : undefined };
         }));
       }
@@ -12050,6 +12072,27 @@ export default function App() {
                     }).sort((a, b) => (a.deadline! < b.deadline! ? -1 : a.deadline! > b.deadline! ? 1 : a.title.localeCompare(b.title)));
                     const cellId = `cal:${isos[0]}:${listId}`;
                     const cellTasks = [...bandMilestones, ...bucket];
+                    // The rendered order. Grouping permutes cellTasks (the partition is
+                    // stable, but clients interleave in the bucket), and SortableContext's
+                    // `items` below must match what is actually emitted — see the note there.
+                    const focusGroups: { name: string; kind: 'client' | 'project'; id: string; tasks: Task[] }[] = [];
+                    if (grouped) {
+                      for (const t of cellTasks) {
+                        const proj = t.projectId ? projects.find((pp) => pp.id === t.projectId) : undefined;
+                        let name: string; let kind: 'client' | 'project'; let gid: string;
+                        if (listId === 'personal') {
+                          name = proj?.name || 'Misc'; kind = 'project'; gid = proj?.id || '';
+                        } else {
+                          const cid = t.clientId ?? proj?.clientId;
+                          const cl = cid && cid !== PERSONAL_CLIENT_ID ? clients.find((x) => x.id === cid) : undefined;
+                          name = cl?.short || cl?.name || 'Misc'; kind = 'client'; gid = cl?.id || '';
+                        }
+                        const g = focusGroups.find((x) => x.name === name);
+                        if (g) g.tasks.push(t); else focusGroups.push({ name, kind, id: gid, tasks: [t] });
+                      }
+                    } else {
+                      focusGroups.push({ name: '', kind: 'client', id: '', tasks: cellTasks });
+                    }
                     // Drag-displace (same engine as the calendar view): the SOURCE band leans on
                     // dnd-kit's native sortable shift; a DESTINATION band opens an insertion gap
                     // above the card being dragged over so the landing spot is visible. Only the
@@ -12106,30 +12149,20 @@ export default function App() {
                               onClick={() => addBlankTaskInSection(listId, section, focusProjectId ? { projectId: focusProjectId } : focusClientId ? { clientId: focusClientId } : undefined)}
                             />
                           )}
-                          <SortableContext items={cellTasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
-                            {/* Next column: cards are grouped by client (by PROJECT under
-                                Personal) with the group name above each run. Build one ORDERED
-                                list of labels + tasks so a label always sits with its own cards. */}
+                          {/* Built OUT here, not inside the render IIFE below, because the
+                              SortableContext's `items` has to follow the order the cards are
+                              actually emitted in. dnd-kit indexes each card by items.indexOf(id)
+                              and displaces siblings using rects[] in that order, so feeding it
+                              the flat cellTasks while rendering group order made it compare
+                              cards that are nowhere near each other — cards jumped by arbitrary
+                              amounts mid-drag. Groups carry the underlying id, not just the
+                              label, so the header can be a drop target that reassigns to THIS
+                              client (or project, inside Personal). '' = the Misc catch-all,
+                              which drops clear the assignment instead of setting one. */}
+                          <SortableContext items={focusGroups.flatMap((g) => g.tasks).map((t) => t.id)} strategy={verticalListSortingStrategy}>
                             {(() => {
                               if (!grouped) return null;
-                              // Groups carry the underlying id, not just the label, so the
-                              // header can be a drop target that reassigns to THIS client
-                              // (or project, inside Personal). '' = the Misc catch-all,
-                              // which drops clear the assignment instead of setting one.
-                              const groups: { name: string; kind: 'client' | 'project'; id: string; tasks: Task[] }[] = [];
-                              for (const t of cellTasks) {
-                                const proj = t.projectId ? projects.find((pp) => pp.id === t.projectId) : undefined;
-                                let name: string; let kind: 'client' | 'project'; let gid: string;
-                                if (listId === 'personal') {
-                                  name = proj?.name || 'Misc'; kind = 'project'; gid = proj?.id || '';
-                                } else {
-                                  const cid = t.clientId ?? proj?.clientId;
-                                  const cl = cid && cid !== PERSONAL_CLIENT_ID ? clients.find((x) => x.id === cid) : undefined;
-                                  name = cl?.short || cl?.name || 'Misc'; kind = 'client'; gid = cl?.id || '';
-                                }
-                                const g = groups.find((x) => x.name === name);
-                                if (g) g.tasks.push(t); else groups.push({ name, kind, id: gid, tasks: [t] });
-                              }
+                              const groups = focusGroups;
                               return groups.map((g, gi) => (
                                 <Fragment key={`fg-${g.name}`}>
                                   {/* Marker the sticky header reads. */}
@@ -12138,13 +12171,10 @@ export default function App() {
                                         slot. The blank unit belongs to the category break above. */}
                                     <SubGroupDrop kind={g.kind} id={g.id} cell={cellId}>
                                       <div className="h-[37px] px-[16px] flex items-center">
-                                        {/* Full breadcrumb, not just the client: in a long category
-                                            the sticky header scrolls out of reach and you lose which
-                                            category you're in. Category dim, client bright — same
-                                            weighting the sticky bar uses. */}
-                                        <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap text-[#5e5e5e]">
-                                          {bandLabel}<Arrowhead /><span className="text-[#7a7a7a]">{g.name}</span>
-                                        </p>
+                                        {/* Group name only — see the day column's note. The sticky
+                                            bar is `sticky top-0`, so it never actually scrolls out of
+                                            reach; it carries the category on this row's behalf. */}
+                                        <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap text-[#7a7a7a]">{g.name}</p>
                                       </div>
                                     </SubGroupDrop>
                                   </div>
