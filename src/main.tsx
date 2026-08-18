@@ -157,8 +157,11 @@ const SplashScreen = ({ fading = false }: { fading?: boolean }) => {
   );
 };
 
-// Holds the black launch ground for the frames BEFORE React paints, so the app
-// opens black rather than flashing the themed page colour first.
+// index.html already ships <body class="booting"> so the FIRST painted frame is
+// black. This is the fallback for any entry that does NOT go through that markup
+// (a dev harness, a future SSR shell); the desktop app is not one of them — it
+// loads the hosted URL, so it gets the real index.html. Adding a class that is
+// already there is a no-op, so this is free.
 if (typeof document !== 'undefined') document.body.classList.add('booting');
 
 // Mounts the app immediately, then dissolves the splash over it. The app fades
@@ -320,6 +323,13 @@ const Providers = ({ member }: { member: Membership | null }) => (
           // rooms have no `theme` key and fall back to the localStorage cache then defaults,
           // and get one written the first time a colour is changed in Settings.
           theme: { bg: '#1c1b19', accent: '#7666fc' },
+          // Auto-capitalisation mode, shared for the same reason. New rooms carry the key
+          // from birth; existing rooms get it from the desktop's one-time backfill.
+          caseMode: 'off',
+          // Sub-grouping switches, shared for the same reason. Seeds a NEW room only; existing
+          // rooms have no `subGroup` key, fall back to the localStorage cache then the defaults,
+          // and get one written the first time a switch is flipped in Settings.
+          subGroup: { today: false, tomorrow: false, next: true },
         }}
       >
         <ClientSideSuspense fallback={<Loading />}>
@@ -346,6 +356,14 @@ type GatePhase =
   | { k: 'noAccess'; email: string }
   | { k: 'member'; member: Membership }
   | { k: 'trouble'; detail: string };
+
+// 'boot' and 'checking' render the launch screen, which by design says nothing —
+// so a wedged getSession() or a hung members query would be indistinguishable
+// from a slow one, forever, behind a black rectangle. Give the stall a deadline
+// and fall through to AuthTroubleScreen, which carries Retry, Sign out and the
+// Export-local-backup escape hatch. Independent of RECOVER_MS above: that timer
+// only starts once the room providers have mounted, which is strictly later.
+const BOOT_STALL_MS = 12000;
 
 const AuthGate = () => {
   const [phase, setPhase] = useState<GatePhase>({ k: 'boot' });
@@ -441,14 +459,34 @@ const AuthGate = () => {
     return () => { sub.subscription.unsubscribe(); offHealth(); };
   }, [evaluate]);
 
+  // Re-arms on boot→checking on purpose: reaching 'checking' proves getSession
+  // actually landed, so the membership query has earned its own full deadline
+  // rather than inheriting the remains of the previous one. A late evaluate()
+  // that resolves to 'member' simply overwrites this — last write wins.
+  useEffect(() => {
+    if (phase.k !== 'boot' && phase.k !== 'checking') return;
+    const t = window.setTimeout(() => {
+      // Release the in-flight guard first. `evaluate` opens with
+      // `if (evaluatingRef.current) return`, so a run that never settled would
+      // still hold it — and AuthTroubleScreen's Retry calls evaluate(), which
+      // would early-return and do nothing at all. Declaring the stall over means
+      // declaring that run abandoned.
+      evaluatingRef.current = false;
+      setPhase({ k: 'trouble', detail: 'sign-in did not respond' });
+    }, BOOT_STALL_MS);
+    return () => window.clearTimeout(t);
+  }, [phase.k]);
+
   switch (phase.k) {
     case 'boot':
     case 'checking':
-      return (
-        <div style={{ minHeight: '100vh', background: 'var(--app-bg, #1c1b19)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: '#666', fontFamily: 'sans-serif', fontSize: 14 }}>
-          Connecting…
-        </div>
-      );
+      // The same launch screen the room-connect fallback shows. Anything else
+      // here — a themed ground, the word "Connecting…" — is a second screen
+      // wedged between the black first frame and the splash, and that IS the
+      // flicker. SplashScreen is position:fixed and needs no layout parent;
+      // body.booting is the ground its mark fades up from. splashHasEntered
+      // then keeps the Loading and SplashGate mounts from re-fading it.
+      return <SplashScreen />;
     case 'signedOut':
       return <SignInScreen onHaveInvite={(token) => setPhase({ k: 'invite', token })} />;
     case 'invite':

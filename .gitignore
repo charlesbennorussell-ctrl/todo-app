@@ -2,6 +2,9 @@ node_modules
 dist
 .env
 .env.local
+# Any local env override (.env.development.local, .env.production.local). These hold
+# keys and per-machine overrides and must never be committed.
+.env*.local
 .DS_Store
 
 # Editor / tooling local config

@@ -186,6 +186,78 @@ export function useSetSharedTheme() {
   }, []);
 }
 
+// ── Shared sub-grouping ─────────────────────────────────────────────────────────────────────
+// Same story as the theme above: these three switches lived only in localStorage, so the desktop
+// and the phone disagreed about whether a column was grouped. The room is the source of truth;
+// localStorage stays as a per-device CACHE, which does two jobs — it gives a surface the right
+// shape on its first frame before Storage resolves, and it carries the preference a user already
+// set on a room that predates the key.
+export type SubGroupPrefs = { today: boolean; tomorrow: boolean; next: boolean };
+export const SUBGROUP_DEFAULT: SubGroupPrefs = { today: false, tomorrow: false, next: true };
+
+/** Reads the pre-connect cache. Corrupt or partial JSON degrades to the defaults, never throws. */
+function readSubGroupCache(): SubGroupPrefs {
+  if (typeof window === 'undefined') return SUBGROUP_DEFAULT;
+  try {
+    const raw = window.localStorage.getItem('todo-app-subgroup');
+    if (!raw) return SUBGROUP_DEFAULT;
+    return { ...SUBGROUP_DEFAULT, ...(JSON.parse(raw) as Partial<SubGroupPrefs>) };
+  } catch { return SUBGROUP_DEFAULT; }
+}
+
+/** The room's sub-grouping switches. Call once per surface (App, MobileApp). */
+export function useSharedSubGroup(): SubGroupPrefs {
+  const room = useStorage((root) => (root as unknown as { subGroup?: Partial<SubGroupPrefs> }).subGroup);
+  // Read once per mount. After that the room is authoritative, and re-reading would let the
+  // cache-write effect below feed its own output back in.
+  const [cache] = useState(readSubGroupCache);
+  // Per-KEY fallback, and `??` rather than `||`: `false` is a real answer here, so a room that
+  // has only ever written `next` must not drag today/tomorrow back to the default.
+  const today = room?.today ?? cache.today;
+  const tomorrow = room?.tomorrow ?? cache.tomorrow;
+  const next = room?.next ?? cache.next;
+  const resolved = useMemo(() => ({ today, tomorrow, next }), [today, tomorrow, next]);
+  useEffect(() => {
+    // Only refresh the cache once the room has actually spoken — otherwise a room that predates
+    // the key would overwrite this device's saved preference with the defaults on every load.
+    if (!room) return;
+    try { localStorage.setItem('todo-app-subgroup', JSON.stringify(resolved)); } catch { /* ignore */ }
+  }, [room, resolved]);
+  return resolved;
+}
+
+/** Writes one switch into the room. Merges, so setting `next` keeps `today` and `tomorrow`. */
+export function useSetSharedSubGroup() {
+  return useMutation(({ storage }, patch: Partial<SubGroupPrefs>) => {
+    const current = (storage.get('subGroup' as never) as Partial<SubGroupPrefs> | undefined) ?? {};
+    storage.set('subGroup' as never, { ...current, ...patch } as never);
+  }, []);
+}
+
+/** The room's auto-capitalisation mode, falling back to this device's cached value pre-connect
+ *  (and on rooms created before the key existed). Same room-wins shape as useSharedTheme. */
+export function useSharedCaseMode(): CaseMode {
+  const roomMode = useStorage((root) => (root as unknown as { caseMode?: CaseMode }).caseMode);
+  // Mirror the resolved value down into this device's cache so the NEXT cold start is
+  // already right before Storage answers. Guarded on the room having actually spoken —
+  // writing the fallback back down would just cement whatever this device already had.
+  useEffect(() => {
+    if (roomMode === undefined || typeof window === 'undefined') return;
+    try { window.localStorage.setItem('todo-app-case-mode', roomMode); } catch { /* ignore */ }
+  }, [roomMode]);
+  return roomMode ?? readCaseMode();
+}
+
+/** Raw room value — `undefined` means "this room has never had the key", which is different
+ *  from "the key says off". Only the backfill below needs to tell those apart. */
+export function useRawRoomCaseMode(): CaseMode | undefined {
+  return useStorage((root) => (root as unknown as { caseMode?: CaseMode }).caseMode);
+}
+/** Writes the mode into the room so desktop, PIP and the phone agree. */
+export function useSetSharedCaseMode() {
+  return useMutation(({ storage }, v: CaseMode) => { storage.set('caseMode' as never, v as never); }, []);
+}
+
 // One row of the Settings → Colors module: a native color well + hex readout that writes a CSS
 // custom property live (and persists it). Everything themeable reads var(--app-bg)/var(--app-accent),
 // so moving this well repaints the whole app instantly. Reset clears the override back to default.
@@ -5437,6 +5509,32 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
   );
 }
 
+// Sub-group partition, shared by the calendar, the focus columns and the PHONE — one
+// rule in one place, because three copies of it drifting apart is exactly the bug this
+// grouping feature would produce. One level deeper than the category band: by CLIENT
+// normally, by PROJECT under Personal, which has no clients (everything there hangs off
+// the Personal system client). Groups keep the bucket's existing order, so whatever sort
+// produced the bucket still decides which group leads. The underlying id rides along with
+// the label so a header can double as a drop target that reassigns; '' is the Misc
+// catch-all, where a drop CLEARS the assignment instead of setting one.
+export function buildSubGroupsShared(bucket: Task[], listId: ListId, projects: Project[], clients: Client[]) {
+  const out: { name: string; kind: 'client' | 'project'; id: string; tasks: Task[] }[] = [];
+  for (const t of bucket) {
+    const proj = t.projectId ? projects.find((p) => p.id === t.projectId) : undefined;
+    let name: string; let kind: 'client' | 'project'; let gid: string;
+    if (listId === 'personal') {
+      name = proj?.name || 'Misc'; kind = 'project'; gid = proj?.id || '';
+    } else {
+      const cid = t.clientId ?? proj?.clientId;
+      const cl = cid && cid !== PERSONAL_CLIENT_ID ? clients.find((x) => x.id === cid) : undefined;
+      name = cl?.short || cl?.name || 'Misc'; kind = 'client'; gid = cl?.id || '';
+    }
+    const g = out.find((x) => x.name === name);
+    if (g) g.tasks.push(t); else out.push({ name, kind, id: gid, tasks: [t] });
+  }
+  return out;
+}
+
 function WeekCalendarMode({
   tasks, projects, clients, onToggleTask, onRenameTask, onDeleteTask, onEditTask, onQuickEditTask, onAddSiblingTask, onAddTaskOnDay, onSyncSections, isAnyDragging,
   activeTask, overTask, activeCellId, activeSlotHeight, taskOrder = 'ptc', listSequence, newTaskId = null, onRescheduleTask,
@@ -5493,29 +5591,9 @@ function WeekCalendarMode({
   const todayIso = dateToISO(new Date());
 
   // One grouping rule for EVERY calendar column (day cells and the Next queue):
-  // one level deeper than the category band — by CLIENT normally, by PROJECT
-  // under Personal, which has no clients (everything there hangs off the Personal
-  // system client). Groups keep the bucket's existing order, so whatever sort the
-  // user chose still decides which group leads. The underlying id rides along with
-  // the label so the header can double as a drop target that reassigns.
-  // '' = the Misc catch-all; a drop there CLEARS the assignment.
-  const buildSubGroups = (bucket: Task[], listId: ListId) => {
-    const out: { name: string; kind: 'client' | 'project'; id: string; tasks: Task[] }[] = [];
-    for (const t of bucket) {
-      const proj = t.projectId ? projects.find((p) => p.id === t.projectId) : undefined;
-      let name: string; let kind: 'client' | 'project'; let gid: string;
-      if (listId === 'personal') {
-        name = proj?.name || 'Misc'; kind = 'project'; gid = proj?.id || '';
-      } else {
-        const cid = t.clientId ?? proj?.clientId;
-        const cl = cid && cid !== PERSONAL_CLIENT_ID ? clients.find((x) => x.id === cid) : undefined;
-        name = cl?.short || cl?.name || 'Misc'; kind = 'client'; gid = cl?.id || '';
-      }
-      const g = out.find((x) => x.name === name);
-      if (g) g.tasks.push(t); else out.push({ name, kind, id: gid, tasks: [t] });
-    }
-    return out;
-  };
+  // Binds the shared rule (buildSubGroupsShared, above this component) to this view's
+  // projects/clients, so the call sites below read the same as they always did.
+  const buildSubGroups = (bucket: Task[], listId: ListId) => buildSubGroupsShared(bucket, listId, projects, clients);
   // Ungrouped columns still run through the same renderer — one anonymous group.
   const flatGroup = (bucket: Task[]) => [{ name: '', kind: 'client' as const, id: '', tasks: bucket }];
 
@@ -7404,6 +7482,119 @@ function TaskQuickEdit({
   );
 }
 
+// Title-case auto-conversion mode.
+//   'off'   — no conversion
+//   'title' — "Buy Milk and Eggs" (small words like "and / the / of" stay lowercase)
+// Brand-name vocabulary + ALL-CAPS acronyms are preserved. Default 'off' (don't surprise the
+// user; they opt in). Module-level because the phone applies the same rules on its own writes —
+// a title typed on the phone must sync back already-capitalized rather than waiting for a
+// desktop to open and fix it.
+export type CaseMode = 'off' | 'title';
+
+export const CASE_MODE_KEY = 'todo-app-case-mode';
+// This reads the per-device CACHE. The mode itself now lives in the room (see
+// useSharedCaseMode) for the same reason the theme does — the phone has no settings UI, so
+// left per-device it could never learn that the desktop had switched the mode on. This is
+// only the pre-connect fallback and the value the desktop donates on a room that predates
+// the key.
+export function readCaseMode(): CaseMode {
+  if (typeof window === 'undefined') return 'off';
+  try { return window.localStorage.getItem(CASE_MODE_KEY) === 'title' ? 'title' : 'off'; } catch { return 'off'; }
+}
+
+// Words that title-case-style guides keep lowercased even mid-sentence (articles, short
+// conjunctions, prepositions). Used in 'title' mode only. Note: 'up' is a particle that often
+// pairs with a verb ("Catch Up", "Sign Up") so we capitalize it.
+const TITLE_CASE_LOWER = new Set(['a', 'an', 'and', 'as', 'at', 'but', 'by', 'for', 'in', 'nor', 'of', 'on', 'or', 'so', 'the', 'to', 'yet', 'via', 'vs', 'vs.']);
+// Common-typo fixes — applied first, before the case logic. Map of lowercased core →
+// canonical form (preserving the apostrophe / canonical capitalization).
+const TYPO_FIXES: Record<string, string> = {
+  im: "I'm",
+  ive: "I've",
+  ill: "I'll",
+  id: "I'd",
+  dont: "don't",
+  cant: "can't",
+  wont: "won't",
+  isnt: "isn't",
+  arent: "aren't",
+  wasnt: "wasn't",
+  werent: "weren't",
+  didnt: "didn't",
+  doesnt: "doesn't",
+  hasnt: "hasn't",
+  havent: "haven't",
+  couldnt: "couldn't",
+  wouldnt: "wouldn't",
+  shouldnt: "shouldn't",
+  youre: "you're",
+  youll: "you'll",
+  youve: "you've",
+  youd: "you'd",
+  theyre: "they're",
+  theyll: "they'll",
+  theyve: "they've",
+  theyd: "they'd",
+  were: "we're", // ambiguous with past-tense "were" — see comment below
+  well: "we'll", // same caveat
+  weve: "we've",
+  wed: "we'd",
+  its: "it's", // ambiguous with possessive "its"
+  lets: "let's",
+};
+// The above includes a handful of ambiguous short forms ("its", "were", "well"). We deliberately
+// SKIP those at runtime — too easy to wreck legitimate uses ("the dog wagged its tail",
+// "all is well", "they were here"). Only unambiguous contraction-without-apostrophe fixes fire.
+const SKIP_AMBIGUOUS = new Set(['its', 'were', 'well']);
+
+/** Pure. `vocab` is the client / project / people name list whose capitalization outranks the
+ *  case rules — the caller owns it because the desktop holds it in a ref and the phone derives
+ *  it from storage. Idempotent: feeding its own output back through returns the same string. */
+export function convertTitleCase(s: string, mode: CaseMode, vocab: string[] = []): string {
+  if (!s || mode === 'off') return s;
+  const vocabMap = new Map<string, string>();
+  for (const v of vocab) vocabMap.set(v.toLowerCase(), v);
+  // Tokenize keeping whitespace so we can re-stitch with original spacing.
+  const parts = s.split(/(\s+)/);
+  let firstWordSeen = false;
+  return parts.map((part) => {
+    if (/^\s*$/.test(part)) return part;
+    // Strip leading/trailing punctuation for matching, re-attach after.
+    const lead = part.match(/^[^\p{L}\p{N}]+/u)?.[0] ?? '';
+    const trail = part.match(/[^\p{L}\p{N}]+$/u)?.[0] ?? '';
+    const core = part.slice(lead.length, part.length - trail.length);
+    if (!core) return part;
+    const isFirst = !firstWordSeen;
+    firstWordSeen = true;
+    // Vocabulary match — restore the canonical case from the vocab entry.
+    const v = vocabMap.get(core.toLowerCase());
+    if (v) return lead + v + trail;
+    // Common-typo fix: "Im" → "I'm", "dont" → "don't", etc. Skip ambiguous shorts.
+    const lowerCore = core.toLowerCase();
+    if (TYPO_FIXES[lowerCore] && !SKIP_AMBIGUOUS.has(lowerCore)) {
+      // Capitalise it when it leads, like every other first word. This branch used to
+      // return before the first-word rule below, which both produced a visibly wrong
+      // "don't Panic" for "dont panic" AND made the function non-idempotent — a second
+      // pass then said "Don't Panic". Several callers compare convert(x) to x to decide
+      // whether anything changed, so idempotence here is load-bearing, not tidiness.
+      const fixed = TYPO_FIXES[lowerCore];
+      return lead + (isFirst ? fixed.charAt(0).toUpperCase() + fixed.slice(1) : fixed) + trail;
+    }
+    // Already ALL-CAPS (length ≥ 2, contains a letter) → presumed acronym, leave alone.
+    if (core.length >= 2 && core === core.toUpperCase() && /\p{L}/u.test(core)) return part;
+    // Mixed case (e.g. iPhone, eBay) — preserve user-typed unusual casing.
+    const titleCase = core.charAt(0).toUpperCase() + core.slice(1).toLowerCase();
+    const lower = core.toLowerCase();
+    const upper = core.toUpperCase();
+    if (core !== titleCase && core !== lower && core !== upper) return part;
+    // Title case: first word capitalized; otherwise capitalize unless it's a small word
+    // (article / preposition / short conjunction).
+    if (isFirst) return lead + titleCase + trail;
+    if (TITLE_CASE_LOWER.has(lower)) return lead + lower + trail;
+    return lead + titleCase + trail;
+  }).join('');
+}
+
 export default function App() {
   // Paint with the ROOM's theme colours, so this surface matches the phone and PIP exactly.
   useSharedTheme();
@@ -7541,23 +7732,17 @@ export default function App() {
   // same thing in Focus and in Calendar. Calendar's middle day columns (tomorrow
   // + the three after it) follow the 'tomorrow' switch. Defaults reproduce
   // today's behaviour exactly: only Next is grouped.
-  const [subGroup, setSubGroupState] = useState<{ today: boolean; tomorrow: boolean; next: boolean }>(() => {
-    const fallback = { today: false, tomorrow: false, next: true };
-    if (typeof window === 'undefined') return fallback;
-    try {
-      const raw = window.localStorage.getItem('todo-app-subgroup');
-      if (!raw) return fallback;
-      const v = JSON.parse(raw) as Partial<typeof fallback>;
-      return { ...fallback, ...v };
-    } catch { return fallback; }
-  });
+  // Room-backed like the theme — the phone was reading its own per-device copy, so a
+  // column could be grouped here and flat there. useSharedSubGroup resolves
+  // room → localStorage cache → defaults, which is what keeps pre-existing rooms honest.
+  const subGroup = useSharedSubGroup();
+  const setRoomSubGroup = useSetSharedSubGroup();
   const setSubGroup = useCallback((k: 'today' | 'tomorrow' | 'next', v: boolean) => {
-    setSubGroupState((prev) => {
-      const next = { ...prev, [k]: v };
-      try { window.localStorage.setItem('todo-app-subgroup', JSON.stringify(next)); } catch {}
-      return next;
-    });
-  }, []);
+    // Cache locally first so this device is already right on its next cold start even if the
+    // room write is still in flight; the room then fans the change out to the phone and the PIP.
+    try { window.localStorage.setItem('todo-app-subgroup', JSON.stringify({ ...subGroup, [k]: v })); } catch {}
+    setRoomSubGroup({ [k]: v });
+  }, [subGroup, setRoomSubGroup]);
   // A calendar day column maps onto one of the three scopes by its offset.
   const subGroupForOffset = useCallback((offset: number) => (
     offset <= 0 ? subGroup.today : subGroup.tomorrow
@@ -7660,22 +7845,28 @@ export default function App() {
   // scenario where the user wants it off). Constant + no-op setter for callsite compat.
   const [tomorrowEnabled] = useState<boolean>(true);
   const setTomorrowEnabled = useCallback((_v: boolean) => {}, []);
-  // Title-case auto-conversion mode. 2s after blur on a title, the text is rewritten in the
-  // chosen mode:
-  //   'off'   — no conversion
-  //   'title' — "Buy Milk and Eggs" (small words like "and / the / of" stay lowercase)
-  // Brand-name vocabulary + ALL-CAPS acronyms are preserved. Default 'off' (don't surprise
-  // the user; they opt in).
-  type CaseMode = 'off' | 'title';
-  const [caseMode, setCaseModeState] = useState<CaseMode>(() => {
-    if (typeof window === 'undefined') return 'off';
-    const v = window.localStorage.getItem('todo-app-case-mode');
-    return v === 'title' ? 'title' : 'off';
-  });
+  // The mode, its rules and its reader are module-level now (see convertTitleCase) so the phone
+  // applies exactly the same conversion on its own writes. Desktop still writes 2s after blur.
+  // ROOM is the source of truth; localStorage is only the pre-connect cache (as ThemeColorPicker).
+  const roomCaseMode = useSharedCaseMode();
+  const setRoomCaseMode = useSetSharedCaseMode();
+  // Backfill, once, on rooms that predate this key. Without it the key only ever appears
+  // when someone happens to re-toggle the setting, and until then the PHONE — which has no
+  // settings UI and therefore no local value of its own — reads its own empty cache as
+  // 'off' and quietly stores every title raw. The desktop is the only surface with a real
+  // preference to donate, so it is the one that writes. Writing makes the raw value defined,
+  // so this fires exactly once.
+  const rawRoomCaseMode = useRawRoomCaseMode();
+  useEffect(() => {
+    if (rawRoomCaseMode === undefined) setRoomCaseMode(readCaseMode());
+  }, [rawRoomCaseMode, setRoomCaseMode]);
+  const [caseMode, setCaseModeState] = useState<CaseMode>(readCaseMode);
+  useEffect(() => { setCaseModeState(roomCaseMode); }, [roomCaseMode]);
   const setCaseMode = useCallback((v: CaseMode) => {
     setCaseModeState(v);
-    try { window.localStorage.setItem('todo-app-case-mode', v); } catch {}
-  }, []);
+    try { window.localStorage.setItem(CASE_MODE_KEY, v); } catch {}
+    setRoomCaseMode(v);   // → the phone sees the toggle
+  }, [setRoomCaseMode]);
   // Card density: 2 = the two-line card (title on top, meta below — the default); 1 = a single
   // continuous line (title, then client › project, then deadline) that aggressively truncates.
   const [cardRows, setCardRowsState] = useState<1 | 2>(() => {
@@ -8060,88 +8251,10 @@ export default function App() {
     for (const pr of people) { if (pr.short) vocab.push(pr.short); if (pr.name) vocab.push(pr.name); }
     vocabRef.current = vocab;
   }, [clients, projects, people]);
-  // Words that title-case-style guides keep lowercased even mid-sentence (articles, short
-  // conjunctions, prepositions). Used in 'title' mode only. Note: 'up' is a particle that often
-  // pairs with a verb ("Catch Up", "Sign Up") so we capitalize it.
-  const TITLE_CASE_LOWER = new Set(['a', 'an', 'and', 'as', 'at', 'but', 'by', 'for', 'in', 'nor', 'of', 'on', 'or', 'so', 'the', 'to', 'yet', 'via', 'vs', 'vs.']);
-  // Common-typo fixes — applied first, before the case logic. Map of lowercased core →
-  // canonical form (preserving the apostrophe / canonical capitalization).
-  const TYPO_FIXES: Record<string, string> = {
-    im: "I'm",
-    ive: "I've",
-    ill: "I'll",
-    id: "I'd",
-    dont: "don't",
-    cant: "can't",
-    wont: "won't",
-    isnt: "isn't",
-    arent: "aren't",
-    wasnt: "wasn't",
-    werent: "weren't",
-    didnt: "didn't",
-    doesnt: "doesn't",
-    hasnt: "hasn't",
-    havent: "haven't",
-    couldnt: "couldn't",
-    wouldnt: "wouldn't",
-    shouldnt: "shouldn't",
-    youre: "you're",
-    youll: "you'll",
-    youve: "you've",
-    youd: "you'd",
-    theyre: "they're",
-    theyll: "they'll",
-    theyve: "they've",
-    theyd: "they'd",
-    were: "we're", // ambiguous with past-tense "were" — see comment below
-    well: "we'll", // same caveat
-    weve: "we've",
-    wed: "we'd",
-    its: "it's", // ambiguous with possessive "its"
-    lets: "let's",
-  };
-  // The above includes a handful of ambiguous short forms ("its", "were", "well"). We deliberately
-  // SKIP those at runtime — too easy to wreck legitimate uses ("the dog wagged its tail",
-  // "all is well", "they were here"). Only unambiguous contraction-without-apostrophe fixes fire.
-  const SKIP_AMBIGUOUS = new Set(['its', 'were', 'well']);
-  const sentenceCaseConvert = useCallback((s: string, mode: CaseMode): string => {
-    if (!s || mode === 'off') return s;
-    const vocabMap = new Map<string, string>();
-    for (const v of vocabRef.current) vocabMap.set(v.toLowerCase(), v);
-    // Tokenize keeping whitespace so we can re-stitch with original spacing.
-    const parts = s.split(/(\s+)/);
-    let firstWordSeen = false;
-    return parts.map((part) => {
-      if (/^\s*$/.test(part)) return part;
-      // Strip leading/trailing punctuation for matching, re-attach after.
-      const lead = part.match(/^[^\p{L}\p{N}]+/u)?.[0] ?? '';
-      const trail = part.match(/[^\p{L}\p{N}]+$/u)?.[0] ?? '';
-      const core = part.slice(lead.length, part.length - trail.length);
-      if (!core) return part;
-      const isFirst = !firstWordSeen;
-      firstWordSeen = true;
-      // Vocabulary match — restore the canonical case from the vocab entry.
-      const v = vocabMap.get(core.toLowerCase());
-      if (v) return lead + v + trail;
-      // Common-typo fix: "Im" → "I'm", "dont" → "don't", etc. Skip ambiguous shorts.
-      const lowerCore = core.toLowerCase();
-      if (TYPO_FIXES[lowerCore] && !SKIP_AMBIGUOUS.has(lowerCore)) {
-        return lead + TYPO_FIXES[lowerCore] + trail;
-      }
-      // Already ALL-CAPS (length ≥ 2, contains a letter) → presumed acronym, leave alone.
-      if (core.length >= 2 && core === core.toUpperCase() && /\p{L}/u.test(core)) return part;
-      // Mixed case (e.g. iPhone, eBay) — preserve user-typed unusual casing.
-      const titleCase = core.charAt(0).toUpperCase() + core.slice(1).toLowerCase();
-      const lower = core.toLowerCase();
-      const upper = core.toUpperCase();
-      if (core !== titleCase && core !== lower && core !== upper) return part;
-      // Title case: first word capitalized; otherwise capitalize unless it's a small word
-      // (article / preposition / short conjunction).
-      if (isFirst) return lead + titleCase + trail;
-      if (TITLE_CASE_LOWER.has(lower)) return lead + lower + trail;
-      return lead + titleCase + trail;
-    }).join('');
-  }, []);
+  // Binding over the module-level converter (see convertTitleCase) — it supplies the live
+  // vocabulary so every callsite here keeps its existing (s, mode) shape. MobileApp imports
+  // the module function directly rather than reaching into this component.
+  const sentenceCaseConvert = useCallback((s: string, mode: CaseMode): string => convertTitleCase(s, mode, vocabRef.current), []);
   // Schedule (or re-schedule) the per-item 30-minute timer. Each subsequent edit on the same
   // item RESETS the timer — the conversion only fires once the user has been quiet on that
   // specific item for 30 min straight. Other items' timers are independent.
@@ -12075,24 +12188,9 @@ export default function App() {
                     // The rendered order. Grouping permutes cellTasks (the partition is
                     // stable, but clients interleave in the bucket), and SortableContext's
                     // `items` below must match what is actually emitted — see the note there.
-                    const focusGroups: { name: string; kind: 'client' | 'project'; id: string; tasks: Task[] }[] = [];
-                    if (grouped) {
-                      for (const t of cellTasks) {
-                        const proj = t.projectId ? projects.find((pp) => pp.id === t.projectId) : undefined;
-                        let name: string; let kind: 'client' | 'project'; let gid: string;
-                        if (listId === 'personal') {
-                          name = proj?.name || 'Misc'; kind = 'project'; gid = proj?.id || '';
-                        } else {
-                          const cid = t.clientId ?? proj?.clientId;
-                          const cl = cid && cid !== PERSONAL_CLIENT_ID ? clients.find((x) => x.id === cid) : undefined;
-                          name = cl?.short || cl?.name || 'Misc'; kind = 'client'; gid = cl?.id || '';
-                        }
-                        const g = focusGroups.find((x) => x.name === name);
-                        if (g) g.tasks.push(t); else focusGroups.push({ name, kind, id: gid, tasks: [t] });
-                      }
-                    } else {
-                      focusGroups.push({ name: '', kind: 'client', id: '', tasks: cellTasks });
-                    }
+                    const focusGroups = grouped
+                      ? buildSubGroupsShared(cellTasks, listId, projects, clients)
+                      : [{ name: '', kind: 'client' as const, id: '', tasks: cellTasks }];
                     // Drag-displace (same engine as the calendar view): the SOURCE band leans on
                     // dnd-kit's native sortable shift; a DESTINATION band opens an insertion gap
                     // above the card being dragged over so the landing spot is visible. Only the

@@ -31,6 +31,17 @@ declare global {
       // Optional: rooms created before this key existed simply have no `theme`, and the app
       // falls back to the localStorage cache and then to the index.css defaults.
       theme?: { bg?: string; accent?: string };
+      // Auto-capitalisation mode (Settings → Text). In the ROOM for the same reason as `theme`:
+      // localStorage is per-device, and the phone has no Settings UI at all — left in
+      // localStorage the desktop toggle can never reach it and phone-typed titles sync back raw.
+      // Absent on rooms predating this key → the surfaces fall back to their local value.
+      caseMode?: 'off' | 'title';
+      // Sub-grouping switches (Settings → Sub-grouping), one per scope. Same story again:
+      // each surface kept its own localStorage copy, so a column could be grouped on the
+      // desktop and flat on the phone. Every key is INDEPENDENTLY optional, and the readers
+      // fall back per key with `??` rather than `||` — `false` is a real answer here, so a
+      // room that has only ever written `next` must not drag the other two back to default.
+      subGroup?: { today?: boolean; tomorrow?: boolean; next?: boolean };
     };
     Presence: {
       cursor: { x: number; y: number } | null;

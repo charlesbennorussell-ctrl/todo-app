@@ -33,7 +33,7 @@
 //   - tap detection never trusts click timing; the checkbox handles its own pointerdown
 //   - text inputs commit on blur AND on input (predictive text fires no keydown)
 
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useStorage, useMutation } from '@liveblocks/react/suspense';
 import {
   DndContext, DragOverlay, MeasuringStrategy, MouseSensor, TouchSensor,
@@ -49,7 +49,8 @@ import { LIST_TITLES, LISTS, PERSONAL_CLIENT_ID, formatDeadline, isLateDeadline,
 import { useMembership, projectAllowed } from './auth';
 import {
   computeCalendarDistribution, makeCpCompare, TaskCheckbox, Arrowhead, DeadlineArrow,
-  addDaysToDate, dateToISO, useSharedTheme, doneTint,
+  addDaysToDate, dateToISO, useSharedTheme, useSharedSubGroup, doneTint, convertTitleCase, useSharedCaseMode,
+  buildSubGroupsShared,
 } from './App';
 
 // ── Shared module state ───────────────────────────────────────────────────────
@@ -78,6 +79,7 @@ const readUserShort = () => { try { return window.localStorage.getItem('todo-app
 
 const isPrivateTask = (t: Task) => t.list === 'personal' || t.clientId === PERSONAL_CLIENT_ID;
 
+
 // Debug overlay (?debug=1): the v0.1.49 lesson — on-device logs beat blind iteration.
 const DEBUG = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('debug');
 const debugLog: string[] = [];
@@ -93,12 +95,18 @@ function dbg(msg: string) {
 // The desktop CalendarCard's two-line stacked layout, sized up for touch (52px vs 45px
 // min-height). Same classes, same colors, same checkbox — reads as the same app.
 
-function MobileCardBody({ task, projects, clients, isTodayCard }: {
+function MobileCardBody({ task, projects, clients, isTodayCard, hideClient = false, hideProject = false }: {
   task: Task; projects: Project[]; clients: Client[]; isTodayCard: boolean;
+  /** The sub-group heading above already names it — repeating it on every card is noise.
+   *  Same two props, for the same reason, as the desktop's grouped columns. */
+  hideClient?: boolean; hideProject?: boolean;
 }) {
-  const project = task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
-  const resolvedClientId = task.clientId ?? project?.clientId;
-  const client = resolvedClientId ? clients.find((c) => c.id === resolvedClientId) : undefined;
+  const projectRaw = task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
+  const project = hideProject ? undefined : projectRaw;
+  // Resolve the client from the RAW project: hiding the project must not also strip the
+  // client it implies, or a card under a client heading would lose both.
+  const resolvedClientId = task.clientId ?? projectRaw?.clientId;
+  const client = hideClient || !resolvedClientId ? undefined : clients.find((c) => c.id === resolvedClientId);
   const isScheduled = task.type === 'scheduled';
   const titleColor = task.completed ? 'text-[#383838]' : isScheduled ? 'text-[var(--app-accent)]' : isTodayCard ? 'text-white' : 'text-[#a8a8a8]';
   const metaColor = (isScheduled || isTodayCard) ? 'text-[var(--app-accent)]' : 'text-[#656464]';
@@ -190,8 +198,9 @@ function MobileCardBody({ task, projects, clients, isTodayCard }: {
   );
 }
 
-function MobileCard({ task, cellId, projects, clients, isTodayCard, onToggle, onOpen, onAddSibling }: {
+function MobileCard({ task, cellId, projects, clients, isTodayCard, hideClient, hideProject, onToggle, onOpen, onAddSibling }: {
   task: Task; cellId: string; projects: Project[]; clients: Client[]; isTodayCard: boolean;
+  hideClient?: boolean; hideProject?: boolean;
   onToggle: () => void; onOpen: () => void; onAddSibling: () => void;
 }) {
   const isScheduled = task.type === 'scheduled';
@@ -259,7 +268,7 @@ function MobileCard({ task, cellId, projects, clients, isTodayCard, onToggle, on
         onOpen();
       }}
     >
-      <MobileCardBody task={task} projects={projects} clients={clients} isTodayCard={isTodayCard} />
+      <MobileCardBody task={task} projects={projects} clients={clients} isTodayCard={isTodayCard} hideClient={hideClient} hideProject={hideProject} />
       {/* "+" on the right edge — a new task carrying this one's category, project, client and
           deadline, opened straight into the sheet so you can name it. Same movement-guarded tap
           as the checkbox pad: a swipe or scroll that starts here must still pan, not fire. */}
@@ -350,7 +359,13 @@ function PaneDroppable({ id, width, children }: { id: string; width: number; chi
 
 // ── Sheets ────────────────────────────────────────────────────────────────────
 
-function SheetShell({ onClose, children }: { onClose: () => void; children: React.ReactNode }) {
+function SheetShell({ onClose, grabber, children }: {
+  onClose: () => void;
+  /** Touch handlers for the pull-up gesture the grab bar advertises. Passing them is what
+      renders the bar: a sheet with no pull-up target must not show a handle it can't honour. */
+  grabber?: { onTouchStart: (e: React.TouchEvent) => void; onTouchEnd: (e: React.TouchEvent) => void };
+  children: React.ReactNode;
+}) {
   // iOS fires the synthetic click 0-300ms AFTER the touch tap that opened this sheet — the
   // stray click lands on the fresh backdrop and would close it instantly. Ignore backdrop
   // clicks for the first 500ms of the sheet's life.
@@ -373,6 +388,14 @@ function SheetShell({ onClose, children }: { onClose: () => void; children: Reac
     height: typeof window === 'undefined' ? 0 : window.innerHeight,
   }));
   const keyboardUp = typeof window !== 'undefined' && vvBox.height > 0 && window.innerHeight - vvBox.height > 80;
+  // The sheet's height has always been pure content — there is no floor anywhere — so the quick
+  // task sheet opened at 216px, a quarter of an iPhone screen, and read as a strip rather than a
+  // panel. Measure the floor against the WHOLE window, not the visible box, so it doesn't
+  // collapse the moment the keyboard takes half the screen. Clamp it to vvBox.height because
+  // min-height BEATS max-height: an unclamped floor in landscape would put the sheet's top —
+  // the title field — back off screen, which is the failure the block above spent two attempts
+  // fixing.
+  const sheetFloor = typeof window === 'undefined' ? 0 : Math.min(Math.round(window.innerHeight / 3), vvBox.height);
   useEffect(() => {
     const vv = window.visualViewport;
     const update = () => {
@@ -400,16 +423,33 @@ function SheetShell({ onClose, children }: { onClose: () => void; children: Reac
           stay pinned. */}
       <div
         data-msheet
-        className="absolute left-0 right-0 bottom-0 flex flex-col rounded-t-[14px] px-[18px] pt-[16px]"
+        className="absolute left-0 right-0 bottom-0 flex flex-col rounded-t-[40px] px-[18px]"
         style={{
           backgroundColor: SHEET_BG,
           maxHeight: '100%',
+          minHeight: sheetFloor,
+          // 40px = the title capsule's 22px radius plus the sheet's own 18px gutter, so the
+          // sheet's corner stays concentric with the field inside it — and it lands inside the
+          // 39-55px range real iPhone displays use, which is what lets a full-bleed sheet read as
+          // part of the screen rather than as a card pasted on top of it. The top of that range
+          // would eat a fifth of the panel's height and crowd the capsule.
+          //
+          // The grab bar lives in the top padding, so that padding shrinks when it is present.
+          paddingTop: grabber ? 8 : 16,
           // The home-indicator pad only means anything when the sheet rests on the screen
           // bottom; with the keyboard up it is sitting on the keyboard instead.
           paddingBottom: keyboardUp ? 14 : 'calc(env(safe-area-inset-bottom) + 18px)',
           animation: 'msheet-up 240ms cubic-bezier(0.16, 1, 0.3, 1)',
         }}
       >
+        {/* The pill is 5x36 like the system's, but the target around it is 88x21 — you cannot
+            start a swipe on a 5px bar. Same handlers as the lower controls, so the handle
+            answers the exact gesture it advertises instead of just hinting at it. */}
+        {grabber && (
+          <div {...grabber} aria-hidden className="shrink-0 mx-auto mb-[6px] px-[26px] py-[8px]">
+            <div className="h-[5px] w-[36px] rounded-full bg-[#4a4a4a]" />
+          </div>
+        )}
         {children}
       </div>
       <style>{`@keyframes msheet-up { from { transform: translateY(100%); } to { transform: translateY(0); } }`}</style>
@@ -462,6 +502,10 @@ export default function MobileApp() {
 
   // Same room theme the desktop paints with — this is what keeps the two surfaces identical.
   useSharedTheme();
+  // …and the same three sub-grouping switches, off the same room key. Pane index IS the scope,
+  // matching PANES above: 0 Today, 1 Tomorrow, 2 Next.
+  const subGroup = useSharedSubGroup();
+  const paneGrouped = [subGroup.today, subGroup.tomorrow, subGroup.next];
   // Layout diagnostics (long-press the header). Exists because the bottom bar sitting off the
   // screen bottom reproduces ONLY in the installed standalone PWA — desktop Chrome reports every
   // env(safe-area-inset-*) as 0, so the failing condition can't be recreated here. Measure on the
@@ -474,6 +518,19 @@ export default function MobileApp() {
   if (DEBUG && typeof window !== 'undefined') (window as any).__mtasks = tasks;
   const listSequence = useMemo(readListSequence, []);
   const sortByCP = useMemo(readSortByCP, []);
+  // Auto-capitalisation. Read from the ROOM (falling back to this device's cache pre-connect),
+  // so toggling it in desktop Settings takes effect here without the phone owning a settings UI.
+  const caseMode = useSharedCaseMode();
+  // Names whose capitalisation is authoritative and outranks the case rules. Same list the
+  // desktop builds into vocabRef.
+  const titleVocab = useMemo(() => {
+    const v: string[] = [];
+    for (const c of clients) { if (c.short) v.push(c.short); if (c.name) v.push(c.name); }
+    for (const p of projects) { if (p.name) v.push(p.name); }
+    for (const pr of people) { if (pr.short) v.push(pr.short); if (pr.name) v.push(pr.name); }
+    return v;
+  }, [clients, projects, people]);
+  const convertTitle = useCallback((s: string) => convertTitleCase(s, caseMode, titleVocab), [caseMode, titleVocab]);
 
   // Re-render pulse. The 60s interval (wired below) keeps day boundaries honest; toggleTask
   // also fires one at 15.1s so a task that just went "started" re-sorts the moment its hold
@@ -491,14 +548,28 @@ export default function MobileApp() {
     window.setTimeout(() => setClockTick((n) => n + 1), 15100);
   }, [setTasks]);
 
+  // Capitalise on the way INTO storage, not on a timer. The desktop can defer 2s after blur
+  // because its title is a live inline editable still on screen; here the write only happens
+  // once the sheet's field has committed, so there is no visible field to rewrite under the
+  // user — and an iOS webview suspended on sheet-close would never fire a pending timeout.
   const renameTask = useCallback((id: string, title: string) => {
-    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, title } : t)));
-  }, [setTasks]);
+    const next = convertTitle(title);
+    setTasks((prev) => {
+      const cur = prev.find((t) => t.id === id);
+      // Storage here is a whole-array write, and this room has lost data to
+      // concurrent whole-array writes before. A rename that changes nothing must
+      // not become one.
+      if (!cur || cur.title === next) return prev;
+      return prev.map((t) => (t.id === id ? { ...t, title: next } : t));
+    });
+  }, [setTasks, convertTitle]);
 
   /** Patch any field set on a task — what the full panel writes back when editing. */
   const updateTask = useCallback((id: string, patch: Partial<Task>) => {
-    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
-  }, [setTasks]);
+    // Title is optional on a patch, and an absent key must stay absent rather than become ''.
+    const next = patch.title === undefined ? patch : { ...patch, title: convertTitle(patch.title) };
+    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, ...next } : t)));
+  }, [setTasks, convertTitle]);
 
   const deleteTask = useCallback((id: string) => {
     setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, trashed: true, trashedAt: Date.now(), revivedAt: undefined } : t)));
@@ -516,11 +587,14 @@ export default function MobileApp() {
     assignees?: string[]; milestone?: boolean;
   }) => {
     const id = newId();
+    // Computed outside the updater so it runs once, not on every replay of it. The band "+"
+    // and the empty-band ADD card pass '', which the converter returns untouched.
+    const title = convertTitle(p.title);
     setTasks((prev) => {
       const maxOrder = prev.filter((x) => x.list === p.list && x.section === p.section).reduce((m, x) => Math.max(m, x.order), -1);
       return [...prev, {
         id,
-        title: p.title,
+        title,
         type: p.milestone ? ('scheduled' as const) : ('todo' as const),
         assignees: p.assignees ?? (currentUserShort ? [currentUserShort] : []),
         completed: false,
@@ -534,7 +608,7 @@ export default function MobileApp() {
       }];
     });
     return id;
-  }, [setTasks, currentUserShort]);
+  }, [setTasks, currentUserShort, convertTitle]);
 
   /** The card "+" — a sibling of `src` carrying its category, section, project, client, deadline
    *  and type, inserted directly beneath it. Mirrors the desktop's addSiblingTask, including
@@ -871,7 +945,7 @@ export default function MobileApp() {
         {/* Header — brand + date. LONG-PRESS it to open the layout diagnostic panel; that works
             inside the installed home-screen app, where you can't append ?debug=1 to the URL. */}
         <div
-          className="shrink-0 px-[18px] pt-[14px]"
+          className="shrink-0 px-[18px] pt-[18px]"
           onTouchStart={() => { holdRef.current = window.setTimeout(() => setDiag((d) => !d), 700); }}
           onTouchEnd={() => { if (holdRef.current) { window.clearTimeout(holdRef.current); holdRef.current = null; } }}
           onTouchCancel={() => { if (holdRef.current) { window.clearTimeout(holdRef.current); holdRef.current = null; } }}
@@ -880,11 +954,15 @@ export default function MobileApp() {
           <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[13px] text-white whitespace-nowrap">{headerDate}</p>
         </div>
         {/* Day switcher — the CTRL Assets toolbar paradigm: ONE rounded track with a lighter
-            knob that slides to the active segment. No underline. Equal py above and below so
-            the gap from the brand line and the gap down to the first band label match, and the
-            control sits centred in that band of space. Each segment is still a drop target, so
-            dragging a card onto "Tomorrow" moves it there. */}
-        <div className="shrink-0 flex items-center justify-center pt-[45px] pb-[24px]">
+            knob that slides to the active segment. No underline. The padding is measured in the
+            app's one type unit — index.css forces every element to 14px — so 56 is 4 units above
+            and 28 is 2 units below. Optically that is ~59px above (the date's line box adds ~3px
+            of leading below the glyphs) against ~42px below, once the pane's pt-[7px] and the
+            7px of lead inside the 28px label box are counted. The control therefore sits nearer
+            the list it governs than the date above it — the relationship the old 45/24 pair was
+            reaching for and missed. Each segment is still a drop target, so dragging a card onto
+            "Tomorrow" moves it there. */}
+        <div className="shrink-0 flex items-center justify-center pt-[56px] pb-[28px]">
           {/* Track is the same near-black as the bottom bar (#151412) so the switcher reads as
               chrome rather than as content. */}
           <div className="relative inline-flex items-center rounded-full bg-black p-[3px] w-[calc(100%-36px)] max-w-[340px]">
@@ -930,7 +1008,14 @@ export default function MobileApp() {
           >
             {PANES.map((p, i) => (
               <PaneDroppable key={p.section} id={`mpane:${i}`} width={w}>
-                {bandsByPane[i].map(({ listId, cellId, tasks: bandTasks }) => (
+                {bandsByPane[i].map(({ listId, cellId, tasks: bandTasks }) => {
+                  const grouped = paneGrouped[i];
+                  // Ungrouped bands run through the SAME renderer as one anonymous group, so
+                  // there is a single card-emitting path for `items` below to stay in step with.
+                  const groups = grouped
+                    ? buildSubGroupsShared(bandTasks, listId, projects, clients)
+                    : [{ name: '', kind: 'client' as const, id: '', tasks: bandTasks }];
+                  return (
                   <div key={`${p.section}-${listId}`} className="pt-[7px]">
                     {/* Label vertically centered; the + is ALWAYS visible (tap-to-reveal made it
                         undiscoverable) and sits in a 44px touch box with the same right-edge
@@ -946,19 +1031,44 @@ export default function MobileApp() {
                       ><Plus size={15} /></button>
                     </div>
                     <BandDroppable id={cellId} isEmpty={bandTasks.length === 0}>
-                      <SortableContext items={bandTasks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
-                        {bandTasks.map((t) => (
-                          <MobileCard
-                            key={t.id}
-                            task={t}
-                            cellId={cellId}
-                            projects={projects}
-                            clients={clients}
-                            isTodayCard={i === 0}
-                            onToggle={() => toggleTask(t.id)}
-                            onOpen={() => openTaskSheet(t.id)}
-                            onAddSibling={() => openNewTaskSheet(addSibling(t))}
-                          />
+                      {/* dnd-kit reads each card's index from `items` and displaces siblings using
+                          rects[] in THAT order, so `items` must match the order the cards are
+                          actually emitted in. Grouping permutes them — the partition is stable but
+                          clients interleave inside the band — so deriving `items` from the flat
+                          bandTasks would have the sortable maths compare cards that are nowhere
+                          near each other. Identical to the flat list whenever grouping is off. */}
+                      <SortableContext items={groups.flatMap((g) => g.tasks.map((t) => t.id))} strategy={verticalListSortingStrategy}>
+                        {groups.map((g) => (
+                          <Fragment key={`g-${g.name}`}>
+                            {grouped && (
+                              // Sub-break, not a category break: one label row and no blank unit
+                              // above it — the louder gap belongs to the band label. The group name
+                              // alone, because the label directly above already says the category;
+                              // the desktop drops its prefix for the same reason. Not sticky: the
+                              // band label is already `sticky top-0`, and a second one would fight it.
+                              <div className="h-[28px] mb-[5px] pl-[20px] flex items-center">
+                                <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap text-[#7a7a7a]">{g.name}</p>
+                              </div>
+                            )}
+                            {g.tasks.map((t) => (
+                              <MobileCard
+                                key={t.id}
+                                task={t}
+                                cellId={cellId}
+                                projects={projects}
+                                clients={clients}
+                                isTodayCard={i === 0}
+                                // The heading directly above already names it, exactly as on
+                                // the desktop's grouped columns. Only while grouped: an ungrouped
+                                // band has no heading, so the card must still say it itself.
+                                hideClient={grouped && listId !== 'personal'}
+                                hideProject={grouped && listId === 'personal'}
+                                onToggle={() => toggleTask(t.id)}
+                                onOpen={() => openTaskSheet(t.id)}
+                                onAddSibling={() => openNewTaskSheet(addSibling(t))}
+                              />
+                            ))}
+                          </Fragment>
                         ))}
                       </SortableContext>
                       {/* Empty band: a quiet ADD+ placeholder card instead of confusing blank
@@ -978,7 +1088,8 @@ export default function MobileApp() {
                       )}
                     </BandDroppable>
                   </div>
-                ))}
+                  );
+                })}
               </PaneDroppable>
             ))}
           </div>
@@ -1044,6 +1155,7 @@ export default function MobileApp() {
             clients={clients}
             isos={isos}
             anchor={anchor}
+            convertTitle={convertTitle}
             onRename={(title) => renameTask(liveSheetTask.id, title)}
             onMove={(idx) => {
               const targetSection = PANES[idx].section;
@@ -1236,10 +1348,13 @@ function DayTab({ idx, label, active, dragging, onTap }: { idx: number; label: s
   );
 }
 
-function TaskSheet({ task, projects, clients, isos, anchor, autoFocusTitle, onRename, onMove, onDelete, onEdit, onClose }: {
+function TaskSheet({ task, projects, clients, isos, anchor, autoFocusTitle, convertTitle, onRename, onMove, onDelete, onEdit, onClose }: {
   task: Task; projects: Project[]; clients: Client[]; isos: string[]; anchor: Date;
   /** Sheet was opened by creating this task → focus the title and raise the keyboard. */
   autoFocusTitle?: boolean;
+  /** The same auto-capitalisation renameTask applies. Needed here for the dirty-check only —
+   *  see commit() below. */
+  convertTitle: (s: string) => string;
   onRename: (title: string) => void; onMove: (paneIdx: number) => void; onDelete: () => void;
   /** Hand off to the full task panel, pre-filled with this task. */
   onEdit: () => void;
@@ -1247,7 +1362,16 @@ function TaskSheet({ task, projects, clients, isos, anchor, autoFocusTitle, onRe
 }) {
   const [title, setTitle] = useState(task.title);
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const commit = () => { if (title.trim() !== task.title) onRename(title.trim()); };
+  // Measured against what will actually be STORED, because the title is auto-capitalised on the
+  // way in. Comparing the raw field text instead makes every blur after the first look like an
+  // edit, and each one rewrites the whole tasks array into the room for no content change.
+  // Compares RAW against STORED, and sends raw — renameTask does the single conversion.
+  // `title` is seeded from task.title, so an untouched sheet compares equal and writes
+  // nothing. Running the converter here instead made merely OPENING a task and dismissing
+  // it rewrite the title: any stored title not already in converted form ("buy milk", or
+  // anything typed before the mode was switched on) differs from its converted form, so
+  // the check read as dirty on a read-only glance and rewrote the whole tasks array.
+  const commit = () => { const raw = title.trim(); if (raw !== task.title) onRename(raw); };
   const titleRef = useRef<HTMLInputElement | null>(null);
 
   // Straight into typing on a freshly created task. useLayoutEffect (not a
@@ -1293,7 +1417,7 @@ function TaskSheet({ task, projects, clients, isos, anchor, autoFocusTitle, onRe
     ? (task.deadline <= isos[0] ? 0 : task.deadline === isos[1] ? 1 : 2)
     : task.section === 'today' ? 0 : task.section === 'tomorrow' ? 1 : 2;
   return (
-    <SheetShell onClose={() => { commit(); onClose(); }}>
+    <SheetShell onClose={() => { commit(); onClose(); }} grabber={pullHandlers}>
       <input
         ref={titleRef}
         value={title}
@@ -1311,7 +1435,7 @@ function TaskSheet({ task, projects, clients, isos, anchor, autoFocusTitle, onRe
         spellCheck={false}
         // Same full-width capsule as the creator panel's title field, so both sheets read as
         // one system rather than one styled field and one bare line of text.
-        className="shrink-0 w-full bg-[#151412] rounded-[22px] px-[16px] py-[12px] outline-none border-none text-white font-['Univers_BQ:55_Regular',sans-serif] text-[14px] leading-[1.4] placeholder:text-[#656464]"
+        className="shrink-0 w-full bg-[#151412] rounded-full px-[16px] py-[12px] outline-none border-none text-white font-['Univers_BQ:55_Regular',sans-serif] text-[14px] leading-[1.4] placeholder:text-[#656464]"
       />
       <div className="shrink-0 h-[12px]" />
       {(client || project) && (
@@ -1321,7 +1445,10 @@ function TaskSheet({ task, projects, clients, isos, anchor, autoFocusTitle, onRe
       )}
       {/* Lower controls, and the pull-up-to-edit target: dragging this whole
           block upward opens the full task panel. */}
-      <div {...pullHandlers}>
+      {/* mt-auto: the sheet is now taller than its content, and free space in a flex column
+          pools at the END — which would leave this row floating above a band of dead sheet.
+          Pushing it to the bottom puts the slack under the title, where it belongs. */}
+      <div {...pullHandlers} className="mt-auto">
       {/* Same control as the day switcher and the creator panel: capsules on a dark track. */}
       <div className="pb-[16px]">
         <div className={CHIP_TRACK}>
@@ -1586,7 +1713,12 @@ function ComposeSheet({ listSequence, projects, clients, people, currentUserShor
         name="ctrl-entry"
         // A full-width capsule on the dark track colour, so the title reads as THE field of the
         // sheet rather than floating loose above the chip groups that surround it.
-        className="shrink-0 w-full resize-none overflow-hidden bg-[#151412] rounded-[22px] px-[16px] py-[12px] outline-none border-none text-white font-['Univers_BQ:55_Regular',sans-serif] text-[14px] leading-[1.4] placeholder:text-[#656464]"
+        // rounded-full, not a fixed 22px: 22 happens to be exactly half of this field's 43.6px
+        // one-line height, so a fixed radius is a capsule only while that height holds and
+        // degrades into a rounded rectangle the moment anything makes the box taller. 9999px
+        // always clamps to half the box. Don't reach for leading-* to change the height —
+        // index.css forces line-height 1.4 on textarea and the class is a no-op; use py-*.
+        className="shrink-0 w-full resize-none overflow-hidden bg-[#151412] rounded-full px-[16px] py-[12px] outline-none border-none text-white font-['Univers_BQ:55_Regular',sans-serif] text-[14px] leading-[1.4] placeholder:text-[#656464]"
       />
       <div className="shrink-0 h-[18px]" />
 
