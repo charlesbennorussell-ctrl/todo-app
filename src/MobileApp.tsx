@@ -1022,7 +1022,16 @@ export default function MobileApp() {
                         geometry as the cards' + (card mx-10 + right-0 w-44 → icon center 32px
                         from the pane edge), so the column of pluses lines up. */}
                     <div className={`h-[28px] mb-[13px] pl-[20px] flex items-center sticky top-0 z-10 bg-[var(--app-bg)]`}>
-                      <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap text-[#5e5e5e]">{LIST_TITLES[listId]}</p>
+                      {/* Grouped, this row IS the first group's heading — category, triangle,
+                          sub-category, one line — which is why group 0 renders no row of its own
+                          below. The phone has no scroll-tracking bar like the desktop's, so the
+                          pairing is static: this row names group 0, each later group names itself. */}
+                      <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap text-[#5e5e5e]">
+                        {LIST_TITLES[listId]}
+                        {grouped && groups.length > 0 && (
+                          <><Arrowhead /><span className="text-[#7a7a7a]">{groups[0].name}</span></>
+                        )}
+                      </p>
                       <button
                         type="button"
                         aria-label={`Add ${LIST_TITLES[listId]} task`}
@@ -1038,16 +1047,17 @@ export default function MobileApp() {
                           bandTasks would have the sortable maths compare cards that are nowhere
                           near each other. Identical to the flat list whenever grouping is off. */}
                       <SortableContext items={groups.flatMap((g) => g.tasks.map((t) => t.id))} strategy={verticalListSortingStrategy}>
-                        {groups.map((g) => (
+                        {groups.map((g, gi) => (
                           <Fragment key={`g-${g.name}`}>
-                            {grouped && (
+                            {grouped && gi > 0 && (
                               // Sub-break, not a category break: one label row and no blank unit
-                              // above it — the louder gap belongs to the band label. The group name
-                              // alone, because the label directly above already says the category;
-                              // the desktop drops its prefix for the same reason. Not sticky: the
-                              // band label is already `sticky top-0`, and a second one would fight it.
+                              // above it — the louder gap belongs to the band label. Not sticky:
+                              // the band label is already `sticky top-0` and a second one would
+                              // fight it. gi > 0 because the band row above already names group 0.
                               <div className="h-[28px] mb-[5px] pl-[20px] flex items-center">
-                                <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap text-[#7a7a7a]">{g.name}</p>
+                                <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap text-[#5e5e5e]">
+                                  {LIST_TITLES[listId]}<Arrowhead /><span className="text-[#7a7a7a]">{g.name}</span>
+                                </p>
                               </div>
                             )}
                             {g.tasks.map((t) => (

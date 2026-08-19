@@ -5103,13 +5103,21 @@ function SubGroupDrop({ kind, id, children, cell }: {
   );
 }
 
-function NextBandHeader({ label, bodyFont, onLabelClick, onAdd, addAriaLabel, bandList, labelMb = 18, stacked = false }: {
+function NextBandHeader({ label, bodyFont, onLabelClick, onAdd, addAriaLabel, bandList, labelMb = 18, stacked = false, dropCell }: {
   label: string; bodyFont: string; bandList?: string; labelMb?: number; stacked?: boolean;
   onLabelClick: (e: React.MouseEvent<HTMLElement>) => void;
   onAdd: () => void; addAriaLabel: string;
+  /** This band's cell id. Given one, the bar doubles as the drop target for the group it is
+   *  currently naming — which is how the FIRST group stays reachable now that it renders no
+   *  row of its own. The droppable id is per-CELL and therefore stable; the group it resolves
+   *  to rides in `data`, read live at drop time, so scrolling can change the answer without
+   *  re-registering anything mid-drag (rects are frozen once a drag starts). */
+  dropCell?: string;
 }) {
-  const rowRef = useRef<HTMLDivElement>(null);
-  const [active, setActive] = useState<string | null>(null);
+  // Mutable: this ref is now set from a callback ref that also feeds dnd-kit's, so it
+  // cannot be the read-only RefObject form.
+  const rowRef = useRef<HTMLDivElement | null>(null);
+  const [active, setActive] = useState<{ name: string; kind: 'client' | 'project'; id: string } | null>(null);
   useEffect(() => {
     const row = rowRef.current;
     const band = row?.parentElement;
@@ -5135,15 +5143,20 @@ function NextBandHeader({ label, bodyFont, onLabelClick, onAdd, addAriaLabel, ba
       // actually filling the screen and kept naming the previous one, whose cards were
       // entirely behind the bar. Measured, not deduced.
       const threshold = row.getBoundingClientRect().bottom + CAL_GAP + 1;
-      // The bar names a group only once that group's OWN label row is underneath it,
-      // so the name and its echo are never on screen at once. Seeding with marks[0]
-      // dates from when group 0 had no inline row; every group carries one now, so
-      // the seed made the bar parrot the label sitting directly beneath it.
-      let cur: string | null = null;
+      // Seeded with the FIRST group, which is the one this bar names on behalf of:
+      // group 0 renders no inline row precisely so its breadcrumb appears here instead
+      // of twice, stacked. From there the bar hands over to each later group as that
+      // group's own row passes underneath it.
+      const read = (m: HTMLElement) => ({
+        name: m.dataset.groupName ?? '',
+        kind: (m.dataset.groupKind === 'project' ? 'project' : 'client') as 'client' | 'project',
+        id: m.dataset.groupId ?? '',
+      });
+      let cur = read(marks[0]);
       for (const m of marks) {
-        if (m.getBoundingClientRect().bottom <= threshold) cur = m.dataset.groupName ?? null;
+        if (m.getBoundingClientRect().bottom <= threshold) cur = read(m);
       }
-      setActive((prev) => (prev === cur ? prev : cur));
+      setActive((prev) => (prev && prev.name === cur.name && prev.id === cur.id && prev.kind === cur.kind ? prev : cur));
     };
     const schedule = () => { if (!raf) raf = requestAnimationFrame(compute); };
     compute();
@@ -5156,16 +5169,43 @@ function NextBandHeader({ label, bodyFont, onLabelClick, onAdd, addAriaLabel, ba
       if (raf) cancelAnimationFrame(raf);
     };
   }, []);
+  // Live only while this bar is actually naming a group. Ungrouped bands keep their old
+  // behaviour, where a drop here falls through to the cell beneath and reschedules.
+  // This is how the FIRST group stays reachable for drag-to-regroup now that it renders
+  // no row of its own: the bar visibly reads "Work > FOG", so dropping on it filing the
+  // card into FOG is exactly what it looks like. The droppable id is per-CELL and so
+  // stable — the group it resolves to rides in `data`, read live at drop time, because
+  // dnd-kit freezes droppable rects for the duration of a drag.
+  const barDrop = useDroppable({
+    id: `grpbar:${dropCell ?? 'none'}`,
+    disabled: !dropCell || !active,
+    data: { cell: dropCell, kind: active?.kind, gid: active?.id },
+  });
+  const setBarRef = barDrop.setNodeRef;
+  const setRefs = useCallback((el: HTMLDivElement | null) => {
+    rowRef.current = el;
+    setBarRef(el);
+  }, [setBarRef]);
   return (
     // On the calendar (`stacked`) the header is a card-shaped slot with its label
     // docked to the BOTTOM row; the blank row above is the section break.
     // One frame for both modes: the app's universal 37px label row. `stacked`
     // (calendar) now only drops the focus variant's inline bottom margin.
-    <div ref={rowRef} data-band-list={bandList} className="group/band px-[16px] sticky top-0 z-10 bg-[var(--app-bg)] h-[37px] flex items-center gap-2" style={stacked ? undefined : { marginBottom: labelMb }}>
+    <div
+      ref={setRefs}
+      data-band-list={bandList}
+      className="group/band px-[16px] sticky top-0 z-10 bg-[var(--app-bg)] h-[37px] flex items-center gap-2 transition-colors duration-150"
+      // The drop tint is inline, not a Tailwind arbitrary value: a '/' inside the
+      // brackets makes Tailwind drop the candidate silently. Same technique doneTint uses.
+      style={{
+        ...(stacked ? undefined : { marginBottom: labelMb }),
+        ...(barDrop.isOver ? { background: 'rgb(from var(--app-accent) r g b / 0.18)' } : null),
+      }}
+    >
       <p onClick={onLabelClick} className={`${bodyFont} text-[#5e5e5e] cursor-pointer`}>
         {label}
         {active ? <Arrowhead /> : null}
-        {active ? <span className="text-[#7a7a7a]">{active}</span> : null}
+        {active ? <span className="text-[#7a7a7a]">{active.name}</span> : null}
       </p>
       <button
         type="button"
@@ -5813,6 +5853,7 @@ function WeekCalendarMode({
                         label={label}
                         bodyFont={bodyFont}
                         bandList={listId}
+                        dropCell={`cal:${iso}:${listId}`}
                         stacked
                         onLabelClick={scrollBandToTop}
                         onAdd={() => onAddTaskOnDay(listId, iso)}
@@ -5832,16 +5873,22 @@ function WeekCalendarMode({
                         {dayGrouped && (
                           // Sub-break, not a category break: one label slot, no blank unit
                           // above it — the louder gap belongs to the band break.
-                          <div data-group-name={g.name}>
+                          <div data-group-name={g.name} data-group-kind={g.kind} data-group-id={g.id}>
+                            {/* The mark is always here so the sticky bar can see every group,
+                                but group 0 renders no ROW — the bar carries its breadcrumb. */}
+                            {gi > 0 && (
                             <SubGroupDrop kind={g.kind} id={g.id} cell={`cal:${iso}:${listId}`}>
                               <div className="h-[37px] px-[16px] flex items-center">
-                                {/* Just the group name: the band header directly above already says the
-                                      category, and repeating it stacked the same word twice. The
-                                      sticky bar still shows the full "Category > Group" once this
-                                      row scrolls underneath it, which is where the context is lost. */}
-                                <p className={`${bodyFont} text-[#7a7a7a]`}>{g.name}</p>
+                                {/* Category > group, one line, on every heading. The sticky bar above
+                                    names the FIRST group (see NextBandHeader's seed), which is why
+                                    group 0 gets no row of its own — that pairing is what stops the
+                                    same breadcrumb appearing twice, stacked. */}
+                                <p className={`${bodyFont} text-[#5e5e5e]`}>
+                                  {label}<Arrowhead /><span className="text-[#7a7a7a]">{g.name}</span>
+                                </p>
                               </div>
                             </SubGroupDrop>
+                            )}
                           </div>
                         )}
                         {g.tasks.map((t) => {
@@ -5997,6 +6044,7 @@ function WeekCalendarMode({
                           stacked
                           labelMb={bandGap.mb}
                           bandList={listId}
+                          dropCell={cellId}
                           label={label}
                           bodyFont={bodyFont}
                           onLabelClick={scrollBandToTop}
@@ -6020,13 +6068,17 @@ function WeekCalendarMode({
                             {/* Client sub-section: label only, no blank unit — the louder
                                 gap belongs to the category break above. */}
                             {nwGrouped && (
-                            <div data-group-name={g.name}>
+                            <div data-group-name={g.name} data-group-kind={g.kind} data-group-id={g.id}>
+                              {gi > 0 && (
                               <SubGroupDrop kind={g.kind} id={g.id} cell={cellId}>
                                 <div className="h-[37px] px-[16px] flex items-center">
-                                  {/* Group name only — see the day column's note. */}
-                                  <p className={`${bodyFont} text-[#7a7a7a]`}>{g.name}</p>
+                                  {/* Breadcrumb — see the day column's note. */}
+                                  <p className={`${bodyFont} text-[#5e5e5e]`}>
+                                    {label}<Arrowhead /><span className="text-[#7a7a7a]">{g.name}</span>
+                                  </p>
                                 </div>
                               </SubGroupDrop>
+                              )}
                             </div>
                             )}
                             {g.tasks.map((t) => {
@@ -10152,8 +10204,15 @@ export default function App() {
     // ── Dropped on a SUB-GROUP header: reassign the task into that group.
     //    `grp:<kind>:<id>`; an empty id is the Misc catch-all, which CLEARS the
     //    assignment rather than setting one.
-    if (overIdStr.startsWith('grp:')) {
-      const [, kind, gid] = overIdStr.split(':');
+    if (overIdStr.startsWith('grp:') || overIdStr.startsWith('grpbar:')) {
+      // Two spellings of the same drop. A group's own header encodes its identity in the
+      // droppable ID; the sticky BAR can't — the group it names changes as you scroll, and
+      // re-registering an id mid-drag would leave it unmeasured — so it carries kind/gid in
+      // `data` instead, read live here.
+      const barData = over?.data?.current as { kind?: 'client' | 'project'; gid?: string } | undefined;
+      const [, kindRaw, gidRaw] = overIdStr.split(':');
+      const kind = overIdStr.startsWith('grpbar:') ? (barData?.kind ?? 'client') : kindRaw;
+      const gid = overIdStr.startsWith('grpbar:') ? (barData?.gid ?? '') : gidRaw;
       const srcTask = tasks.find((t) => t.id === activeTaskId);
       if (srcTask) {
         setTasks((prev) => prev.map((t) => {
@@ -11492,7 +11551,8 @@ export default function App() {
     if (args.active.data.current?.type === 'task') {
       const srcCell = args.active.data.current?.calendarCellId as string | undefined;
       const grpHit = base.find((c) => {
-        if (!String(c.id).startsWith('grp:')) return false;
+        const cid = String(c.id);
+        if (!cid.startsWith('grp:') && !cid.startsWith('grpbar:')) return false;
         // Regrouping is a VERTICAL move: within the column you're already in.
         // Crossing columns means "reschedule", so a header over there declines and
         // the cell underneath takes the drop. Headers outside the calendar engine
@@ -12213,6 +12273,7 @@ export default function App() {
                         {grouped ? (
                           <NextBandHeader
                             bandList={listId}
+                            dropCell={cellId}
                             label={bandLabel}
                             bodyFont="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap"
                             labelMb={bandSpacing(cardRows === 1).mb}
@@ -12264,17 +12325,19 @@ export default function App() {
                               return groups.map((g, gi) => (
                                 <Fragment key={`fg-${g.name}`}>
                                   {/* Marker the sticky header reads. */}
-                                  <div data-group-name={g.name} style={gi === 0 ? undefined : { paddingTop: subBandSpacing().pt }}>
+                                  <div data-group-name={g.name} data-group-kind={g.kind} data-group-id={g.id} style={gi === 0 ? undefined : { paddingTop: subBandSpacing().pt }}>
                                     {/* subBandSpacing().pt is 0 — a client label is just its own
                                         slot. The blank unit belongs to the category break above. */}
+                                    {gi > 0 && (
                                     <SubGroupDrop kind={g.kind} id={g.id} cell={cellId}>
                                       <div className="h-[37px] px-[16px] flex items-center">
-                                        {/* Group name only — see the day column's note. The sticky
-                                            bar is `sticky top-0`, so it never actually scrolls out of
-                                            reach; it carries the category on this row's behalf. */}
-                                        <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap text-[#7a7a7a]">{g.name}</p>
+                                        {/* Breadcrumb — see the day column's note. */}
+                                        <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap text-[#5e5e5e]">
+                                          {bandLabel}<Arrowhead /><span className="text-[#7a7a7a]">{g.name}</span>
+                                        </p>
                                       </div>
                                     </SubGroupDrop>
+                                    )}
                                   </div>
                                   {g.tasks.map((t) => {
                                     // Index within the FLAT cell order — the drag displacement
