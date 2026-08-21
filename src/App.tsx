@@ -98,6 +98,9 @@ if (typeof document !== 'undefined') {
   // Re-apply the user's saved theme colors over the index.css defaults, before first paint.
   const savedBg = localStorage.getItem('app-bg'); if (savedBg) document.documentElement.style.setProperty('--app-bg', savedBg);
   const savedAccent = migrateAccent(localStorage.getItem('app-accent')); if (savedAccent) document.documentElement.style.setProperty('--app-accent', savedAccent);
+  // Only set when there IS one: leaving the property alone lets index.css keep deriving
+  // --app-card from --app-bg, so an unset highlight still tracks a custom background.
+  const savedHl = localStorage.getItem('app-highlight'); if (savedHl) document.documentElement.style.setProperty('--app-card', savedHl);
 }
 
 // Custom Tauri title bar: a drag region with a centered accent logo + wordmark and Windows-style
@@ -167,9 +170,10 @@ function TauriTitlebar() {
 
 /** Applies the room's theme to the CSS custom properties. Call once per surface (App, MobileApp). */
 export function useSharedTheme(): void {
-  const theme = useStorage((root) => (root as unknown as { theme?: { bg?: string; accent?: string } }).theme);
+  const theme = useStorage((root) => (root as unknown as { theme?: { bg?: string; accent?: string; highlight?: string } }).theme);
   const bg = theme?.bg;
   const accent = migrateAccent(theme?.accent);
+  const highlight = theme?.highlight;
   useEffect(() => {
     if (bg) {
       document.documentElement.style.setProperty('--app-bg', bg);
@@ -184,13 +188,22 @@ export function useSharedTheme(): void {
       document.documentElement.style.setProperty('--app-accent', accent);
       try { localStorage.setItem('app-accent', accent); } catch { /* ignore */ }
     }
-  }, [bg, accent]);
+    // Empty string is how the lab says "go back to derived": clear the inline property
+    // and drop the cache, so index.css's color-mix takes over again on the next paint.
+    if (highlight) {
+      document.documentElement.style.setProperty('--app-card', highlight);
+      try { localStorage.setItem('app-highlight', highlight); } catch { /* ignore */ }
+    } else if (highlight === '') {
+      document.documentElement.style.removeProperty('--app-card');
+      try { localStorage.removeItem('app-highlight'); } catch { /* ignore */ }
+    }
+  }, [bg, accent, highlight]);
 }
 
 /** Writes one or both theme colours into the room. Merges, so setting `bg` keeps `accent`. */
 export function useSetSharedTheme() {
-  return useMutation(({ storage }, patch: { bg?: string; accent?: string }) => {
-    const current = (storage.get('theme' as never) as { bg?: string; accent?: string } | undefined) ?? {};
+  return useMutation(({ storage }, patch: { bg?: string; accent?: string; highlight?: string }) => {
+    const current = (storage.get('theme' as never) as { bg?: string; accent?: string; highlight?: string } | undefined) ?? {};
     storage.set('theme' as never, { ...current, ...patch } as never);
   }, []);
 }
@@ -294,6 +307,341 @@ function ThemeColorPicker({ varName, storageKey, label, fallback, themeKey }: { 
       <span className="text-white w-[84px]">{label}</span>
       <span className="text-[#656464] uppercase">{color}</span>
       {color.toLowerCase() !== fallback.toLowerCase() && <button type="button" onClick={reset} className="text-[#656464] hover:text-white transition-colors">reset</button>}
+    </div>
+  );
+}
+
+// ── Color lab ─────────────────────────────────────────────────────────────────
+// A FLOATING, non-modal palette. It lives at the app root rather than inside the
+// Settings page, so it survives leaving Settings: open it, walk over to Focus or
+// Calendar, and keep tuning against the real page instead of against a settings
+// form. Drag it by the header to get it off whatever you are judging.
+//
+// Deliberately a workbench. The plan is to tune until a set feels right and then
+// freeze those values into the index.css defaults and retire this.
+//
+// Three axes, which is all the app actually has:
+//   background  --app-bg      the page ground
+//   highlight   --app-card    the RAISED surface: left rail, assign tray, panel grounds
+//   accent      --app-accent  today, milestones, checkboxes, drop tints
+// Highlight left empty falls back to index.css's color-mix over the background, so
+// it keeps tracking a custom background the way it always did.
+
+const LAB_SETS_KEY = 'todo-app-color-sets';
+type ColorSet = { id: string; bg: string; highlight: string; accent: string };
+
+function readColorSets(): ColorSet[] {
+  if (typeof window === 'undefined') return [];
+  try {
+    const parsed = JSON.parse(window.localStorage.getItem(LAB_SETS_KEY) || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch { return []; }
+}
+
+/** Reads a live custom property, falling back to the index.css default. */
+function readVar(name: string, fallback: string): string {
+  if (typeof document === 'undefined') return fallback;
+  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  return v || fallback;
+}
+
+/** `<input type="color">` accepts #rrggbb and nothing else — hand it anything else and
+ *  it silently shows black. --app-card computes to a color-mix() result (rgb/oklab), so
+ *  it has to come through here before it can seed a well. */
+function toHexColor(v: string, fallback: string): string {
+  const s = v.trim();
+  if (/^#[0-9a-f]{6}$/i.test(s)) return s.toLowerCase();
+  if (/^#[0-9a-f]{3}$/i.test(s)) return ('#' + s.slice(1).split('').map((c) => c + c).join('')).toLowerCase();
+  const hex = (r: number, g: number, b: number) =>
+    '#' + [r, g, b].map((n) => Math.max(0, Math.min(255, Math.round(n))).toString(16).padStart(2, '0')).join('');
+  const rgb = s.match(/rgba?\(([^)]+)\)/i);
+  if (rgb) {
+    const [r, g, b] = rgb[1].split(/[,\s/]+/).filter(Boolean).map(parseFloat);
+    if ([r, g, b].every((n) => Number.isFinite(n))) return hex(r, g, b);
+  }
+  // An element's USED background-color resolves a color-mix() to `color(srgb r g b)` with
+  // 0..1 components — see resolveCssColor below, which is the only way to get a real colour
+  // out of --app-card. (Reading the custom property directly does NOT work: an unregistered
+  // custom property computes to its token stream, so getPropertyValue('--app-card') hands
+  // back the literal string "color-mix(in srgb, #ffffff 3%, #1c1b19)". Measured, not assumed.)
+  const srgb = s.match(/color\(\s*srgb\s+([^)]+)\)/i);
+  if (srgb) {
+    const [r, g, b] = srgb[1].split(/[\s/]+/).filter(Boolean).map(parseFloat);
+    if ([r, g, b].every((n) => Number.isFinite(n))) return hex(r * 255, g * 255, b * 255);
+  }
+  return fallback;
+}
+
+/** The only reliable way to resolve a custom property that holds a color-mix(): paint it on a
+ *  throwaway element and read back the USED value, which the engine has actually computed.
+ *  Reading the property itself returns the unevaluated token stream. */
+function resolveCssColor(cssValue: string, fallback: string): string {
+  if (typeof document === 'undefined' || !document.body) return fallback;
+  const el = document.createElement('div');
+  el.style.cssText = 'position:absolute;width:0;height:0;opacity:0;pointer-events:none';
+  el.style.backgroundColor = cssValue;
+  document.body.appendChild(el);
+  const used = getComputedStyle(el).backgroundColor;
+  el.remove();
+  return toHexColor(used, fallback);
+}
+
+function LabRow({ label, value, hint, onChange, onClear }: {
+  label: string; value: string; hint?: string;
+  onChange: (v: string) => void; onClear?: () => void;
+}) {
+  // Typed hex is tracked separately so a half-finished "#7f" doesn't get punched into
+  // the theme on every keystroke; it commits only once it is a complete colour.
+  const [draft, setDraft] = useState(value);
+  useEffect(() => { setDraft(value); }, [value]);
+  return (
+    <div className="flex flex-row items-center gap-[10px]">
+      <input
+        type="color"
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        aria-label={label}
+        className="w-[30px] h-[30px] rounded-[6px] cursor-pointer bg-transparent shrink-0"
+      />
+      <span className="text-white text-[13px] w-[74px] shrink-0">{label}</span>
+      <input
+        type="text"
+        value={draft}
+        spellCheck={false}
+        onChange={(e) => {
+          const v = e.target.value;
+          setDraft(v);
+          if (/^#[0-9a-f]{6}$/i.test(v.trim())) onChange(v.trim().toLowerCase());
+        }}
+        onBlur={() => setDraft(value)}
+        aria-label={label + ' hex'}
+        className="w-[78px] select-text bg-black/30 rounded-[4px] px-[6px] py-[3px] text-[12px] text-[#a8a8a8] uppercase outline-none focus:text-white"
+      />
+      {onClear && (
+        <button type="button" onClick={onClear} title={hint}
+          className="text-[11px] text-[#656464] hover:text-white transition-colors">auto</button>
+      )}
+    </div>
+  );
+}
+
+function ColorLab({ onClose }: { onClose: () => void }) {
+  const setRoomTheme = useSetSharedTheme();
+  const [bg, setBg] = useState(() => toHexColor(readVar('--app-bg', '#1c1b19'), '#1c1b19'));
+  const [accent, setAccent] = useState(() => toHexColor(readVar('--app-accent', '#7666fc'), '#7666fc'));
+  // '' = derived. The app is showing index.css's color-mix, not an override.
+  const [highlight, setHighlight] = useState(() => {
+    try { return window.localStorage.getItem('app-highlight') || ''; } catch { return ''; }
+  });
+  const [sets, setSets] = useState<ColorSet[]>(readColorSets);
+  const [pos, setPos] = useState(() => ({
+    x: Math.max(12, (typeof window === 'undefined' ? 1000 : window.innerWidth) - 310),
+    y: 92,
+  }));
+
+  // Everything this panel has itself applied. The room echoes our own writes straight back,
+  // so without this we could not tell "someone else changed a colour" from "that is our own
+  // change returning" — and adopting the echo mid-drag would fight the user's cursor.
+  const selfApplied = useRef<{ bg?: string; accent?: string; highlight?: string }>({});
+
+  // Adopt colours changed from ANYWHERE else: the Settings presets sit one panel away and can
+  // be clicked while this is open, and other surfaces share the room. Left unsynced the panel
+  // would go on displaying stale values and "Save set" would quietly record a trio that is not
+  // the one on screen — which defeats the entire point of saving sets.
+  const roomTheme = useStorage((root) => (root as unknown as { theme?: { bg?: string; accent?: string; highlight?: string } }).theme);
+  useEffect(() => {
+    if (!roomTheme) return;
+    const rBg = roomTheme.bg;
+    if (rBg && rBg !== selfApplied.current.bg) { selfApplied.current.bg = rBg; setBg(toHexColor(rBg, rBg)); }
+    const rAccent = roomTheme.accent;
+    if (rAccent && rAccent !== selfApplied.current.accent) { selfApplied.current.accent = rAccent; setAccent(toHexColor(rAccent, rAccent)); }
+    const rHl = roomTheme.highlight;
+    if (rHl !== undefined && rHl !== selfApplied.current.highlight) { selfApplied.current.highlight = rHl; setHighlight(rHl); }
+    // useSharedTheme already repainted the CSS variables for this; only the panel's own
+    // readout needs catching up.
+  }, [roomTheme]);
+
+  // The CSS variable updates on every tick; the ROOM write is debounced. Dragging inside
+  // the OS colour picker fires change continuously — repainting locally each time is what
+  // makes it feel live, while forwarding each tick to Liveblocks would be a mutation storm
+  // for every other connected surface to chew through.
+  const pendingPatch = useRef<{ bg?: string; accent?: string; highlight?: string }>({});
+  const flushTimer = useRef(0);
+  const queueRoom = useCallback((patch: { bg?: string; accent?: string; highlight?: string }) => {
+    pendingPatch.current = { ...pendingPatch.current, ...patch };
+    window.clearTimeout(flushTimer.current);
+    flushTimer.current = window.setTimeout(() => {
+      const p = pendingPatch.current;
+      pendingPatch.current = {};
+      if (Object.keys(p).length) setRoomTheme(p);
+    }, 300);
+  }, [setRoomTheme]);
+  // Don't strand the last edit: on unmount, send whatever the timer hasn't flushed yet.
+  useEffect(() => () => {
+    window.clearTimeout(flushTimer.current);
+    const p = pendingPatch.current;
+    pendingPatch.current = {};
+    if (Object.keys(p).length) setRoomTheme(p);
+  }, [setRoomTheme]);
+
+  const applyBg = useCallback((v: string) => {
+    setBg(v);
+    document.documentElement.style.setProperty('--app-bg', v);
+    try { localStorage.setItem('app-bg', v); } catch { /* ignore */ }
+    const meta = document.querySelector('meta[name="theme-color"]');
+    if (meta) meta.setAttribute('content', v);
+    selfApplied.current.bg = v;
+    queueRoom({ bg: v });
+  }, [queueRoom]);
+
+  const applyAccent = useCallback((v: string) => {
+    setAccent(v);
+    document.documentElement.style.setProperty('--app-accent', v);
+    try { localStorage.setItem('app-accent', v); } catch { /* ignore */ }
+    selfApplied.current.accent = v;
+    queueRoom({ accent: v });
+  }, [queueRoom]);
+
+  const applyHighlight = useCallback((v: string) => {
+    setHighlight(v);
+    if (v) {
+      document.documentElement.style.setProperty('--app-card', v);
+      try { localStorage.setItem('app-highlight', v); } catch { /* ignore */ }
+    } else {
+      document.documentElement.style.removeProperty('--app-card');
+      try { localStorage.removeItem('app-highlight'); } catch { /* ignore */ }
+    }
+    selfApplied.current.highlight = v;
+    queueRoom({ highlight: v });
+  }, [queueRoom]);
+
+  const persistSets = (next: ColorSet[]) => {
+    setSets(next);
+    try { localStorage.setItem(LAB_SETS_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+  };
+  const applySet = (s: ColorSet) => { applyBg(s.bg); applyAccent(s.accent); applyHighlight(s.highlight); };
+
+  // Drag by the header. Pointer capture keeps the drag alive once the cursor outruns the
+  // panel, which it will — flinging this out of the way is the normal gesture.
+  const dragRef = useRef<{ dx: number; dy: number } | null>(null);
+  const onDragStart = (e: React.PointerEvent) => {
+    if ((e.target as HTMLElement).closest('button,input')) return;
+    dragRef.current = { dx: e.clientX - pos.x, dy: e.clientY - pos.y };
+    (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
+  };
+  const onDragMove = (e: React.PointerEvent) => {
+    const d = dragRef.current;
+    if (!d) return;
+    setPos({
+      x: Math.min(Math.max(0, e.clientX - d.dx), window.innerWidth - 120),
+      y: Math.min(Math.max(0, e.clientY - d.dy), window.innerHeight - 40),
+    });
+  };
+  const onDragEnd = () => { dragRef.current = null; };
+  // Re-clamp on resize. Without this, shrinking the window (or unmaximising) can leave the
+  // panel entirely outside the viewport, and since it is dragged by its own header there is
+  // then no way to get it back short of clearing state.
+  useEffect(() => {
+    const onResize = () => setPos((p) => ({
+      x: Math.min(Math.max(0, p.x), Math.max(0, window.innerWidth - 120)),
+      y: Math.min(Math.max(0, p.y), Math.max(0, window.innerHeight - 40)),
+    }));
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
+  // Keyed on `bg` because that is the only thing the derivation depends on. Unmemoised this
+  // forced a synchronous style recalc on every render of the panel, including every tick of
+  // a colour drag.
+  const derivedHighlight = useMemo(() => resolveCssColor('var(--app-card)', '#232120'), [bg]);
+
+  return (
+    // z-[200] clears the custom titlebar (z-120) and the assign tray, so it floats over
+    // every mode. No backdrop and no focus trap on purpose: this must NOT behave like a
+    // dialog, because the page behind it has to stay usable while you judge the colours.
+    <div
+      className="fixed z-[200] w-[292px] rounded-[10px] shadow-2xl select-none"
+      style={{ left: pos.x, top: pos.y, background: '#141312', border: '1px solid rgba(255,255,255,0.12)' }}
+      role="group"
+      aria-label="Color lab"
+    >
+      <div
+        onPointerDown={onDragStart}
+        onPointerMove={onDragMove}
+        onPointerUp={onDragEnd}
+        onPointerCancel={onDragEnd}
+        className="h-[32px] px-[12px] flex items-center gap-2 cursor-grab active:cursor-grabbing"
+        style={{ borderBottom: '1px solid rgba(255,255,255,0.10)' }}
+      >
+        <span className="text-[12px] text-[#a8a8a8]">Color lab</span>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close color lab"
+          className="ml-auto w-[20px] h-[20px] flex items-center justify-center rounded text-[#656464] hover:text-white hover:bg-white/10 transition-colors"
+        >
+          <X size={13} />
+        </button>
+      </div>
+
+      <div className="px-[12px] py-[12px] flex flex-col gap-[9px]">
+        <LabRow label="Background" value={bg} onChange={applyBg} />
+        <LabRow
+          label="Highlight"
+          value={highlight || derivedHighlight}
+          hint="Back to derived — 3% white over the background"
+          onChange={applyHighlight}
+          onClear={highlight ? () => applyHighlight('') : undefined}
+        />
+        <LabRow label="Accent" value={accent} onChange={applyAccent} />
+
+        <div className="flex items-center gap-2 pt-[3px]">
+          <button
+            type="button"
+            onClick={() => persistSets([...sets, { id: 'cs-' + Date.now().toString(36), bg, highlight, accent }])}
+            className="text-[12px] px-[10px] py-[4px] rounded-full bg-white/10 text-white hover:bg-white/20 transition-colors"
+          >
+            Save set
+          </button>
+          <span className="text-[11px] text-[#5e5e5e]">{sets.length ? sets.length + ' saved' : 'none saved'}</span>
+        </div>
+
+        {sets.length > 0 && (
+          <div className="flex flex-row flex-wrap gap-[9px] pt-[9px] mt-[2px]" style={{ borderTop: '1px solid rgba(255,255,255,0.10)' }}>
+            {sets.map((s) => (
+              // pt-[3px] on the row above plus this padding leaves room for the X to sit
+              // proud of the circle without being clipped by the panel edge.
+              <div key={s.id} className="relative group/set">
+                <button
+                  type="button"
+                  onClick={() => applySet(s)}
+                  title={s.bg + ' · ' + (s.highlight || 'auto') + ' · ' + s.accent}
+                  aria-label={'Apply set ' + s.bg + ' ' + s.accent}
+                  className="w-[24px] h-[24px] rounded-full block"
+                  // Three bands, so a swatch shows all three axes at once — two sets can
+                  // share an accent and differ everywhere else, and a single-colour dot
+                  // would make those indistinguishable.
+                  style={{
+                    border: '1px solid rgba(255,255,255,0.18)',
+                    background: 'linear-gradient(135deg, ' + s.bg + ' 0 34%, ' + (s.highlight || derivedHighlight) + ' 34% 67%, ' + s.accent + ' 67%)',
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => persistSets(sets.filter((x) => x.id !== s.id))}
+                  aria-label="Delete set"
+                  // Hidden until the swatch is rolled over, so a row of saved colours reads
+                  // as colours rather than as a row of delete buttons.
+                  className="absolute -top-[5px] -right-[5px] w-[15px] h-[15px] rounded-full text-white opacity-0 group-hover/set:opacity-100 transition-opacity flex items-center justify-center"
+                  style={{ background: '#1c1b19', border: '1px solid rgba(255,255,255,0.3)' }}
+                >
+                  <X size={9} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -6654,7 +7002,10 @@ function TeamMode({ projects, people, currentUserShort, onSetCurrentUser }: {
   );
 }
 
-function SettingsMode({ subGroup, onSetSubGroup, people, newId, onAddPerson, onRenamePerson, onRenamePersonShort, onDeletePerson, currentUserShort, onSetCurrentUser, taskOrder, onSetTaskOrder, listSequence, onSetListSequence, caseMode, onSetCaseMode, cardRows, onSetCardRows, sortByCP, onSetSortByCP, trashedTasks, completedTasks, projects, clients, onUntrashTask, onPurgeTask, onToggleTask, onPurgeEmptyProjects, onListClosedOutProjects, onRemoveProjectsByIds, onListStragglerProjects, onDeleteStragglerProject, liveBackupAt, dailyBackupAt, onDownloadBackup, onRecoverImages, onRestoreFromFile, onRestoreFromSlot, onAddClient, onRenameClient, onRenameClientShort, onDeleteClient }: {
+function SettingsMode({ onOpenColorLab, subGroup, onSetSubGroup, people, newId, onAddPerson, onRenamePerson, onRenamePersonShort, onDeletePerson, currentUserShort, onSetCurrentUser, taskOrder, onSetTaskOrder, listSequence, onSetListSequence, caseMode, onSetCaseMode, cardRows, onSetCardRows, sortByCP, onSetSortByCP, trashedTasks, completedTasks, projects, clients, onUntrashTask, onPurgeTask, onToggleTask, onPurgeEmptyProjects, onListClosedOutProjects, onRemoveProjectsByIds, onListStragglerProjects, onDeleteStragglerProject, liveBackupAt, dailyBackupAt, onDownloadBackup, onRecoverImages, onRestoreFromFile, onRestoreFromSlot, onAddClient, onRenameClient, onRenameClientShort, onDeleteClient }: {
+  /** Opens the floating color lab. It lives at the app ROOT, not on this page, so it
+   *  outlives Settings — the point is to keep tuning after you navigate away. */
+  onOpenColorLab: () => void;
   subGroup: { today: boolean; tomorrow: boolean; next: boolean };
   onSetSubGroup: (k: 'today' | 'tomorrow' | 'next', v: boolean) => void;
   people: Person[]; newId: string | null;
@@ -6783,6 +7134,16 @@ function SettingsMode({ subGroup, onSetSubGroup, people, newId, onAddPerson, onR
               <div className="mx-[21px] px-[10px] py-[8px] rounded-[3.333px] bg-white/[0.03] flex flex-col items-start gap-[8px] [&>*]:w-full">
                 <ThemePresetRow label="Background" presets={BG_PRESETS} themeKey="bg" varName="--app-bg" storageKey="app-bg" />
                 <ThemePresetRow label="Accent" presets={ACCENT_PRESETS} themeKey="accent" varName="--app-accent" storageKey="app-accent" />
+                {/* The presets above are the shipped palette. The lab is the workbench for
+                    finding the next one: it floats over whatever mode you are in, because a
+                    colour can only really be judged against the page it has to live on. */}
+                <button
+                  type="button"
+                  onClick={onOpenColorLab}
+                  className="text-[13px] text-[#656464] hover:text-white transition-colors text-left"
+                >
+                  Open color lab…
+                </button>
               </div>
               </GridSnap>
             </div>
@@ -7797,6 +8158,10 @@ export default function App() {
   // column could be grouped here and flat there. useSharedSubGroup resolves
   // room → localStorage cache → defaults, which is what keeps pre-existing rooms honest.
   const subGroup = useSharedSubGroup();
+  // Root-level, deliberately: the lab must outlive the Settings page that opens it, so
+  // you can leave Settings for Focus or Calendar and keep judging colours against a real
+  // page. PIP is excluded at the render site — it is a reduced window with no room for it.
+  const [colorLabOpen, setColorLabOpen] = useState(false);
   const setRoomSubGroup = useSetSharedSubGroup();
   const setSubGroup = useCallback((k: 'today' | 'tomorrow' | 'next', v: boolean) => {
     // Cache locally first so this device is already right on its next cold start even if the
@@ -13371,6 +13736,7 @@ export default function App() {
         {!PIP_MODE && mode === 'settings' && (
           <SettingsMode
             subGroup={subGroup}
+            onOpenColorLab={() => setColorLabOpen(true)}
             onSetSubGroup={setSubGroup}
             people={people}
             newId={newId}
@@ -13764,6 +14130,7 @@ export default function App() {
         </DragOverlay>
       </div>
       <DebugOverlay />
+      {colorLabOpen && !PIP_MODE && <ColorLab onClose={() => setColorLabOpen(false)} />}
     </DndContext>
     </CardRowsContext.Provider>
   );

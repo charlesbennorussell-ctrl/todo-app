@@ -30,7 +30,10 @@ declare global {
       // accent — localStorage is per-device and made the surfaces drift apart.
       // Optional: rooms created before this key existed simply have no `theme`, and the app
       // falls back to the localStorage cache and then to the index.css defaults.
-      theme?: { bg?: string; accent?: string };
+      // `highlight` overrides --app-card, the RAISED surface (left nav rail, right assign
+      // tray, panel grounds). Left unset it stays derived from --app-bg by the color-mix in
+      // index.css, which is the behaviour every room had before this key existed.
+      theme?: { bg?: string; accent?: string; highlight?: string };
       // Auto-capitalisation mode (Settings → Text). In the ROOM for the same reason as `theme`:
       // localStorage is per-device, and the phone has no Settings UI at all — left in
       // localStorage the desktop toggle can never reach it and phone-typed titles sync back raw.
