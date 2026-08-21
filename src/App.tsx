@@ -127,10 +127,19 @@ function TauriTitlebar() {
       className="fixed top-0 inset-x-0 h-[40px] z-[120] bg-[#151412] flex items-center pl-[105px] select-none"
     >
       <div className="flex items-center gap-[8px] pointer-events-none">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" aria-hidden>
-          <rect x="2.5" y="2.5" width="19" height="19" rx="5.5" style={{ fill: 'var(--app-accent)' }} />
-          <rect x="7.5" y="7.5" width="9" height="9" rx="2.5" fill="none" stroke="#151412" strokeWidth="1.8" />
-        </svg>
+        {/* The real app mark, not a redrawn stand-in — this bar sits directly under the
+            Windows taskbar icon, and two different marks a few pixels apart looked like a
+            bug. Unlike the old inline SVG it does NOT follow --app-accent; the artwork has
+            its own colour, which is the point of it. */}
+        <img
+          src={`${import.meta.env.BASE_URL || '/'}icons/icon-192.png`}
+          width={18}
+          height={18}
+          alt=""
+          aria-hidden
+          draggable={false}
+          className="shrink-0"
+        />
         <span className="font-['NB_International:Regular',sans-serif] text-[14.333px]" style={{ color: 'var(--app-accent)' }}>Ctrl-Project</span>
       </div>
       <div className="absolute right-0 top-0 h-full flex">
