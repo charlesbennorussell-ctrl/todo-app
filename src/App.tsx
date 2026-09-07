@@ -8109,6 +8109,12 @@ export default function App() {
   // ships.
   const [newBuildTime, setNewBuildTime] = useState<string | null>(null);
   const [dismissedBuildTime, setDismissedBuildTime] = useState<string | null>(null);
+  const lastKeyAtRef = useRef(0);
+  useEffect(() => {
+    const onKey = () => { lastKeyAtRef.current = Date.now(); };
+    document.addEventListener('keydown', onKey, { capture: true });
+    return () => document.removeEventListener('keydown', onKey, { capture: true });
+  }, []);
   useEffect(() => {
     let cancelled = false;
     const POLL_MS = 60 * 1000;
@@ -8134,8 +8140,11 @@ export default function App() {
           // Never interrupt work: skip while anything is focused for input, while
           // text is selected, or while a drag is in flight. We just try again on
           // the next poll — there is no hurry, only inevitability.
-          const el = document.activeElement as HTMLElement | null;
-          const typing = !!el && (el.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName));
+          // "Typing" means a keystroke in the last 15 seconds — NOT "a field has focus".
+          // A search box or an inline title left focused kept the old check true
+          // indefinitely, and a client that quietly never updates is indistinguishable
+          // from a deploy that never happened.
+          const typing = Date.now() - lastKeyAtRef.current < 15000;
           const selecting = !!window.getSelection()?.toString();
           const dragging = document.body.classList.contains('dnd-dragging');
           if (!typing && !selecting && !dragging) {

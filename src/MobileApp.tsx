@@ -744,6 +744,53 @@ export default function MobileApp() {
   // Re-render each minute so "today" boundaries and completion-hiding stay honest overnight.
   useEffect(() => { const h = window.setInterval(() => setClockTick((n) => n + 1), 60000); return () => window.clearInterval(h); }, []);
 
+  // SELF-UPDATE — the phone had none. The desktop polls version.json and navigates into
+  // a new build; this surface only ever fetched that file for the debug panel, so a PWA
+  // sitting in the app switcher could keep an old bundle for days, and Safari's HTTP
+  // cache serves the old index.html for ten minutes after a deploy even on a reload.
+  // "I don't see any of the changes on the phone" was structural, not a caching blip.
+  //
+  // Same mechanics as the desktop: cache-busted manifest fetch every minute, navigate
+  // with ?rv= (a plain reload re-serves the cached html pointing at the OLD bundle),
+  // never while a keystroke landed in the last 15s or a drag is in flight, and strip
+  // ?rv= from the address once up. Also runs on every return to the foreground, which
+  // is when a phone app actually gets a chance to update.
+  const lastKeyAtRef = useRef(0);
+  useEffect(() => {
+    const onKey = () => { lastKeyAtRef.current = Date.now(); };
+    document.addEventListener('keydown', onKey, { capture: true });
+    return () => document.removeEventListener('keydown', onKey, { capture: true });
+  }, []);
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const u = new URL(window.location.href);
+    if (!u.searchParams.has('rv')) return;
+    u.searchParams.delete('rv');
+    window.history.replaceState({}, '', u.toString());
+  }, []);
+  useEffect(() => {
+    let cancelled = false;
+    const check = async () => {
+      try {
+        const res = await fetch(`${import.meta.env.BASE_URL || '/'}version.json?t=${Date.now()}`, { cache: 'no-store' });
+        if (!res.ok) return;
+        const manifest = await res.json() as { version: string; buildTime: string };
+        if (cancelled || !manifest.buildTime || manifest.buildTime <= __BUILD_TIME__) return;
+        const typing = Date.now() - lastKeyAtRef.current < 15000;
+        const dragging = document.body.classList.contains('dnd-dragging');
+        if (typing || dragging) return;
+        const u = new URL(window.location.href);
+        u.searchParams.set('rv', Date.now().toString(36));
+        window.location.replace(u.toString());
+      } catch { /* network blip — next tick */ }
+    };
+    check();
+    const id = window.setInterval(check, 60 * 1000);
+    const onVis = () => { if (!document.hidden) check(); };
+    document.addEventListener('visibilitychange', onVis);
+    return () => { cancelled = true; window.clearInterval(id); document.removeEventListener('visibilitychange', onVis); };
+  }, []);
+
   // Anchored to the REAL calendar day (midnight, matching the desktop's focus strip). The
   // minute tick above re-renders; when the date string flips at midnight this memo re-anchors
   // and every pane rolls forward automatically.
