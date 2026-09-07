@@ -1,5 +1,7 @@
 import { Fragment, memo, useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect, createContext, useContext } from 'react';
 import { flushSync } from 'react-dom';
+import { addDaysToDate, dateToISO } from './data';
+import { ComposeSheet, useAddClient, useAddProject } from './ComposeSheet';
 import { motion, AnimatePresence } from 'motion/react';
 import { Plus, X, List, FolderTree, SlidersHorizontal as SettingsIcon, Folder, Trash2, Calendar as CalendarIcon, ChevronLeft, ChevronRight, ArrowUp, LayoutDashboard, SquareKanban, Heart, FileText, Search, ExternalLink, Filter } from 'lucide-react';
 // Material Symbols — only the Calendar nav icon stayed Material (the rest reverted to Lucide).
@@ -4932,10 +4934,9 @@ function startOfWeek(d: Date): Date {
   nd.setDate(nd.getDate() - nd.getDay());
   return nd;
 }
-export function addDaysToDate(d: Date, n: number): Date { const x = new Date(d); x.setDate(x.getDate() + n); return x; }
-export function dateToISO(d: Date): string {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
+// Moved to data.ts so ComposeSheet.tsx can use them without importing this file. Re-exported
+// here because MobileApp and others already import them from './App'.
+export { addDaysToDate, dateToISO } from './data';
 
 // Date-chip actions on calendar/focus cards — the "one little portion of the larger task
 // editor": double-click the date = kick it one day forward (list-view parity via
@@ -8413,19 +8414,17 @@ export default function App() {
   // Bottom + button: create a blank task and immediately open the edit panel for it, anchored
   // to the Work column (since new tasks default to list='work'). Title starts empty — the panel's
   // EditableText shows "New Task" as a gray placeholder which disappears on first keystroke.
-  const addAndEditTask = useCallback(() => {
-    const id = `t-${Date.now()}`;
-    const newTask: Task = { id, title: '', type: 'todo', assignees: currentUserShort ? [currentUserShort] : [], completed: false, list: 'work', section: 'today', order: 0, createdAt: Date.now() };
-    setTasks((prev) => [...prev, newTask]);
-    setEditingTask(newTask);
-    setNewId(id);
-    setEditMode('edit');
-    // Anchor over the Work column at click time. Find it via DOM.
-    const cols = document.querySelectorAll('.flex-1.min-w-\\[280px\\]');
-    // Column order in dashboard mode: dashboard, work, projects, admin → work is index 1.
-    const workCol = cols[1] as HTMLElement | undefined;
-    setEditAnchor(workCol ? { x: workCol.getBoundingClientRect().left, width: workCol.getBoundingClientRect().width } : null);
-  }, [currentUserShort, setTasks]);
+  // The toolbar's + and the N key. Used to plant a blank task in Work and open the edit
+  // modal over it; now opens the same compose sheet the phone uses — same chips, same
+  // Personal-hides-Client rule, same save-on-dismiss. The name is kept so the two callers
+  // need no change.
+  const [composeOpen, setComposeOpen] = useState(false);
+  const addAndEditTask = useCallback(() => { setComposeOpen(true); }, []);
+  const addClientNamed = useAddClient();
+  const addProjectNamed = useAddProject();
+  // The sheet's date chips ("Today", "+1 wk") anchor on the real calendar day, as on the phone.
+  const composeAnchor = useMemo(() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; }, []);
+  const composeIsos = useMemo(() => [...Array(9)].map((_, i) => dateToISO(addDaysToDate(composeAnchor, i))), [composeAnchor]);
   const [activeId, setActiveId] = useState<string | null>(null);
   // Mid-drag wheel scrolling. While a card is being dragged, the DragOverlay ghost rides under
   // the cursor and swallows wheel events before they reach the tray / columns — exactly when
@@ -14218,6 +14217,41 @@ export default function App() {
       </div>
       <DebugOverlay />
       {colorLabOpen && !PIP_MODE && <ColorLab onClose={() => setColorLabOpen(false)} />}
+      {composeOpen && !PIP_MODE && (
+        <ComposeSheet
+          listSequence={listSequence}
+          projects={projects}
+          clients={clients}
+          people={people}
+          currentUserShort={currentUserShort}
+          defaultSection="today"
+          isos={composeIsos}
+          anchor={composeAnchor}
+          editingTask={null}
+          // Capitalised on the way in, as on the phone — the desktop's 2-seconds-after-blur
+          // timer belongs to inline titles that stay on screen; this one is committed and gone.
+          onCreate={(p, keepOpen) => {
+            addTask({
+              title: sentenceCaseConvert(p.title, caseMode),
+              type: p.milestone ? 'scheduled' : 'todo',
+              assignees: p.assignees ?? (currentUserShort ? [currentUserShort] : []),
+              completed: false,
+              list: p.list,
+              section: p.section,
+              projectId: p.projectId,
+              clientId: p.clientId,
+              deadline: p.deadline,
+              createdAt: Date.now(),
+            });
+            if (!keepOpen) setComposeOpen(false);
+          }}
+          onUpdate={updateTask}
+          onAddClient={addClientNamed}
+          onAddProject={addProjectNamed}
+          onClose={() => setComposeOpen(false)}
+          maxWidth={520}
+        />
+      )}
     </DndContext>
     </CardRowsContext.Provider>
   );
