@@ -1,5 +1,8 @@
 export type Assignee = string;
-export type SectionId = 'inbox' | 'today' | 'tomorrow' | 'next';
+// 'hold' = parked. Off the timeline entirely: never distributed onto a day, never pulled
+// by the 4 AM refill, not in the section-shift cycle. A held task keeps its deadline, so
+// pulling it back out restores it exactly where it was.
+export type SectionId = 'inbox' | 'today' | 'tomorrow' | 'next' | 'hold';
 export type ListId = 'dashboard' | 'work' | 'projects' | 'admin' | 'personal';
 export type AppMode = 'dashboard' | 'projectView' | 'calendar' | 'focus' | 'settings' | 'team';
 

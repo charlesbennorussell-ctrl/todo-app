@@ -2026,7 +2026,7 @@ function SortableTaskItem({
         ? { transform: undefined, transition: 'none', visibility: 'hidden' }
         : { transform: CSS.Transform.toString(transform), transition: !isAnyDragging ? 'none' : `transform ${MOTION.base}ms ${MOTION.easeOut}` });
   const isScheduled = task.type === 'scheduled';
-  const isNext = task.section === 'next' || task.section === 'tomorrow';
+  const isNext = task.section === 'next' || task.section === 'tomorrow' || task.section === 'hold';
   const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID || task.list === 'personal';
   // Expired milestone: deadline is strictly before today's day boundary. Renders in a faint
   // purple so it's visible (lingering) but visually quieted vs. live milestones.
@@ -4752,7 +4752,7 @@ function ProjectViewMode({
   const tasksForProjectList = (p: Project, listId: ListId) => {
     // Within a project's task list in project view, Today tasks always sort above Next tasks.
     // Inside each section, preserve the user's manual order.
-    const sectionRank: Record<SectionId, number> = { inbox: 0, today: 1, next: 2 };
+    const sectionRank: Record<SectionId, number> = { inbox: 0, today: 1, tomorrow: 2, next: 3, hold: 4 };
     return tasks
       .filter((t) => t.list === listId && t.projectId === p.id && t.type !== 'scheduled')
       .sort((a, b) => {
@@ -5585,7 +5585,7 @@ function CalendarCardBody({ task, projects, clients, taskOrder = 'ptc', isTodayC
   const project = hideProject ? undefined : rawProject;
   const client = hideClient ? undefined : rawClient;
   const isScheduled = task.type === 'scheduled';
-  const isNext = task.section === 'next' || task.section === 'tomorrow';
+  const isNext = task.section === 'next' || task.section === 'tomorrow' || task.section === 'hold';
   // A card dated beyond today is a FUTURE item — it reads muted (gray), never the loud white
   // reserved for today. This keeps a task that moved its deadline out (e.g. "today" → next week)
   // from staying white just because its section is still 'today'.
@@ -7411,7 +7411,7 @@ function ProjectTaskRow({ task, listId, onToggle, onRename, onDelete, onEdit, on
   const style = { transform: CSS.Transform.toString(transform), transition: isAnyDragging ? `transform ${MOTION.base}ms ${MOTION.easeOut}` : 'none' };
   const bodyFont = "font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap";
   const isScheduled = task.type === 'scheduled';
-  const isNext = task.section === 'next' || task.section === 'tomorrow';
+  const isNext = task.section === 'next' || task.section === 'tomorrow' || task.section === 'hold';
   const titleColor = isScheduled ? 'text-[var(--app-accent)]' : task.completed ? 'text-[#474747]' : isNext ? 'text-[#a8a8a8]' : 'text-white';
   const metaColor = task.completed ? 'text-[#474747]' : isScheduled ? 'text-[var(--app-accent)]' : 'text-[#656464]';
   const project = showContext && task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
@@ -7770,6 +7770,7 @@ function TaskQuickEdit({
           <Pill active={task.section === 'today'} onClick={() => apply({ section: 'today' })}>Today</Pill>
           <Pill active={task.section === 'tomorrow'} onClick={() => apply({ section: 'tomorrow' })}>Tomorrow</Pill>
           <Pill active={task.section === 'next'} onClick={() => apply({ section: 'next' })}>Next</Pill>
+          <Pill active={task.section === 'hold'} onClick={() => apply({ section: 'hold' })}>Hold</Pill>
         </div>
 
         {/* List: Work / Projects / Admin / Personal */}
@@ -8766,6 +8767,8 @@ export default function App() {
       // explicitly adds one.) Walks the section sequence in either direction
       // and clamps at the ends.
       if (kind === 'sectionForward' || kind === 'sectionBack') {
+        // 'hold' is deliberately absent: it is parked, not a step on the timeline, so the
+        // arrow keys never walk a task into or out of it. A held task simply doesn't move.
         const seq: SectionId[] = ['today', 'tomorrow', 'next'];
         const idx = seq.indexOf(t.section);
         if (idx < 0) return t;
@@ -10613,6 +10616,11 @@ export default function App() {
       // 'NW@<iso>' = the Next Week hotspot column — schedule for next week,
       // setting the deadline even for queue tasks that normally keep none.
       const isNextWeekDrop = targetDateRaw.startsWith('NW@');
+      // 'HOLD@' = the focus page's Hold column. Parked: section flips to 'hold' and NOTHING
+      // else changes — the deadline in particular survives, so un-holding restores the task
+      // to exactly the day it came from. Decided before any date maths, because the token
+      // is not a date and `new Date('HOLD@')` is Invalid.
+      const isHoldDrop = targetDateRaw === 'HOLD@';
       const targetDate = isNextWeekDrop ? targetDateRaw.slice(3) : targetDateRaw;
       const droppedList = targetListRaw as ListId;
       const srcTask = tasks.find((t) => t.id === activeTaskId);
@@ -10629,7 +10637,8 @@ export default function App() {
         // Section follows the target column's date relationship: today → 'today',
         // tomorrow → 'tomorrow', any other day → 'next' (queue).
         let targetSection: SectionId;
-        if (targetDateObj.getTime() <= today.getTime()) targetSection = 'today';
+        if (isHoldDrop) targetSection = 'hold';
+        else if (targetDateObj.getTime() <= today.getTime()) targetSection = 'today';
         else if (targetDate === tomorrowIso) targetSection = 'tomorrow';
         else targetSection = 'next';
         // RULES (per user spec):
@@ -10639,7 +10648,8 @@ export default function App() {
         //      changes its priority/order in the queue. Today / Tomorrow drops still flip
         //      section to 'today' / 'tomorrow' (explicit placement); future-day drops keep
         //      section='next' so the task stays in the auto-distributed queue.
-        const isQueueTask = !srcTask.deadline && !isNextWeekDrop;
+        // A Hold drop is section-only for EVERY task, dated or not (see isHoldDrop above).
+        const isQueueTask = isHoldDrop || (!srcTask.deadline && !isNextWeekDrop);
         // EXCEPTION to rule A. The FOCUS view's "Next" column aggregates seven days
         // (nextIsos = day+2 … day+8) behind a SINGLE droppable id, so targetDate is day+2 for
         // every card in it — not the day the card actually sits on. Rewriting the deadline from
@@ -11108,7 +11118,10 @@ export default function App() {
 
   // Calendar view bypasses the completedDay filter — historical completions stay visible there.
   const calendarTasks = useMemo(
-    () => tasks.filter((t) => !t.trashed && (!isPrivateTask(t) || t.assignees.includes(currentUserShort)) && projectAllowed(membership, t.projectId)),
+    // section !== 'hold': parked tasks are OFF the timeline. Filtering here, at the one
+    // source every calendar consumer reads (distribution, milestone pins, focus strip), is
+    // what keeps a held task with a deadline from still showing up on its day.
+    () => tasks.filter((t) => !t.trashed && t.section !== 'hold' && (!isPrivateTask(t) || t.assignees.includes(currentUserShort)) && projectAllowed(membership, t.projectId)),
     [tasks, currentUserShort, membership]
   );
 
@@ -11420,7 +11433,7 @@ export default function App() {
         const resolvedClientId = task.clientId ?? project?.clientId;
         const client = resolvedClientId ? clients.find((c) => c.id === resolvedClientId) : undefined;
         const isScheduled = task.type === 'scheduled';
-        const isNext = task.section === 'next' || task.section === 'tomorrow';
+        const isNext = task.section === 'next' || task.section === 'tomorrow' || task.section === 'hold';
         const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID || task.list === 'personal';
         // Active filter row (milestone filter): white title + × at the row end — the same
         // visual the client/project filter rows use.
@@ -11652,6 +11665,14 @@ export default function App() {
                 {bucket(tomorrowEnabled
                   ? (tasksByKey[`${listId}:next`] || [])
                   : [...(tasksByKey[`${listId}:tomorrow`] || []), ...(tasksByKey[`${listId}:next`] || [])])}
+              </>
+            ))}
+            {/* Parked. Rendered only when it has something in it — an always-present empty
+                Hold at the foot of every column is a standing invitation to defer. */}
+            {(tasksByKey[`${listId}:hold`] || []).length > 0 && wrap('hold', (
+              <>
+                <SectionHeader title="Hold" sticky="date" onAdd={() => addBlankTaskInSection(listId, 'hold', filterOpts)} />
+                {bucket(tasksByKey[`${listId}:hold`] || [])}
               </>
             ))}
           </>
@@ -12586,13 +12607,17 @@ export default function App() {
                     // hard-wired to the Next column. 'inbox' can't reach here.
                     const grouped = section === 'today' ? subGroup.today
                                   : section === 'tomorrow' ? subGroup.tomorrow
-                                  : subGroup.next;
+                                  : subGroup.next; // Hold follows the Next switch — both are the "not now" pile
                     const bandLabel = LIST_TITLES[listId];
                     const isoSet = new Set(isos);
                     // Filter helper — project narrows to one, else client narrows to all its tasks.
                     const clientOfT = (t: Task) => t.clientId ?? (t.projectId ? projects.find((p) => p.id === t.projectId)?.clientId : undefined);
                     const passesFilter = (t: Task) => taskMatchesQuery(t, focusSearch, projects, clients) && passesMilestoneFilter(t) && (focusProjectId ? t.projectId === focusProjectId : focusClientId ? clientOfT(t) === focusClientId : true);
-                    const bucketAllRaw = isos.flatMap((iso) => focusStripCells[`${iso}:${listId}`] || []);
+                    // Hold is the one column NOT read off the date strip: it is exactly the
+                    // set of tasks the strip excludes. Sourced straight from the section.
+                    const bucketAllRaw = section === 'hold'
+                      ? tasks.filter((t) => t.section === 'hold' && t.list === listId && !t.completed && !t.trashed && t.type !== 'scheduled').sort((a, b) => a.order - b.order)
+                      : isos.flatMap((iso) => focusStripCells[`${iso}:${listId}`] || []);
                     // NEXT column ordering. With Sort-by-Client/Project ON, the whole band sorts by
                     // client → project → date → started → order GLOBALLY (this is the setting's
                     // primary home — the day-cells only ever got a per-day sort, so the aggregate
@@ -12806,6 +12831,20 @@ export default function App() {
                       ),
                       isos: nextIsos,
                       section: 'next',
+                    },
+                    {
+                      key: 'fc-hold',
+                      header: (
+                        <div className="shrink-0 h-[37px] flex items-center gap-2 px-[16px] text-white" style={{ marginBottom: SPACING.dcr }}>
+                          <p className="font-['NB_International:Regular',sans-serif]">Hold</p>
+                        </div>
+                      ),
+                      // A synthetic token, not a date: Hold has no day. It flows through the
+                      // same cal:<token>:<list> cell ids the drop engine already parses (it
+                      // splits on ':' and never interprets the middle), and the drop branch
+                      // recognises it explicitly.
+                      isos: ['HOLD@'],
+                      section: 'hold',
                     },
                   ];
                   // "Coming Up" — upcoming milestones dated BEYOND the Next column's window,

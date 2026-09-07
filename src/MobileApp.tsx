@@ -59,6 +59,9 @@ const PANES: { section: SectionId; label: string }[] = [
   { section: 'today', label: 'Today' },
   { section: 'tomorrow', label: 'Tomorrow' },
   { section: 'next', label: 'Next' },
+  // Parked. Not a day: its pane is sourced straight from the section (see paneBands),
+  // and its drop token is 'HOLD@' rather than an ISO date.
+  { section: 'hold', label: 'Hold' },
 ];
 
 // Same settings the desktop reads — the phone honors them so both surfaces agree.
@@ -505,7 +508,8 @@ export default function MobileApp() {
   // …and the same three sub-grouping switches, off the same room key. Pane index IS the scope,
   // matching PANES above: 0 Today, 1 Tomorrow, 2 Next.
   const subGroup = useSharedSubGroup();
-  const paneGrouped = [subGroup.today, subGroup.tomorrow, subGroup.next];
+  // Hold follows the Next switch — both are the "not now" pile.
+  const paneGrouped = [subGroup.today, subGroup.tomorrow, subGroup.next, subGroup.next];
   // Layout diagnostics (long-press the header). Exists because the bottom bar sitting off the
   // screen bottom reproduces ONLY in the installed standalone PWA — desktop Chrome reports every
   // env(safe-area-inset-*) as 0, so the failing condition can't be recreated here. Measure on the
@@ -640,7 +644,9 @@ export default function MobileApp() {
   // undated tasks move section-only. Both buckets renumber 0..n.
   const dropTask = useCallback((srcTask: Task, targetDate: string, targetSection: SectionId, intendedOverTaskId: string | null, droppedInOwnBand: boolean) => {
     const targetList = srcTask.list; // no Ctrl on a phone — category never changes on drop
-    const isQueueTask = !srcTask.deadline;
+    // A Hold drop is section-only for EVERY task: the deadline survives, so un-holding
+    // restores the task to exactly the day it came from.
+    const isQueueTask = targetSection === 'hold' || !srcTask.deadline;
     dbg(`drop ${srcTask.id} d=${srcTask.deadline || '-'} -> ${targetSection}@${targetDate} over=${intendedOverTaskId || '-'} own=${droppedInOwnBand}`);
     setTasks((prev) => {
       const src = prev.find((t) => t.id === srcTask.id);
@@ -651,7 +657,8 @@ export default function MobileApp() {
         : { ...src, list: targetList, section: targetSection, deadline: targetDate };
       const toBucket = without.filter((t) => t.list === targetList && t.section === targetSection).sort((a, b) => a.order - b.order);
       let insertAt: number;
-      const deferringToNext = targetSection === 'next' && src.section !== 'next';
+      // Deferring into Next OR parking into Hold lands at the top: resurface first.
+      const deferringToNext = (targetSection === 'next' || targetSection === 'hold') && src.section !== targetSection;
       if (deferringToNext) insertAt = 0;
       else if (droppedInOwnBand && intendedOverTaskId) {
         const idx = toBucket.findIndex((t) => t.id === intendedOverTaskId);
@@ -669,7 +676,9 @@ export default function MobileApp() {
 
   // ── Distribution (the desktop Focus engine, verbatim) ──────────────────────
   const calendarTasks = useMemo(
-    () => tasks.filter((t) => !t.trashed && (!isPrivateTask(t) || t.assignees.includes(currentUserShort)) && projectAllowed(membership, t.projectId)),
+    // section !== 'hold': parked tasks are off the timeline — same source-level exclusion
+    // the desktop makes, so a held task with a deadline never surfaces on its day here either.
+    () => tasks.filter((t) => !t.trashed && t.section !== 'hold' && (!isPrivateTask(t) || t.assignees.includes(currentUserShort)) && projectAllowed(membership, t.projectId)),
     [tasks, currentUserShort, membership]
   );
   // Re-render each minute so "today" boundaries and completion-hiding stay honest overnight.
@@ -694,9 +703,14 @@ export default function MobileApp() {
   // Assemble one pane's bands. Today=iso[0], Tomorrow=iso[1], Next=isos[2..8] flattened
   // (dated pile at top, or global client/project sort when the desktop toggle is on).
   const paneBands = useCallback((paneIdx: number): { listId: ListId; cellId: string; tasks: Task[] }[] => {
-    const paneIsos = paneIdx === 0 ? [isos[0]] : paneIdx === 1 ? [isos[1]] : isos.slice(2);
+    // Pane 3 (Hold) has no dates; 'HOLD@' is the token its cell ids and drops carry.
+    const paneIsos = paneIdx === 3 ? ['HOLD@'] : paneIdx === 0 ? [isos[0]] : paneIdx === 1 ? [isos[1]] : isos.slice(2);
     return listSequence.map((listId) => {
-      const bucketRaw = paneIsos.flatMap((iso) => cells[`${iso}:${listId}`] || []);
+      // Hold is the one pane NOT read off the distribution: it is exactly what the
+      // distribution excludes. Sourced straight from the section.
+      const bucketRaw = paneIdx === 3
+        ? tasks.filter((t) => t.section === 'hold' && t.list === listId && !t.completed && !t.trashed && t.type !== 'scheduled').sort((a, b) => a.order - b.order)
+        : paneIsos.flatMap((iso) => cells[`${iso}:${listId}`] || []);
       const bucket = paneIdx === 2
         ? (sortByCP
             ? [...bucketRaw].sort(makeCpCompare(projects, clients))
@@ -714,9 +728,9 @@ export default function MobileApp() {
       }).sort((a, b) => (a.deadline! < b.deadline! ? -1 : a.deadline! > b.deadline! ? 1 : a.title.localeCompare(b.title)));
       return { listId, cellId: `cal:${paneIsos[0]}:${listId}`, tasks: [...bandMilestones, ...bucket] };
     });
-  }, [isos, cells, listSequence, sortByCP, projects, clients, calendarTasks]);
+  }, [isos, cells, listSequence, sortByCP, projects, clients, calendarTasks, tasks]);
 
-  const bandsByPane = useMemo(() => [paneBands(0), paneBands(1), paneBands(2)], [paneBands]);
+  const bandsByPane = useMemo(() => [paneBands(0), paneBands(1), paneBands(2), paneBands(3)], [paneBands]);
 
   // ── Pager ──────────────────────────────────────────────────────────────────
   const [pane, setPane] = useState(0);
@@ -811,7 +825,7 @@ export default function MobileApp() {
     const paneHit = hits.find((c) => String(c.id).startsWith('mpane:'));
     if (paneHit) {
       const paneIdx = Number(String(paneHit.id).split(':')[1]);
-      const paneIso = paneIdx === 0 ? isosRef.current[0] : paneIdx === 1 ? isosRef.current[1] : isosRef.current[2];
+      const paneIso = paneIdx === 3 ? 'HOLD@' : paneIdx === 0 ? isosRef.current[0] : paneIdx === 1 ? isosRef.current[1] : isosRef.current[2];
       const redirect = `cal:${paneIso}:${at.list}`;
       lastOverTaskIdRef.current = null;
       lastOverCellIdRef.current = redirect;
@@ -868,7 +882,7 @@ export default function MobileApp() {
       // TaskSheet chips, which already no-op when you tap the day the task is on.
       const shownIdx = anchorIso ? (anchorIso <= isos[0] ? 0 : anchorIso === isos[1] ? 1 : 2) : null;
       if (shownIdx === idx) return;
-      const targetDate = idx === 0 ? isos[0] : idx === 1 ? isos[1] : dateToISO(addDaysToDate(anchor, 7));
+      const targetDate = idx === 3 ? 'HOLD@' : idx === 0 ? isos[0] : idx === 1 ? isos[1] : dateToISO(addDaysToDate(anchor, 7));
       dropTask(t, targetDate, targetSection, null, false);
       return;
     }
@@ -876,7 +890,7 @@ export default function MobileApp() {
     const cellId = overId.startsWith('cal:') ? overId : lastOverCellIdRef.current;
     if (!cellId) return;
     const [, date] = cellId.split(':');
-    const paneIdx = date === isos[0] ? 0 : date === isos[1] ? 1 : 2;
+    const paneIdx = date === 'HOLD@' ? 3 : date === isos[0] ? 0 : date === isos[1] ? 1 : 2;
     const targetSection = PANES[paneIdx].section;
     // The NEXT pane collapses seven days (isos[2..8]) into ONE droppable id, so `date` is
     // isos[2] for every band in it — NOT where the card visually sits. Stamping the deadline
@@ -884,7 +898,7 @@ export default function MobileApp() {
     // Inside the Next pane, keep the existing deadline for any task already anchored in that
     // window; Today/Tomorrow are unambiguous single days and still reschedule as before.
     const inNextWindow = !!anchorIso && isos.slice(2).includes(anchorIso);
-    const targetDate = paneIdx === 2 && t.deadline && inNextWindow ? t.deadline : (paneIdx === 2 ? date : isos[paneIdx]);
+    const targetDate = paneIdx === 3 ? 'HOLD@' : paneIdx === 2 && t.deadline && inNextWindow ? t.deadline : (paneIdx === 2 ? date : isos[paneIdx]);
     const overTaskId = overId.startsWith('cal:') ? null : overId;
     const droppedInOwnBand = (lastOverCellIdRef.current || cellId).split(':')[2] === t.list;
     dropTask(t, targetDate, targetSection, overTaskId ?? lastOverTaskIdRef.current, droppedInOwnBand);
@@ -973,7 +987,7 @@ export default function MobileApp() {
               aria-hidden
               className="absolute top-[3px] bottom-[3px] left-[3px] rounded-full bg-[var(--app-bg)]"
               style={{
-                width: 'calc((100% - 6px) / 3)',
+                width: `calc((100% - 6px) / ${PANES.length})`,
                 transform: `translateX(${pane * 100}%)`,
                 transition: `transform 320ms cubic-bezier(0.16, 1, 0.3, 1)`,
               }}
@@ -1169,7 +1183,7 @@ export default function MobileApp() {
             onRename={(title) => renameTask(liveSheetTask.id, title)}
             onMove={(idx) => {
               const targetSection = PANES[idx].section;
-              const targetDate = idx === 0 ? isos[0] : idx === 1 ? isos[1] : dateToISO(addDaysToDate(anchor, 7));
+              const targetDate = idx === 3 ? 'HOLD@' : idx === 0 ? isos[0] : idx === 1 ? isos[1] : dateToISO(addDaysToDate(anchor, 7));
               dropTask(liveSheetTask, targetDate, targetSection, null, false);
             }}
             onDelete={() => { deleteTask(liveSheetTask.id); setSheetTaskId(null); }}
@@ -1423,7 +1437,11 @@ function TaskSheet({ task, projects, clients, isos, anchor, autoFocusTitle, conv
   const client = (task.clientId ?? project?.clientId) ? clients.find((c) => c.id === (task.clientId ?? project?.clientId)) : undefined;
   // Highlight the chip for the day the task DISPLAYS on. For dated tasks that's the deadline
   // (overdue absorbs into Today), regardless of a stale section; undated tasks follow section.
-  const currentIdx = task.deadline
+  // Hold first: a held task KEEPS its deadline (that is what makes un-holding lossless), so
+  // the dated branch below would otherwise claim it for Today/Tomorrow/Next — and tapping
+  // "Next" to un-hold it would read as a no-op.
+  const currentIdx = task.section === 'hold' ? 3
+    : task.deadline
     ? (task.deadline <= isos[0] ? 0 : task.deadline === isos[1] ? 1 : 2)
     : task.section === 'today' ? 0 : task.section === 'tomorrow' ? 1 : 2;
   return (
