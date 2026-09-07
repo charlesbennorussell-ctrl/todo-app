@@ -5996,10 +5996,9 @@ function WeekCalendarMode({
   // noise). weekOffset shifts the whole window by 7-day increments.
   const today = new Date(); today.setHours(0, 0, 0, 0);
   const weekStart = addDaysToDate(today, weekOffset * 7);
-  // Four DATE columns (today + next 3); the 5th grid slot is HOLD, rendered after
-  // the map. Was five days plus a "Next" queue column — Next is gone from the calendar
-  // (it hid work behind a date it never really had), and one day went with it so the
-  // grid stays five wide.
+  // Four DATE columns (today + next 3); grid slots 5 and 6 are NEXT and HOLD, rendered
+  // after the map. Was five days plus Next — one day gave way so Hold fits in the
+  // six-track grid.
   const days = Array.from({ length: 4 }, (_, i) => addDaysToDate(weekStart, i));
   const dayNameShort = (d: Date) => d.toLocaleDateString('en-US', { weekday: 'short' });
   // Category labels must occupy exactly one CARD SLOT. The WEEK CALENDAR always
@@ -6327,31 +6326,68 @@ function WeekCalendarMode({
           );
         })}
         {(() => {
-          // ── 5th column: HOLD ───────────────────────────────────
-          // Replaces the old "Next" queue column, which hid work behind a date it never
-          // really had. A full calendar column like the day columns — category bands, real
-          // drop targets, displacement — but its contents are PARKED tasks, not dated ones.
-          // 'HOLD@' stands in for the date everywhere a token is expected: the drop engine
-          // recognises it before any date maths and makes the drop section-only, deadline
-          // untouched (see isHoldDrop in handleDragEnd); addTaskOnDay creates an undated
-          // hold task for it. The "Coming Up" pin at the top keeps far-out milestones visible.
-          const nwToken = 'HOLD@';
-          // HOLD: parked tasks, straight from the section. Not read off the distribution —
-          // it is exactly the set the distribution excludes (calendarTasks drops 'hold' at
-          // the source). Manual order only; a held task's deadline is kept but not sorted on,
-          // because here it is dormant.
-          const nwBucketFor = (listId: ListId) => tasks
-            .filter((t) => !t.completed && !t.trashed && t.type !== 'scheduled' && t.list === listId && t.section === 'hold')
-            .sort((a, b) => a.order - b.order);
+          // ── Columns 5 and 6: NEXT and HOLD ─────────────────────
+          // Two queue columns with identical machinery — category bands, real drop targets,
+          // displacement, sub-grouping — and different contents, so ONE renderer, driven by
+          // a config each. (The previous version copied the whole body per column, which is
+          // how the calendar, focus and phone renderers drifted apart in the first place.)
+          //
+          // NEXT is the queue proper: everything not already placed in a visible day column.
+          // Its token 'NW@<next Monday>' makes a drop schedule the card for next week, setting
+          // a deadline even on queue tasks that normally keep none (see isNextWeekDrop).
+          // HOLD is parked: the section, straight from tasks — exactly the set the
+          // distribution excludes. Its token 'HOLD@' makes a drop section-only, deadline
+          // untouched (see isHoldDrop); addTaskOnDay creates an undated hold task for it.
+          const lastD = days[days.length - 1];
+          const delta = ((8 - lastD.getDay()) % 7) || 7; // first Monday after the window
+          const nwStart = addDaysToDate(lastD, delta);
+          const nwStartIso = dateToISO(nwStart);
+          const nwEndIso = dateToISO(addDaysToDate(nwStart, 6));
+          // Ids already shown in the visible day cells — excluded from the queue remainder
+          // so a task isn't listed twice.
+          const placedIds = new Set<string>();
+          for (const vd of days) {
+            const vIso = dateToISO(vd);
+            for (const l of listSequence) for (const x of (distributionByCell[`${vIso}:${l}`] || [])) placedIds.add(x.id);
+          }
+          const queueCols: Array<{
+            key: string; label: string; token: string; ariaWhen: string; comingUp: boolean;
+            bucketFor: (listId: ListId) => Task[]; milestonesFor: (listId: ListId) => Task[];
+          }> = [
+            {
+              key: 'next', label: 'Next', token: `NW@${nwStartIso}`, ariaWhen: 'next week', comingUp: true,
+              // Tasks DATED beyond the visible days, plus the undated queue remainder.
+              bucketFor: (listId) => tasks
+                .filter((x) => !x.completed && x.type !== 'scheduled' && x.list === listId
+                  && !placedIds.has(x.id)
+                  && (x.deadline ? x.deadline > lastVisibleIso : (x.section === 'next' || x.section === 'inbox')))
+                .sort((a, b) => ((a.deadline || '￿') < (b.deadline || '￿') ? -1 : (a.deadline || '￿') > (b.deadline || '￿') ? 1 : a.order - b.order)),
+              // Milestones dated inside next week, band-matched by effective list.
+              milestonesFor: (listId) => tasks.filter((x) =>
+                x.type === 'scheduled' && !!x.deadline && x.deadline >= nwStartIso && x.deadline <= nwEndIso && milestoneBelongsTo(x, listId, projects)),
+            },
+            {
+              key: 'hold', label: 'Hold', token: 'HOLD@', ariaWhen: 'on hold', comingUp: false,
+              // Manual order only; a held task keeps its deadline but it is dormant here.
+              bucketFor: (listId) => tasks
+                .filter((x) => !x.completed && !x.trashed && x.type !== 'scheduled' && x.list === listId && x.section === 'hold')
+                .sort((a, b) => a.order - b.order),
+              // Milestones are never held, and a date means nothing in a column without one.
+              milestonesFor: () => [],
+            },
+          ];
+          return queueCols.map((qc) => {
+          const nwToken = qc.token;
+          const nwBucketFor = qc.bucketFor;
           return (
-            <CalendarColumnDroppable key="hold" date={nwToken}>
+            <CalendarColumnDroppable key={qc.key} date={nwToken}>
               <div className="shrink-0 h-[37px] flex items-center gap-2 px-[16px] mb-[74px] text-white">
-                <p className="font-['NB_International:Regular',sans-serif]">Hold</p>
+                <p className="font-['NB_International:Regular',sans-serif]">{qc.label}</p>
               </div>
               <CustomScroll bandIndicator={activeTask ? { list: activeTask.list, label: LIST_TITLES[activeTask.list] } : null}>
-                {/* Coming-Up milestones (dated beyond the visible window) stay pinned at the
-                    very top — a read-only look-ahead, same as before. */}
-                {overflowMilestones.length > 0 && (
+                {/* Coming-Up milestones (dated beyond the visible window) pin at the very top
+                    of NEXT — a read-only look-ahead. */}
+                {qc.comingUp && overflowMilestones.length > 0 && (
                   <div className="mb-[37px]">
                     <div className="h-[37px] px-[16px] flex items-center">
                       <p className={`${bodyFont} text-[#5e5e5e]`}>Coming Up</p>
@@ -6362,11 +6398,9 @@ function WeekCalendarMode({
                 {listSequence.map((listId, bandIdx) => {
                   const label = LIST_TITLES[listId];
                   const bucket = nwBucketFor(listId);
-                  // Milestones dated next week (or beyond, minus the Coming-Up ones already
-                  // shown) matched to this band by effective list — pinned above the cards.
-                  // No dated pins in Hold: milestones are never held, and a date means nothing
-                  // in a column that has none. (Coming Up above still shows the far-out ones.)
-                  const bandMilestones: Task[] = [];
+                  // Dated milestone pins above the cards — per column config (Next: next
+                  // week's; Hold: none).
+                  const bandMilestones = qc.milestonesFor(listId);
                   // Displacement — identical logic to the day columns: same-bucket reorder
                   // shifts the between cards; cross-bucket-into-here opens a gap above the
                   // over-card so the drop slot is visible.
@@ -6405,7 +6439,7 @@ function WeekCalendarMode({
                           bodyFont={bodyFont}
                           onLabelClick={scrollBandToTop}
                           onAdd={() => onAddTaskOnDay(listId, nwToken)}
-                          addAriaLabel={`Add ${label} task next week`}
+                          addAriaLabel={`Add ${label} task ${qc.ariaWhen}`}
                         />
                       )}
                     >
@@ -6487,6 +6521,7 @@ function WeekCalendarMode({
               </CustomScroll>
             </CalendarColumnDroppable>
           );
+          });
         })()}
       </div>
       </div>
@@ -10623,7 +10658,10 @@ export default function App() {
       // to exactly the day it came from. Decided before any date maths, because the token
       // is not a date and `new Date('HOLD@')` is Invalid.
       const isHoldDrop = targetDateRaw === 'HOLD@';
-      const targetDate = targetDateRaw;
+      // 'NW@<iso>' = the calendar's Next column — schedule for next week, setting the
+      // deadline even for queue tasks that normally keep none.
+      const isNextWeekDrop = targetDateRaw.startsWith('NW@');
+      const targetDate = isNextWeekDrop ? targetDateRaw.slice(3) : targetDateRaw;
       const droppedList = targetListRaw as ListId;
       const srcTask = tasks.find((t) => t.id === activeTaskId);
       // The redirected collision lost the original over-task — fall back to the refs captured
@@ -10651,7 +10689,7 @@ export default function App() {
         //      section to 'today' / 'tomorrow' (explicit placement); future-day drops keep
         //      section='next' so the task stays in the auto-distributed queue.
         // A Hold drop is section-only for EVERY task, dated or not (see isHoldDrop above).
-        const isQueueTask = isHoldDrop || !srcTask.deadline;
+        const isQueueTask = isHoldDrop || (!srcTask.deadline && !isNextWeekDrop);
         // EXCEPTION to rule A. The FOCUS view's "Next" column aggregates seven days
         // (nextIsos = day+2 … day+8) behind a SINGLE droppable id, so targetDate is day+2 for
         // every card in it — not the day the card actually sits on. Rewriting the deadline from
@@ -10661,7 +10699,7 @@ export default function App() {
         // rescheduling, hence the mode check. `anchorOf`: a date-RANGE task is placed by its
         // startDate, so that — not the deadline — says where it currently sits.
         const dropAnchorIso = (srcTask.startDate && srcTask.deadline) ? srcTask.startDate : srcTask.deadline;
-        const isFocusNextAggregate = mode === 'focus' && targetSection === 'next';
+        const isFocusNextAggregate = mode === 'focus' && !isNextWeekDrop && targetSection === 'next';
         const keepExistingDeadline = isFocusNextAggregate && !!dropAnchorIso && dropAnchorIso > tomorrowIso;
         // Which band did the user actually release in? Only a drop within the task's OWN
         // band gives positional control; anything else defaults to the top of its stack.
