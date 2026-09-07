@@ -2035,7 +2035,7 @@ function SortableTaskItem({
         ? { transform: undefined, transition: 'none', visibility: 'hidden' }
         : { transform: CSS.Transform.toString(transform), transition: !isAnyDragging ? 'none' : `transform ${MOTION.base}ms ${MOTION.easeOut}` });
   const isScheduled = task.type === 'scheduled';
-  const isNext = task.section === 'next' || task.section === 'tomorrow' || task.section === 'hold';
+  const isNext = isDeferredSection(task.section);
   const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID || task.list === 'personal';
   // Expired milestone: deadline is strictly before today's day boundary. Renders in a faint
   // purple so it's visible (lingering) but visually quieted vs. live milestones.
@@ -4776,11 +4776,7 @@ function ProjectViewMode({
     return tasks
       .filter((t) => {
         if (t.type !== 'scheduled') return false;
-        if (t.projectId) {
-          const proj = projects.find((p) => p.id === t.projectId);
-          if (proj?.list) return proj.list === listId;
-        }
-        return t.list === listId;
+        return milestoneBelongsTo(t, listId, projects);
       })
       .sort((a, b) => {
         const ad = a.deadline || '\uffff';
@@ -5287,9 +5283,9 @@ export function computeCalendarDistribution(tasks: Task[], todayAnchor: Date, ho
   // Sort-by-Client/Project: reorder a cell so it groups by client → project, then deadline
   // (dated before undated), then started-first, then manual order.
   const cpCompare = makeCpCompare(projects, clients);
-  const todayIso = `${todayAnchor.getFullYear()}-${String(todayAnchor.getMonth() + 1).padStart(2, '0')}-${String(todayAnchor.getDate()).padStart(2, '0')}`;
+  const todayIso = dateToISO(todayAnchor);
   const tomorrowAnchor = addDaysToDate(todayAnchor, 1);
-  const tomorrowIso = `${tomorrowAnchor.getFullYear()}-${String(tomorrowAnchor.getMonth() + 1).padStart(2, '0')}-${String(tomorrowAnchor.getDate()).padStart(2, '0')}`;
+  const tomorrowIso = dateToISO(tomorrowAnchor);
   // Per-list queues + their cursors. Queues advance independently per list.
   const queues: Record<string, Task[]> = {};
   const queueIdxs: Record<string, number> = {};
@@ -5311,7 +5307,7 @@ export function computeCalendarDistribution(tasks: Task[], todayAnchor: Date, ho
   const anchorOf = (t: Task) => (t.startDate && t.deadline) ? t.startDate : t.deadline;
   for (let off = 0; off < horizonDays; off++) {
     const d = addDaysToDate(todayAnchor, off);
-    const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const iso = dateToISO(d);
     const isTodayOrTomorrow = iso === todayIso || iso === tomorrowIso;
     // Pass 1 — collect mandatory per list, sum the total.
     const mandatoryByList: Record<string, Task[]> = {};
@@ -5594,7 +5590,7 @@ function CalendarCardBody({ task, projects, clients, taskOrder = 'ptc', isTodayC
   const project = hideProject ? undefined : rawProject;
   const client = hideClient ? undefined : rawClient;
   const isScheduled = task.type === 'scheduled';
-  const isNext = task.section === 'next' || task.section === 'tomorrow' || task.section === 'hold';
+  const isNext = isDeferredSection(task.section);
   // A card dated beyond today is a FUTURE item — it reads muted (gray), never the loud white
   // reserved for today. This keeps a task that moved its deadline out (e.g. "today" → next week)
   // from staying white just because its section is still 'today'.
@@ -5923,6 +5919,24 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
 // produced the bucket still decides which group leads. The underlying id rides along with
 // the label so a header can double as a drop target that reassigns; '' is the Misc
 // catch-all, where a drop CLEARS the assignment instead of setting one.
+// Ungrouped columns run through the same renderer as grouped ones — one anonymous group —
+// so there is a single card-emitting path for SortableContext's `items` to stay in step with.
+export const flatGroup = (bucket: Task[]) => [{ name: '', kind: 'client' as const, id: '', tasks: bucket }];
+
+// The "not now" sections. Cards in these dim the same way; both surfaces read this.
+export const isDeferredSection = (s: SectionId) => s === 'next' || s === 'tomorrow' || s === 'hold';
+
+// Which category band a milestone pins to: the project's pinned list if it has one, else
+// the task's own. Four renderers (calendar day, calendar Hold, focus, phone) used to carry
+// their own copy of this and it had already drifted once. Shared so it can't again.
+export function milestoneBelongsTo(t: Task, listId: ListId, projects: Project[]): boolean {
+  if (t.projectId) {
+    const proj = projects.find((p) => p.id === t.projectId);
+    if (proj?.list) return proj.list === listId;
+  }
+  return t.list === listId;
+}
+
 export function buildSubGroupsShared(bucket: Task[], listId: ListId, projects: Project[], clients: Client[]) {
   const out: { name: string; kind: 'client' | 'project'; id: string; tasks: Task[] }[] = [];
   for (const t of bucket) {
@@ -6002,8 +6016,6 @@ function WeekCalendarMode({
   // Binds the shared rule (buildSubGroupsShared, above this component) to this view's
   // projects/clients, so the call sites below read the same as they always did.
   const buildSubGroups = (bucket: Task[], listId: ListId) => buildSubGroupsShared(bucket, listId, projects, clients);
-  // Ungrouped columns still run through the same renderer — one anonymous group.
-  const flatGroup = (bucket: Task[]) => [{ name: '', kind: 'client' as const, id: '', tasks: bucket }];
 
   // todayAnchor MUST track the real date. A plain useMemo([]) went stale when the app stayed
   // open across midnight (the desktop shell loads the hosted URL and never reloads): the columns
@@ -6183,11 +6195,7 @@ function WeekCalendarMode({
                 // Milestones whose effective list matches this band, pinned to the top of it.
                 // Effective list = the project's pinned list if set, otherwise the task's own list.
                 const dayMilestones = (milestonesByIso[iso] || []).filter((t) => {
-                  if (t.projectId) {
-                    const proj = projects.find((p) => p.id === t.projectId);
-                    if (proj?.list) return proj.list === listId;
-                  }
-                  return t.list === listId;
+                  return milestoneBelongsTo(t, listId, projects);
                 });
                 if (isWeekend && listId !== 'projects' && listId !== 'personal' && bucket.length === 0 && dayMilestones.length === 0 && !isAnyDragging) return null;
                 const isFirstBand = renderedBands === 0;
@@ -6263,7 +6271,6 @@ function WeekCalendarMode({
                           // Index within the FLAT bucket — the displacement math is keyed
                           // to that order, not to the group's local one.
                           const index = bucket.indexOf(t);
-                          let displacementOffset = 0;
                           let insertionGap = 0;
                           // CATEGORY GATE: only displace when this cell's list matches the
                           // source task's list. Cards in other categories (Work source dragging
@@ -6298,7 +6305,7 @@ function WeekCalendarMode({
                               categoryDimmed={categoryDimmed}
                               projects={projects}
                               clients={clients}
-                              displacementOffset={displacementOffset}
+                              displacementOffset={0}
                               insertionGap={insertionGap}
                               taskOrder={taskOrder}
                               autoFocusEdit={t.id === newTaskId}
@@ -6432,7 +6439,6 @@ function WeekCalendarMode({
                             )}
                             {g.tasks.map((t) => {
                           const index = bucket.indexOf(t);
-                          let displacementOffset = 0;
                           let insertionGap = 0;
                           const sameCategory = activeTask && activeTask.list === listId;
                           if (sameCategory && activeTask && overTask && t.id !== activeTask.id) {
@@ -6459,7 +6465,7 @@ function WeekCalendarMode({
                               categoryDimmed={categoryDimmed}
                               projects={projects}
                               clients={clients}
-                              displacementOffset={displacementOffset}
+                              displacementOffset={0}
                               insertionGap={insertionGap}
                               taskOrder={taskOrder}
                               autoFocusEdit={t.id === newTaskId}
@@ -7403,7 +7409,7 @@ function ProjectTaskRow({ task, listId, onToggle, onRename, onDelete, onEdit, on
   const style = { transform: CSS.Transform.toString(transform), transition: isAnyDragging ? `transform ${MOTION.base}ms ${MOTION.easeOut}` : 'none' };
   const bodyFont = "font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap";
   const isScheduled = task.type === 'scheduled';
-  const isNext = task.section === 'next' || task.section === 'tomorrow' || task.section === 'hold';
+  const isNext = isDeferredSection(task.section);
   const titleColor = isScheduled ? 'text-[var(--app-accent)]' : task.completed ? 'text-[#474747]' : isNext ? 'text-[#a8a8a8]' : 'text-white';
   const metaColor = task.completed ? 'text-[#474747]' : isScheduled ? 'text-[var(--app-accent)]' : 'text-[#656464]';
   const project = showContext && task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
@@ -7654,8 +7660,8 @@ function TaskQuickEdit({
   const client = resolvedClientId ? clients.find((c) => c.id === resolvedClientId) : undefined;
   const isMilestone = task.type === 'scheduled';
   const todayIso = todayISO();
-  const tomorrowIso = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; })();
-  const nextWeekIso = (() => { const d = new Date(); d.setDate(d.getDate() + 7); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; })();
+  const tomorrowIso = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return dateToISO(d); })();
+  const nextWeekIso = (() => { const d = new Date(); d.setDate(d.getDate() + 7); return dateToISO(d); })();
 
   // Pill (default): bold-white when active, dim-gray otherwise. Used for list / client / project / etc.
   const Pill = ({ active, onClick, children }: { active?: boolean; onClick: () => void; children: React.ReactNode }) => (
@@ -8162,10 +8168,6 @@ export default function App() {
     try { window.localStorage.setItem('todo-app-subgroup', JSON.stringify({ ...subGroup, [k]: v })); } catch {}
     setRoomSubGroup({ [k]: v });
   }, [subGroup, setRoomSubGroup]);
-  // A calendar day column maps onto one of the three scopes by its offset.
-  const subGroupForOffset = useCallback((offset: number) => (
-    offset <= 0 ? subGroup.today : subGroup.tomorrow
-  ), [subGroup]);
 
   const [taskOrder, setTaskOrderState] = useState<'cpt' | 'ptc' | 'tcp'>(() => {
     if (typeof window === 'undefined') return 'ptc';
@@ -8782,11 +8784,11 @@ export default function App() {
         else if (kind === 'nextWeek') target.setDate(today.getDate() + 7);
         // 'today' → leave at today
       }
-      const iso = `${target.getFullYear()}-${String(target.getMonth() + 1).padStart(2, '0')}-${String(target.getDate()).padStart(2, '0')}`;
+      const iso = dateToISO(target);
       // Section follows the new date: today/past → today, tomorrow → tomorrow, future → next.
-      const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+      const todayIso = dateToISO(today);
       const tomorrowDate = new Date(today); tomorrowDate.setDate(today.getDate() + 1);
-      const tomorrowIso = `${tomorrowDate.getFullYear()}-${String(tomorrowDate.getMonth() + 1).padStart(2, '0')}-${String(tomorrowDate.getDate()).padStart(2, '0')}`;
+      const tomorrowIso = dateToISO(tomorrowDate);
       let section: SectionId;
       if (iso <= todayIso) section = 'today';
       else if (iso === tomorrowIso) section = 'tomorrow';
@@ -9866,7 +9868,7 @@ export default function App() {
   const addTaskOnDay = useCallback((listId: ListId, iso: string) => {
     const id = `task-${Date.now()}`;
     const today = todayISO();
-    const tomorrow = (() => { const d = new Date(); d.setHours(d.getHours() - 4); d.setDate(d.getDate() + 1); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; })();
+    const tomorrow = (() => { const d = new Date(); d.setHours(d.getHours() - 4); d.setDate(d.getDate() + 1); return dateToISO(d); })();
     // 'HOLD@' is the calendar's Hold column, not a day: the task is parked and UNDATED.
     // Stamping next Monday on it (what this did before the column existed) created a
     // dated Next task that left the Hold column the instant it was made.
@@ -10616,15 +10618,12 @@ export default function App() {
     }
     if (overIdStr.startsWith('cal:')) {
       const [, targetDateRaw, targetListRaw] = overIdStr.split(':');
-      // 'NW@<iso>' = the Next Week hotspot column — schedule for next week,
-      // setting the deadline even for queue tasks that normally keep none.
-      const isNextWeekDrop = targetDateRaw.startsWith('NW@');
       // 'HOLD@' = the focus page's Hold column. Parked: section flips to 'hold' and NOTHING
       // else changes — the deadline in particular survives, so un-holding restores the task
       // to exactly the day it came from. Decided before any date maths, because the token
       // is not a date and `new Date('HOLD@')` is Invalid.
       const isHoldDrop = targetDateRaw === 'HOLD@';
-      const targetDate = isNextWeekDrop ? targetDateRaw.slice(3) : targetDateRaw;
+      const targetDate = targetDateRaw;
       const droppedList = targetListRaw as ListId;
       const srcTask = tasks.find((t) => t.id === activeTaskId);
       // The redirected collision lost the original over-task — fall back to the refs captured
@@ -10636,7 +10635,7 @@ export default function App() {
         const today = new Date(); today.setHours(0, 0, 0, 0);
         const tomorrow = new Date(today); tomorrow.setDate(today.getDate() + 1);
         const targetDateObj = new Date(targetDate + 'T00:00:00');
-        const tomorrowIso = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, '0')}-${String(tomorrow.getDate()).padStart(2, '0')}`;
+        const tomorrowIso = dateToISO(tomorrow);
         // Section follows the target column's date relationship: today → 'today',
         // tomorrow → 'tomorrow', any other day → 'next' (queue).
         let targetSection: SectionId;
@@ -10652,7 +10651,7 @@ export default function App() {
         //      section to 'today' / 'tomorrow' (explicit placement); future-day drops keep
         //      section='next' so the task stays in the auto-distributed queue.
         // A Hold drop is section-only for EVERY task, dated or not (see isHoldDrop above).
-        const isQueueTask = isHoldDrop || (!srcTask.deadline && !isNextWeekDrop);
+        const isQueueTask = isHoldDrop || !srcTask.deadline;
         // EXCEPTION to rule A. The FOCUS view's "Next" column aggregates seven days
         // (nextIsos = day+2 … day+8) behind a SINGLE droppable id, so targetDate is day+2 for
         // every card in it — not the day the card actually sits on. Rewriting the deadline from
@@ -10662,7 +10661,7 @@ export default function App() {
         // rescheduling, hence the mode check. `anchorOf`: a date-RANGE task is placed by its
         // startDate, so that — not the deadline — says where it currently sits.
         const dropAnchorIso = (srcTask.startDate && srcTask.deadline) ? srcTask.startDate : srcTask.deadline;
-        const isFocusNextAggregate = mode === 'focus' && !isNextWeekDrop && targetSection === 'next';
+        const isFocusNextAggregate = mode === 'focus' && targetSection === 'next';
         const keepExistingDeadline = isFocusNextAggregate && !!dropAnchorIso && dropAnchorIso > tomorrowIso;
         // Which band did the user actually release in? Only a drop within the task's OWN
         // band gives positional control; anything else defaults to the top of its stack.
@@ -11092,7 +11091,7 @@ export default function App() {
     const today = todayISO();
     const now = Date.now();
     // Yesterday's ISO — milestones whose deadline is yesterday or today still show in list/project.
-    const yesterday = (() => { const d = new Date(); d.setHours(d.getHours() - 4); d.setDate(d.getDate() - 1); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; })();
+    const yesterday = (() => { const d = new Date(); d.setHours(d.getHours() - 4); d.setDate(d.getDate() - 1); return dateToISO(d); })();
     return tasks.filter((t) => {
       if (t.trashed) return false;
       if (isPrivateTask(t) && !t.assignees.includes(currentUserShort)) return false;
@@ -11436,7 +11435,7 @@ export default function App() {
         const resolvedClientId = task.clientId ?? project?.clientId;
         const client = resolvedClientId ? clients.find((c) => c.id === resolvedClientId) : undefined;
         const isScheduled = task.type === 'scheduled';
-        const isNext = task.section === 'next' || task.section === 'tomorrow' || task.section === 'hold';
+        const isNext = isDeferredSection(task.section);
         const isPersonal = resolvedClientId === PERSONAL_CLIENT_ID || task.list === 'personal';
         // Active filter row (milestone filter): white title + × at the row end — the same
         // visual the client/project filter rows use.
@@ -12639,11 +12638,7 @@ export default function App() {
                     const bandMilestones = calendarTasks.filter((t) => {
                       if (t.type !== 'scheduled' || !t.deadline || !isoSet.has(t.deadline)) return false;
                       if (!passesFilter(t)) return false;
-                      if (t.projectId) {
-                        const proj = projects.find((p) => p.id === t.projectId);
-                        if (proj?.list) return proj.list === listId;
-                      }
-                      return t.list === listId;
+                      return milestoneBelongsTo(t, listId, projects);
                     }).sort((a, b) => (a.deadline! < b.deadline! ? -1 : a.deadline! > b.deadline! ? 1 : a.title.localeCompare(b.title)));
                     const cellId = `cal:${isos[0]}:${listId}`;
                     const cellTasks = [...bandMilestones, ...bucket];
@@ -12652,7 +12647,7 @@ export default function App() {
                     // `items` below must match what is actually emitted — see the note there.
                     const focusGroups = grouped
                       ? buildSubGroupsShared(cellTasks, listId, projects, clients)
-                      : [{ name: '', kind: 'client' as const, id: '', tasks: cellTasks }];
+                      : flatGroup(cellTasks);
                     // Drag-displace (same engine as the calendar view): the SOURCE band leans on
                     // dnd-kit's native sortable shift; a DESTINATION band opens an insertion gap
                     // above the card being dragged over so the landing spot is visible. Only the

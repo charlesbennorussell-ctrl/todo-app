@@ -50,7 +50,7 @@ import { useMembership, projectAllowed } from './auth';
 import {
   computeCalendarDistribution, makeCpCompare, TaskCheckbox, Arrowhead, DeadlineArrow,
   addDaysToDate, dateToISO, useSharedTheme, useSharedSubGroup, doneTint, convertTitleCase, useSharedCaseMode,
-  buildSubGroupsShared,
+  buildSubGroupsShared, flatGroup, milestoneBelongsTo,
 } from './App';
 
 // ── Shared module state ───────────────────────────────────────────────────────
@@ -690,6 +690,13 @@ export default function MobileApp() {
   const todayStamp = dateToISO(new Date());
   const anchor = useMemo(() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; }, [todayStamp]); // eslint-disable-line react-hooks/exhaustive-deps
   const isos = useMemo(() => [...Array(9)].map((_, i) => dateToISO(addDaysToDate(anchor, i))), [anchor]);
+  // What a pane INDEX means as a drop target. Today and Tomorrow are their own days; Next
+  // is "a week out"; Hold is the parked token, not a date. Two call sites (the day tabs and
+  // the sheet's Move chips) used to spell this out independently.
+  const paneTargetDate = useCallback((idx: number): string => (
+    idx === 3 ? 'HOLD@' : idx === 0 ? isos[0] : idx === 1 ? isos[1] : dateToISO(addDaysToDate(anchor, 7))
+  ), [isos, anchor]);
+
   // Stable ref mirror for the collision callback (deps [] — it must not re-create mid-drag).
   const isosRef = useRef(isos);
   isosRef.current = isos;
@@ -720,11 +727,7 @@ export default function MobileApp() {
       const isoSet = new Set(paneIsos);
       const bandMilestones = calendarTasks.filter((t) => {
         if (t.type !== 'scheduled' || !t.deadline || !isoSet.has(t.deadline)) return false;
-        if (t.projectId) {
-          const proj = projects.find((p) => p.id === t.projectId);
-          if (proj?.list) return proj.list === listId;
-        }
-        return t.list === listId;
+        return milestoneBelongsTo(t, listId, projects);
       }).sort((a, b) => (a.deadline! < b.deadline! ? -1 : a.deadline! > b.deadline! ? 1 : a.title.localeCompare(b.title)));
       return { listId, cellId: `cal:${paneIsos[0]}:${listId}`, tasks: [...bandMilestones, ...bucket] };
     });
@@ -882,7 +885,7 @@ export default function MobileApp() {
       // TaskSheet chips, which already no-op when you tap the day the task is on.
       const shownIdx = anchorIso ? (anchorIso <= isos[0] ? 0 : anchorIso === isos[1] ? 1 : 2) : null;
       if (shownIdx === idx) return;
-      const targetDate = idx === 3 ? 'HOLD@' : idx === 0 ? isos[0] : idx === 1 ? isos[1] : dateToISO(addDaysToDate(anchor, 7));
+      const targetDate = paneTargetDate(idx);
       dropTask(t, targetDate, targetSection, null, false);
       return;
     }
@@ -1028,7 +1031,7 @@ export default function MobileApp() {
                   // there is a single card-emitting path for `items` below to stay in step with.
                   const groups = grouped
                     ? buildSubGroupsShared(bandTasks, listId, projects, clients)
-                    : [{ name: '', kind: 'client' as const, id: '', tasks: bandTasks }];
+                    : flatGroup(bandTasks);
                   return (
                   <div key={`${p.section}-${listId}`} className="pt-[7px]">
                     {/* Label vertically centered; the + is ALWAYS visible (tap-to-reveal made it
@@ -1183,7 +1186,7 @@ export default function MobileApp() {
             onRename={(title) => renameTask(liveSheetTask.id, title)}
             onMove={(idx) => {
               const targetSection = PANES[idx].section;
-              const targetDate = idx === 3 ? 'HOLD@' : idx === 0 ? isos[0] : idx === 1 ? isos[1] : dateToISO(addDaysToDate(anchor, 7));
+              const targetDate = paneTargetDate(idx);
               dropTask(liveSheetTask, targetDate, targetSection, null, false);
             }}
             onDelete={() => { deleteTask(liveSheetTask.id); setSheetTaskId(null); }}
