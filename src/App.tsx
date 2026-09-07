@@ -12383,19 +12383,20 @@ export default function App() {
                   </button>
                 </>
               )}
-              {/* SIX-COLUMN GRID: col 1 = projects-as-filters, cols 2–3 = the Dashboard
-                  stack at double width (the 2fr track — no col-span wrapper needed),
-                  cols 4–6 = the calendar unpacked into Today / Tomorrow / Next columns.
-                  overflow-x-auto lets narrow windows scroll instead of crushing columns
-                  (each child carries its own min-width). NOTE for un-parking
-                  FOCUS_SHOW_INFO / FOCUS_SHOW_REFERENCES: the track template is fixed at
-                  five tracks — re-enabling those columns means widening the template. */}
+              {/* FIVE COLUMNS: the filter panel (Milestones / Clients / Projects), then
+                  Today / Tomorrow / Next / Hold as four equal tracks. The template is
+                  EXPLICIT, so every column has to be counted here: a child beyond the last
+                  track wraps onto an implicit second row in the FIRST track — which is
+                  exactly where Hold turned up (under the filter panel) when it was added
+                  as a fifth child of a four-track grid. Adding a column means adding a
+                  track. overflow-x-auto lets narrow windows scroll instead of crushing
+                  columns (each child carries its own min-width). */}
               {/* Filter + Milestones are fixed-narrow (same width, sized to fit their names + a
                   small buffer) instead of stretchy 1fr tracks; the three day columns split the
                   freed space, so the calendar gets wider. */}
               {/* PIP: ONLY the three day columns — no filter panel, no Milestones column.
                   Full mode: cols 1–2 are content-sized (longest entry + 30px), days split the rest. */}
-              <div className="grid gap-0 flex-1 min-h-0 w-full overflow-x-auto" style={{ gridTemplateColumns: PIP_MODE ? '1fr 1fr 1fr' : stackSide ? `${sideW}px 1fr 1fr 1fr` : `${sideW * 2}px 1fr 1fr 1fr` }}>
+              <div className="grid gap-0 flex-1 min-h-0 w-full overflow-x-auto" style={{ gridTemplateColumns: PIP_MODE ? '1fr 1fr 1fr' : stackSide ? `${sideW}px 1fr 1fr 1fr 1fr` : `${sideW * 2}px 1fr 1fr 1fr 1fr` }}>
                 {/* Column 1 — Projects panel: flat master list (milestones pinned on top);
                     clicking a project FILTERS the Dashboard stack + all three calendar
                     columns (focusProjectId). Active row shows an ×; click again to clear.
@@ -12855,7 +12856,9 @@ export default function App() {
                   const comingUpMilestones = calendarTasks
                     .filter((t) => t.type === 'scheduled' && !!t.deadline && t.deadline > focusLastVisibleIso && cuPasses(t) && taskMatchesQuery(t, focusSearch, projects, clients))
                     .sort((a, b) => (a.deadline! < b.deadline! ? -1 : a.deadline! > b.deadline! ? 1 : a.title.localeCompare(b.title)));
-                  return cols.map((col) => (
+                  // PIP is the reduced quick-view — three day columns on a three-track
+                  // grid, no side panel. Hold would wrap there too, so it stays desktop-only.
+                  return cols.filter((col) => !(PIP_MODE && col.section === 'hold')).map((col) => (
                     <CalendarColumnDroppable key={col.key} date={col.isos[0]} className="min-w-[240px] flex flex-col min-h-0 overflow-hidden">
                       {col.header}
                       <CustomScroll bandIndicator={activeTask ? { list: activeTask.list, label: LIST_TITLES[activeTask.list] } : null}>
