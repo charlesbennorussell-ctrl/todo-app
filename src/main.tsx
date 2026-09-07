@@ -114,8 +114,11 @@ if (typeof console !== 'undefined') {
 // Launch screen: pure black with the app mark centred. Replaces the old
 // "Connecting…" text, and — via SplashGate below — stays up for one beat after
 // the app mounts so the two cross-fade instead of cutting.
-const SPLASH_FADE_MS = 480;
-const SPLASH_ENTER_MS = 320;
+// Short on purpose. These two numbers are the only part of launch we control — the rest
+// is the bundle and the Liveblocks handshake — and 800ms of ceremony on top of a 2s
+// connect was most of what made the phone feel slow to open.
+const SPLASH_FADE_MS = 180;
+const SPLASH_ENTER_MS = 100;
 // The quintic curve the rest of the app settles on.
 const SPLASH_EASE = 'cubic-bezier(0.86, 0, 0.07, 1)';
 
@@ -151,7 +154,14 @@ const SplashScreen = ({ fading = false }: { fading?: boolean }) => {
         // '/' in dev, on desktop and phone alike.
         src={`${import.meta.env.BASE_URL || '/'}icons/icon-512.png`}
         alt=""
-        style={{ width: 'min(60vw, 208px)', height: 'auto', display: 'block' }}
+        // Faint and grayscale: a watermark on black, not a logo reveal. The mark is a
+        // glow render composed for white; at full colour on black it read as a bright
+        // hollow frame, which drew the eye to a screen that exists only to be waited on.
+        style={{
+          width: 'min(60vw, 208px)', height: 'auto', display: 'block',
+          filter: 'grayscale(1) brightness(0.32)',
+          opacity: 0.35,
+        }}
       />
     </div>
   );

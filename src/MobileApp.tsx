@@ -362,11 +362,42 @@ function PaneDroppable({ id, width, children }: { id: string; width: number; chi
 
 // ── Sheets ────────────────────────────────────────────────────────────────────
 
+// Vertical swipe on a sheet's handle. Fires on touchMOVE the moment the threshold is
+// crossed, not on touchend: waiting for the end is why the card sheet's pull-up "had to be
+// done a couple of times" — iOS routinely swallows the touchend of a drag that started to
+// scroll, and a pull slower than the old 600ms cap was silently discarded. Fires once per
+// gesture, ignores mostly-horizontal moves (the day-chip row's territory), and asks for a
+// decisive 36px so a tap or a wobble never triggers it.
+function useVerticalSwipe(handlers: { up?: () => void; down?: () => void }) {
+  const ref = useRef<{ x: number; y: number; fired: boolean } | null>(null);
+  const start = (e: React.TouchEvent) => {
+    const t = e.touches[0];
+    ref.current = { x: t.clientX, y: t.clientY, fired: false };
+  };
+  const move = (e: React.TouchEvent) => {
+    const s = ref.current;
+    if (!s || s.fired) return;
+    const t = e.touches[0];
+    const dy = t.clientY - s.y;
+    const dx = Math.abs(t.clientX - s.x);
+    if (dx > 60) return;
+    if (dy < -36 && handlers.up) { s.fired = true; handlers.up(); }
+    else if (dy > 36 && handlers.down) { s.fired = true; handlers.down(); }
+  };
+  const end = () => { ref.current = null; };
+  return { onTouchStart: start, onTouchMove: move, onTouchEnd: end, onTouchCancel: end };
+}
+
 function SheetShell({ onClose, grabber, children }: {
   onClose: () => void;
   /** Touch handlers for the pull-up gesture the grab bar advertises. Passing them is what
       renders the bar: a sheet with no pull-up target must not show a handle it can't honour. */
-  grabber?: { onTouchStart: (e: React.TouchEvent) => void; onTouchEnd: (e: React.TouchEvent) => void };
+  grabber?: {
+    onTouchStart: (e: React.TouchEvent) => void;
+    onTouchMove?: (e: React.TouchEvent) => void;
+    onTouchEnd: (e: React.TouchEvent) => void;
+    onTouchCancel?: (e: React.TouchEvent) => void;
+  };
   children: React.ReactNode;
 }) {
   // iOS fires the synthetic click 0-300ms AFTER the touch tap that opened this sheet — the
@@ -426,16 +457,13 @@ function SheetShell({ onClose, grabber, children }: {
           stay pinned. */}
       <div
         data-msheet
-        className="absolute left-0 right-0 bottom-0 flex flex-col rounded-t-[40px] px-[18px]"
+        className="absolute left-0 right-0 bottom-0 flex flex-col rounded-t-[4px] px-[18px]"
         style={{
           backgroundColor: SHEET_BG,
           maxHeight: '100%',
           minHeight: sheetFloor,
-          // 40px = the title capsule's 22px radius plus the sheet's own 18px gutter, so the
-          // sheet's corner stays concentric with the field inside it — and it lands inside the
-          // 39-55px range real iPhone displays use, which is what lets a full-bleed sheet read as
-          // part of the screen rather than as a card pasted on top of it. The top of that range
-          // would eat a fifth of the panel's height and crowd the capsule.
+          // Corners are 4px, deliberately: the sheet is a panel, not a second screen. The
+          // 40px iPhone-radius version was tried and read as a card pasted over the app.
           //
           // The grab bar lives in the top padding, so that padding shrinks when it is present.
           paddingTop: grabber ? 8 : 16,
@@ -449,7 +477,7 @@ function SheetShell({ onClose, grabber, children }: {
             start a swipe on a 5px bar. Same handlers as the lower controls, so the handle
             answers the exact gesture it advertises instead of just hinting at it. */}
         {grabber && (
-          <div {...grabber} aria-hidden className="shrink-0 mx-auto mb-[6px] px-[26px] py-[8px]">
+          <div {...grabber} aria-hidden className="shrink-0 mx-auto mb-[6px] px-[26px] py-[8px]" style={{ touchAction: 'none' }}>
             <div className="h-[5px] w-[36px] rounded-full bg-[#4a4a4a]" />
           </div>
         )}
@@ -1415,27 +1443,10 @@ function TaskSheet({ task, projects, clients, isos, anchor, autoFocusTitle, conv
   // panel is the gesture the layout already suggests. Taps are untouched: we
   // only act past a decisive vertical threshold, and never when the gesture is
   // mostly horizontal (that's the day-chip row's own territory).
-  const pullRef = useRef<{ x: number; y: number; t: number } | null>(null);
-  const pullHandlers = {
-    onTouchStart: (e: React.TouchEvent) => {
-      const t = e.touches[0];
-      pullRef.current = { x: t.clientX, y: t.clientY, t: Date.now() };
-    },
-    onTouchEnd: (e: React.TouchEvent) => {
-      const s = pullRef.current;
-      pullRef.current = null;
-      if (!s) return;
-      const t = e.changedTouches[0];
-      const dy = t.clientY - s.y;
-      const dx = Math.abs(t.clientX - s.x);
-      if (dy < -40 && dx < 60 && Date.now() - s.t < 600) {
-        e.preventDefault();
-        e.stopPropagation();
-        commit();
-        onEdit();
-      }
-    },
-  };
+  const pullHandlers = useVerticalSwipe({
+    up: () => { commit(); onEdit(); },
+    down: () => { commit(); onClose(); },
+  });
   const project = task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
   const client = (task.clientId ?? project?.clientId) ? clients.find((c) => c.id === (task.clientId ?? project?.clientId)) : undefined;
   // Highlight the chip for the day the task DISPLAYS on. For dated tasks that's the deadline
@@ -1658,6 +1669,9 @@ function ComposeSheet({ listSequence, projects, clients, people, currentUserShor
   // Changing Category can orphan the current picks — drop them rather than submit a mismatch.
   useEffect(() => {
     if (projectId && !categoryProjects.some((p) => p.id === projectId)) setProjectId('');
+    // Personal has no clients — everything there hangs off the Personal system client — so a
+    // client carried over from another category would be a contradiction waiting to sync.
+    if (listId === 'personal' && clientId) setClientId('');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [listId]);
 
@@ -1713,13 +1727,18 @@ function ComposeSheet({ listSequence, projects, clients, people, currentUserShor
   const commitAndClose = () => save(false);
   const toggleLabel = (k: string) => setOpenLabel((v) => (v === k ? null : k));
 
-  const primaryLabel = isEdit ? 'Save' : title.trim() ? 'Add Task' : addedCount > 0 ? 'Done' : 'Add Task';
+  const primaryLabel = isEdit || title.trim() || addedCount === 0 ? 'Save' : 'Done';
   const primaryEnabled = isEdit ? !!title.trim() : !!title.trim() || addedCount > 0;
+  // The handle answers the gesture it advertises: pull DOWN saves and closes, the same
+  // commit the backdrop and the X already do — a half-filled task is never thrown away.
+  const handle = useVerticalSwipe({ down: commitAndClose });
 
   return (
-    <SheetShell onClose={commitAndClose}>
-      <div className="shrink-0 flex flex-row items-center justify-between pb-[12px]">
-        <p className="text-white text-[14px]">{isEdit ? 'Edit Task' : addedCount > 0 ? `Added ${addedCount}` : 'New Task'}</p>
+    <SheetShell onClose={commitAndClose} grabber={handle}>
+      {/* pt: the title used to sit hard against the handle. Same grey as the section labels
+          below it — it is a label for the panel, not content. */}
+      <div className="shrink-0 flex flex-row items-center justify-between pt-[10px] pb-[14px]">
+        <p className="text-[#5e5e5e] text-[14px]">{isEdit ? 'Edit Task' : addedCount > 0 ? `Added ${addedCount}` : 'New Task'}</p>
         <button type="button" aria-label="Close" onClick={commitAndClose} className="text-[#656464] p-2 -m-2"><X size={16} /></button>
       </div>
 
@@ -1742,14 +1761,15 @@ function ComposeSheet({ listSequence, projects, clients, people, currentUserShor
         spellCheck={false}
         autoComplete="off"
         name="ctrl-entry"
-        // A full-width capsule on the dark track colour, so the title reads as THE field of the
-        // sheet rather than floating loose above the chip groups that surround it.
+        // A full-width capsule on the SAME black the chip tracks use, so the title reads as one
+        // more control of the panel rather than a box of its own. Placeholder in the section-
+        // label grey for the same reason.
         // rounded-full, not a fixed 22px: 22 happens to be exactly half of this field's 43.6px
         // one-line height, so a fixed radius is a capsule only while that height holds and
         // degrades into a rounded rectangle the moment anything makes the box taller. 9999px
         // always clamps to half the box. Don't reach for leading-* to change the height —
         // index.css forces line-height 1.4 on textarea and the class is a no-op; use py-*.
-        className="shrink-0 w-full resize-none overflow-hidden bg-[#151412] rounded-full px-[16px] py-[12px] outline-none border-none text-white font-['Univers_BQ:55_Regular',sans-serif] text-[14px] leading-[1.4] placeholder:text-[#656464]"
+        className="shrink-0 w-full resize-none overflow-hidden bg-black rounded-full px-[16px] py-[12px] outline-none border-none text-white font-['Univers_BQ:55_Regular',sans-serif] text-[14px] leading-[1.4] placeholder:text-[#5e5e5e]"
       />
       <div className="shrink-0 h-[18px]" />
 
@@ -1767,6 +1787,7 @@ function ComposeSheet({ listSequence, projects, clients, people, currentUserShor
           ))}
         </PanelSection>
 
+        {listId !== 'personal' && (
         <PanelSection
           label="Client"
           open={openLabel === 'client'}
@@ -1779,6 +1800,7 @@ function ComposeSheet({ listSequence, projects, clients, people, currentUserShor
             <button key={c.id} type="button" className={chipCls(clientId === c.id)} onClick={() => chooseClient(c.id)}>{c.short || c.name}</button>
           ))}
         </PanelSection>
+        )}
 
         <PanelSection
           label="Project"
@@ -1836,14 +1858,19 @@ function ComposeSheet({ listSequence, projects, clients, people, currentUserShor
         </PanelSection>
       </div>
 
-      <button
-        type="button"
-        onClick={() => save(false)}
-        disabled={!primaryEnabled}
-        className={`shrink-0 mt-[10px] w-full py-[12px] rounded-[8px] text-[14px] font-['Univers_BQ:55_Regular',sans-serif] transition-colors ${primaryEnabled ? 'bg-[var(--app-accent)] text-[#151412]' : 'bg-[#2b2a27] text-[#5e5e5e]'}`}
-      >
-        {primaryLabel}
-      </button>
+      {/* A small pill, right-aligned, not a full-width bar over a band of empty sheet.
+          It is also not the only way out: the backdrop, the X and a pull on the handle all
+          commit — this is the explicit version of the same thing. */}
+      <div className="shrink-0 flex flex-row justify-end pt-[12px]">
+        <button
+          type="button"
+          onClick={() => save(false)}
+          disabled={!primaryEnabled}
+          className={`h-[36px] px-[20px] rounded-full text-[13px] font-['Univers_BQ:55_Regular',sans-serif] transition-colors ${primaryEnabled ? 'bg-[var(--app-accent)] text-[#151412]' : 'bg-[#2b2a27] text-[#5e5e5e]'}`}
+        >
+          {primaryLabel}
+        </button>
+      </div>
     </SheetShell>
   );
 }
