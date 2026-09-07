@@ -368,9 +368,19 @@ function PaneDroppable({ id, width, children }: { id: string; width: number; chi
 // scroll, and a pull slower than the old 600ms cap was silently discarded. Fires once per
 // gesture, ignores mostly-horizontal moves (the day-chip row's territory), and asks for a
 // decisive 36px so a tap or a wobble never triggers it.
-function useVerticalSwipe(handlers: { up?: () => void; down?: () => void }) {
+function useVerticalSwipe(handlers: { up?: () => void; down?: () => void; anywhere?: boolean }) {
   const ref = useRef<{ x: number; y: number; fired: boolean } | null>(null);
   const start = (e: React.TouchEvent) => {
+    // Sheet-wide mode: a touch that begins on a control is that control's — a chip, a
+    // field, a button, the chip track itself. And a touch inside a body that has been
+    // scrolled is a scroll, not a pull; only from the very top does a drag down mean
+    // "close". Without these two exclusions every tap on a chip risked closing the sheet.
+    if (handlers.anywhere) {
+      const el = e.target as Element;
+      if (el.closest('button, input, textarea, select, a, [data-chip-track]')) return;
+      const body = el.closest<HTMLElement>('[data-sheet-scroll]');
+      if (body && body.scrollTop > 0) return;
+    }
     const t = e.touches[0];
     ref.current = { x: t.clientX, y: t.clientY, fired: false };
   };
@@ -388,16 +398,15 @@ function useVerticalSwipe(handlers: { up?: () => void; down?: () => void }) {
   return { onTouchStart: start, onTouchMove: move, onTouchEnd: end, onTouchCancel: end };
 }
 
-function SheetShell({ onClose, grabber, children }: {
+function SheetShell({ onClose, onSwipeDown, handle = false, floor = 1 / 3, children }: {
   onClose: () => void;
-  /** Touch handlers for the pull-up gesture the grab bar advertises. Passing them is what
-      renders the bar: a sheet with no pull-up target must not show a handle it can't honour. */
-  grabber?: {
-    onTouchStart: (e: React.TouchEvent) => void;
-    onTouchMove?: (e: React.TouchEvent) => void;
-    onTouchEnd: (e: React.TouchEvent) => void;
-    onTouchCancel?: (e: React.TouchEvent) => void;
-  };
+  /** Pull DOWN anywhere on the sheet that isn't a control (chip, field, button, chip track)
+   *  — and from the top of a scrolled body — runs this. Usually the same commit as onClose. */
+  onSwipeDown?: () => void;
+  /** Show the grab pill. Purely a hint now: the whole sheet answers the gesture. */
+  handle?: boolean;
+  /** Opening height as a fraction of the window. The sheet only ever GROWS from here. */
+  floor?: number;
   children: React.ReactNode;
 }) {
   // iOS fires the synthetic click 0-300ms AFTER the touch tap that opened this sheet — the
@@ -429,7 +438,25 @@ function SheetShell({ onClose, grabber, children }: {
   // min-height BEATS max-height: an unclamped floor in landscape would put the sheet's top —
   // the title field — back off screen, which is the failure the block above spent two attempts
   // fixing.
-  const sheetFloor = typeof window === 'undefined' ? 0 : Math.min(Math.round(window.innerHeight / 3), vvBox.height);
+  const sheetFloor = typeof window === 'undefined' ? 0 : Math.min(Math.round(window.innerHeight * floor), vvBox.height);
+  // RATCHET. The sheet is bottom-anchored and content-sized, so when a section disappears
+  // (choose Personal: the Client picker goes) the content gets shorter, the sheet shrinks,
+  // and its TOP drops — revealing a slice of the app behind it. The height it has reached
+  // is remembered and never given back while the sheet is open; the slack goes to the
+  // bottom of the scroll body, invisibly, and the top stays docked. Clamped to the visual
+  // viewport because min-height beats max-height and a locked height taller than what is
+  // visible would push the title field off screen with the keyboard up.
+  const sheetRef = useRef<HTMLDivElement | null>(null);
+  const [tallest, setTallest] = useState(0);
+  useEffect(() => {
+    const el = sheetRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => setTallest((h) => Math.max(h, el.offsetHeight)));
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+  const lockedMin = Math.min(vvBox.height, Math.max(sheetFloor, tallest));
+  const sheetSwipe = useVerticalSwipe({ down: onSwipeDown, anywhere: true });
   useEffect(() => {
     const vv = window.visualViewport;
     const update = () => {
@@ -449,35 +476,40 @@ function SheetShell({ onClose, grabber, children }: {
   }, []);
   return (
     // Positioned at the VISUAL viewport, so this box is exactly what the user can see.
-    <div className="fixed left-0 right-0 z-50" style={{ top: vvBox.top, height: vvBox.height }}>
+    // touch-action:none — a touch on this overlay must never be handed to the page beneath.
+    // That hand-off is what made dragging the sheet down scroll the app underneath it.
+    // The scroll body inside re-enables pan-y for itself.
+    <div className="fixed left-0 right-0 z-50" style={{ top: vvBox.top, height: vvBox.height, touchAction: 'none' }}>
       <div className="absolute inset-0 bg-black/50" onClick={() => { if (Date.now() - openedAtRef.current > 500) onClose(); }} />
       {/* Sheet sits at the bottom of the visible box and can never exceed it, so its top — the
           title field — is always on screen. Children lay out as a flex column, so the child
           marked flex-1 becomes the scrolling middle while the title and the primary button
           stay pinned. */}
       <div
+        ref={sheetRef}
         data-msheet
+        {...(onSwipeDown ? sheetSwipe : {})}
         className="absolute left-0 right-0 bottom-0 flex flex-col rounded-t-[4px] px-[18px]"
         style={{
           backgroundColor: SHEET_BG,
           maxHeight: '100%',
-          minHeight: sheetFloor,
+          minHeight: lockedMin,
           // Corners are 4px, deliberately: the sheet is a panel, not a second screen. The
           // 40px iPhone-radius version was tried and read as a card pasted over the app.
           //
           // The grab bar lives in the top padding, so that padding shrinks when it is present.
-          paddingTop: grabber ? 8 : 16,
-          // The home-indicator pad only means anything when the sheet rests on the screen
-          // bottom; with the keyboard up it is sitting on the keyboard instead.
-          paddingBottom: keyboardUp ? 14 : 'calc(env(safe-area-inset-bottom) + 18px)',
+          paddingTop: handle ? 8 : 16,
+          // Only the home-indicator inset below, plus a hair. The previous +18px, on top of
+          // the Save row's own padding, was the "button floating on a panel twice its height".
+          paddingBottom: keyboardUp ? 10 : 'calc(env(safe-area-inset-bottom) + 6px)',
           animation: 'msheet-up 240ms cubic-bezier(0.16, 1, 0.3, 1)',
         }}
       >
         {/* The pill is 5x36 like the system's, but the target around it is 88x21 — you cannot
             start a swipe on a 5px bar. Same handlers as the lower controls, so the handle
             answers the exact gesture it advertises instead of just hinting at it. */}
-        {grabber && (
-          <div {...grabber} aria-hidden className="shrink-0 mx-auto mb-[6px] px-[26px] py-[8px]" style={{ touchAction: 'none' }}>
+        {handle && (
+          <div aria-hidden className="shrink-0 mx-auto mb-[6px] px-[26px] py-[8px]">
             <div className="h-[5px] w-[36px] rounded-full bg-[#4a4a4a]" />
           </div>
         )}
@@ -1443,10 +1475,9 @@ function TaskSheet({ task, projects, clients, isos, anchor, autoFocusTitle, conv
   // panel is the gesture the layout already suggests. Taps are untouched: we
   // only act past a decisive vertical threshold, and never when the gesture is
   // mostly horizontal (that's the day-chip row's own territory).
-  const pullHandlers = useVerticalSwipe({
-    up: () => { commit(); onEdit(); },
-    down: () => { commit(); onClose(); },
-  });
+  // Pull UP on the lower controls expands into the full panel. Pull DOWN is the shell's,
+  // sheet-wide, so it isn't duplicated here.
+  const pullHandlers = useVerticalSwipe({ up: () => { commit(); onEdit(); } });
   const project = task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
   const client = (task.clientId ?? project?.clientId) ? clients.find((c) => c.id === (task.clientId ?? project?.clientId)) : undefined;
   // Highlight the chip for the day the task DISPLAYS on. For dated tasks that's the deadline
@@ -1459,7 +1490,7 @@ function TaskSheet({ task, projects, clients, isos, anchor, autoFocusTitle, conv
     ? (task.deadline <= isos[0] ? 0 : task.deadline === isos[1] ? 1 : 2)
     : task.section === 'today' ? 0 : task.section === 'tomorrow' ? 1 : 2;
   return (
-    <SheetShell onClose={() => { commit(); onClose(); }} grabber={pullHandlers}>
+    <SheetShell onClose={() => { commit(); onClose(); }} onSwipeDown={() => { commit(); onClose(); }} handle>
       <input
         ref={titleRef}
         value={title}
@@ -1493,7 +1524,7 @@ function TaskSheet({ task, projects, clients, isos, anchor, autoFocusTitle, conv
       <div {...pullHandlers} className="mt-auto">
       {/* Same control as the day switcher and the creator panel: capsules on a dark track. */}
       <div className="pb-[16px]">
-        <div className={CHIP_TRACK}>
+        <div className={CHIP_TRACK} data-chip-track>
           {PANES.map((p, i) => (
             <button key={p.section} type="button" className={chipCls(i === currentIdx)} onClick={() => { if (i !== currentIdx) { onMove(i); } onClose(); }}>
               {p.label}
@@ -1598,7 +1629,7 @@ function PanelSection({ label, open, onToggle, onCreate, createPlaceholder, chil
           <button type="button" onClick={commit} className={CHIP_BASE + ' bg-[#232220] text-[var(--app-accent)]'}>Add</button>
         </div>
       )}
-      <div className={CHIP_TRACK}>{children}</div>
+      <div className={CHIP_TRACK} data-chip-track>{children}</div>
     </div>
   );
 }
@@ -1729,12 +1760,11 @@ function ComposeSheet({ listSequence, projects, clients, people, currentUserShor
 
   const primaryLabel = isEdit || title.trim() || addedCount === 0 ? 'Save' : 'Done';
   const primaryEnabled = isEdit ? !!title.trim() : !!title.trim() || addedCount > 0;
-  // The handle answers the gesture it advertises: pull DOWN saves and closes, the same
-  // commit the backdrop and the X already do — a half-filled task is never thrown away.
-  const handle = useVerticalSwipe({ down: commitAndClose });
-
   return (
-    <SheetShell onClose={commitAndClose} grabber={handle}>
+    // Opens at ~62% and only grows. Pull down anywhere that isn't a control saves and
+    // closes — the same commit the backdrop and the X run; a half-filled task is never
+    // thrown away.
+    <SheetShell onClose={commitAndClose} onSwipeDown={commitAndClose} handle floor={0.62}>
       {/* pt: the title used to sit hard against the handle. Same grey as the section labels
           below it — it is a label for the panel, not content. */}
       <div className="shrink-0 flex flex-row items-center justify-between pt-[10px] pb-[14px]">
@@ -1769,12 +1799,18 @@ function ComposeSheet({ listSequence, projects, clients, people, currentUserShor
         // degrades into a rounded rectangle the moment anything makes the box taller. 9999px
         // always clamps to half the box. Don't reach for leading-* to change the height —
         // index.css forces line-height 1.4 on textarea and the class is a no-op; use py-*.
-        className="shrink-0 w-full resize-none overflow-hidden bg-black rounded-full px-[16px] py-[12px] outline-none border-none text-white font-['Univers_BQ:55_Regular',sans-serif] text-[14px] leading-[1.4] placeholder:text-[#5e5e5e]"
+        // appearance-none: iOS paints its own textarea chrome and quietly ignores the radius
+        // without it — which is why this kept coming back as a square box on the phone while
+        // rendering as a capsule everywhere else.
+        className="shrink-0 w-full appearance-none resize-none overflow-hidden bg-black rounded-full px-[16px] py-[12px] outline-none border-none text-white font-['Univers_BQ:55_Regular',sans-serif] text-[14px] leading-[1.4] placeholder:text-[#5e5e5e]"
       />
       <div className="shrink-0 h-[18px]" />
 
       {/* Everything is present — no disclosure. The body scrolls when it outgrows the sheet. */}
-      <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain">
+      {/* data-sheet-scroll: the pull-down gesture defers to this while it is scrolled.
+          touch-action pan-y re-enables scrolling inside the overlay, which blocks all touch
+          hand-off to the page beneath. */}
+      <div data-sheet-scroll className="flex-1 min-h-0 overflow-y-auto overscroll-contain" style={{ touchAction: 'pan-y' }}>
         <PanelSection label="When">
           {PANES.map((p) => (
             <button key={p.section} type="button" className={chipCls(p.section === section)} onClick={() => setSection(p.section)}>{p.label}</button>
@@ -1858,15 +1894,16 @@ function ComposeSheet({ listSequence, projects, clients, people, currentUserShor
         </PanelSection>
       </div>
 
-      {/* A small pill, right-aligned, not a full-width bar over a band of empty sheet.
-          It is also not the only way out: the backdrop, the X and a pull on the handle all
+      {/* Centred pill with a little air above and below — not a full-width bar, not a
+          button adrift on a panel twice its height. White on the app accent, like every other
+          accent button. Not the only way out either: the backdrop, the X and a pull-down all
           commit — this is the explicit version of the same thing. */}
-      <div className="shrink-0 flex flex-row justify-end pt-[12px]">
+      <div className="shrink-0 flex flex-row justify-center pt-[10px] pb-[6px]">
         <button
           type="button"
           onClick={() => save(false)}
           disabled={!primaryEnabled}
-          className={`h-[36px] px-[20px] rounded-full text-[13px] font-['Univers_BQ:55_Regular',sans-serif] transition-colors ${primaryEnabled ? 'bg-[var(--app-accent)] text-[#151412]' : 'bg-[#2b2a27] text-[#5e5e5e]'}`}
+          className={`h-[38px] min-w-[168px] px-[24px] rounded-full text-[14px] font-['Univers_BQ:55_Regular',sans-serif] transition-colors ${primaryEnabled ? 'bg-[var(--app-accent)] text-white' : 'bg-[#2b2a27] text-[#5e5e5e]'}`}
         >
           {primaryLabel}
         </button>

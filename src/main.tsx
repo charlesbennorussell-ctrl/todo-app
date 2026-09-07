@@ -149,20 +149,8 @@ const SplashScreen = ({ fading = false }: { fading?: boolean }) => {
         pointerEvents: 'none',
       }}
     >
-      <img
-        // BASE_URL keeps this correct under the '/todo-app/' production base and
-        // '/' in dev, on desktop and phone alike.
-        src={`${import.meta.env.BASE_URL || '/'}icons/icon-512.png`}
-        alt=""
-        // Faint and grayscale: a watermark on black, not a logo reveal. The mark is a
-        // glow render composed for white; at full colour on black it read as a bright
-        // hollow frame, which drew the eye to a screen that exists only to be waited on.
-        style={{
-          width: 'min(60vw, 208px)', height: 'auto', display: 'block',
-          filter: 'grayscale(1) brightness(0.32)',
-          opacity: 0.35,
-        }}
-      />
+      {/* No mark for now — plain black until there is artwork worth showing. The
+          fade structure stays so the app still dissolves in rather than cutting. */}
     </div>
   );
 };
