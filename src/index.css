@@ -146,7 +146,11 @@ html, body, div, p, span, button, input, textarea, select, label, a, li, td, th,
 :focus-visible {
   outline: 1px solid rgba(255, 255, 255, 0.35);
   outline-offset: 2px;
-  border-radius: 2px;
+  /* No border-radius here. This block is UNLAYERED, so it beats every Tailwind utility
+     regardless of specificity — a `border-radius: 2px` on :focus-visible squared off the
+     phone's capsule title field the instant the caret landed in it (and any other rounded
+     element the moment it took keyboard focus). The outline follows the element's own
+     radius on its own; it never needed one forced here. */
 }
 /* Inputs / contentEditable already have their own visible affordances
    (caret, brand-purple selection); skip the ring there entirely. */

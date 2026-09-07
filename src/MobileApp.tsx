@@ -368,19 +368,9 @@ function PaneDroppable({ id, width, children }: { id: string; width: number; chi
 // scroll, and a pull slower than the old 600ms cap was silently discarded. Fires once per
 // gesture, ignores mostly-horizontal moves (the day-chip row's territory), and asks for a
 // decisive 36px so a tap or a wobble never triggers it.
-function useVerticalSwipe(handlers: { up?: () => void; down?: () => void; anywhere?: boolean }) {
+function useVerticalSwipe(handlers: { up?: () => void; down?: () => void }) {
   const ref = useRef<{ x: number; y: number; fired: boolean } | null>(null);
   const start = (e: React.TouchEvent) => {
-    // Sheet-wide mode: a touch that begins on a control is that control's — a chip, a
-    // field, a button, the chip track itself. And a touch inside a body that has been
-    // scrolled is a scroll, not a pull; only from the very top does a drag down mean
-    // "close". Without these two exclusions every tap on a chip risked closing the sheet.
-    if (handlers.anywhere) {
-      const el = e.target as Element;
-      if (el.closest('button, input, textarea, select, a, [data-chip-track]')) return;
-      const body = el.closest<HTMLElement>('[data-sheet-scroll]');
-      if (body && body.scrollTop > 0) return;
-    }
     const t = e.touches[0];
     ref.current = { x: t.clientX, y: t.clientY, fired: false };
   };
@@ -430,7 +420,13 @@ function SheetShell({ onClose, onSwipeDown, handle = false, floor = 1 / 3, child
     top: 0,
     height: typeof window === 'undefined' ? 0 : window.innerHeight,
   }));
-  const keyboardUp = typeof window !== 'undefined' && vvBox.height > 0 && window.innerHeight - vvBox.height > 80;
+  // "innerHeight minus visual height" is 0 in a standalone PWA on current iOS, where the
+  // LAYOUT viewport shrinks with the keyboard too — so the keyboard-down padding (a 34px
+  // home-indicator inset) was being applied under Save with the keyboard up, which is the
+  // "panel twice the height of its button". The screen height doesn't move; a visual
+  // viewport under ~72% of it can only mean a keyboard.
+  const keyboardUp = typeof window !== 'undefined' && vvBox.height > 0
+    && (window.innerHeight - vvBox.height > 80 || vvBox.height < window.screen.height * 0.72);
   // The sheet's height has always been pure content — there is no floor anywhere — so the quick
   // task sheet opened at 216px, a quarter of an iPhone screen, and read as a strip rather than a
   // panel. Measure the floor against the WHOLE window, not the visible box, so it doesn't
@@ -456,7 +452,76 @@ function SheetShell({ onClose, onSwipeDown, handle = false, floor = 1 / 3, child
     return () => ro.disconnect();
   }, []);
   const lockedMin = Math.min(vvBox.height, Math.max(sheetFloor, tallest));
-  const sheetSwipe = useVerticalSwipe({ down: onSwipeDown, anywhere: true });
+
+  // DRAG TO DISMISS, the way the system sheets do it. The sheet FOLLOWS the finger while it
+  // is down — you can pull it partway, change your mind, and push it back up — and only on
+  // release is anything decided: past ~28% of its height, or a decisive flick, it slides off
+  // the bottom edge and THEN closes; otherwise it springs back. Nothing happens on a small
+  // move, which is what the previous "36px and it's gone" felt like.
+  //
+  // Native listeners, not React's: touchmove must be non-passive so the drag can
+  // preventDefault the scroll it would otherwise turn into. A touch that begins on a
+  // control (chip, field, button, the chip track) is that control's; one inside a scroll
+  // body that has been scrolled is a scroll — only from the very top does a pull mean
+  // "close". The drag only ever moves DOWN; upward is clamped to rest.
+  const onSwipeDownRef = useRef(onSwipeDown);
+  onSwipeDownRef.current = onSwipeDown;
+  useEffect(() => {
+    const el = sheetRef.current;
+    if (!el || !onSwipeDownRef.current) return;
+    let drag: { y0: number; dy: number; lastY: number; lastT: number; v: number } | null = null;
+    let leaving = false;
+    const onStart = (e: TouchEvent) => {
+      if (leaving) return;
+      const target = e.target as Element;
+      if (target.closest('button, input, textarea, select, a, [data-chip-track]')) return;
+      const body = target.closest<HTMLElement>('[data-sheet-scroll]');
+      if (body && body.scrollTop > 0) return;
+      const t = e.touches[0];
+      drag = { y0: t.clientY, dy: 0, lastY: t.clientY, lastT: e.timeStamp, v: 0 };
+      el.style.transition = 'none';
+    };
+    const onMove = (e: TouchEvent) => {
+      if (!drag) return;
+      const t = e.touches[0];
+      const dy = Math.max(0, t.clientY - drag.y0);
+      const dt = Math.max(1, e.timeStamp - drag.lastT);
+      drag.v = (t.clientY - drag.lastY) / dt;          // px per ms, + = downward
+      drag.lastY = t.clientY; drag.lastT = e.timeStamp; drag.dy = dy;
+      if (dy > 0) e.preventDefault();                   // the sheet moves, not the page
+      el.style.transform = `translateY(${dy}px)`;
+    };
+    const onEnd = () => {
+      if (!drag) return;
+      const { dy, v } = drag;
+      drag = null;
+      const h = el.offsetHeight || 1;
+      const commit = dy > h * 0.28 || (v > 0.6 && dy > 24);
+      if (commit) {
+        leaving = true;
+        el.style.transition = 'transform 220ms cubic-bezier(0.32, 0.72, 0, 1)';
+        el.style.transform = 'translateY(110%)';
+        // Close once it is actually off screen; the timer covers a missed transitionend.
+        let done = false;
+        const finish = () => { if (done) return; done = true; onSwipeDownRef.current?.(); };
+        el.addEventListener('transitionend', finish, { once: true });
+        window.setTimeout(finish, 260);
+      } else {
+        el.style.transition = 'transform 260ms cubic-bezier(0.2, 0.9, 0.3, 1.1)';
+        el.style.transform = 'translateY(0)';
+      }
+    };
+    el.addEventListener('touchstart', onStart, { passive: true });
+    el.addEventListener('touchmove', onMove, { passive: false });
+    el.addEventListener('touchend', onEnd, { passive: true });
+    el.addEventListener('touchcancel', onEnd, { passive: true });
+    return () => {
+      el.removeEventListener('touchstart', onStart);
+      el.removeEventListener('touchmove', onMove);
+      el.removeEventListener('touchend', onEnd);
+      el.removeEventListener('touchcancel', onEnd);
+    };
+  }, []);
   useEffect(() => {
     const vv = window.visualViewport;
     const update = () => {
@@ -488,7 +553,6 @@ function SheetShell({ onClose, onSwipeDown, handle = false, floor = 1 / 3, child
       <div
         ref={sheetRef}
         data-msheet
-        {...(onSwipeDown ? sheetSwipe : {})}
         className="absolute left-0 right-0 bottom-0 flex flex-col rounded-t-[4px] px-[18px]"
         style={{
           backgroundColor: SHEET_BG,
@@ -502,12 +566,13 @@ function SheetShell({ onClose, onSwipeDown, handle = false, floor = 1 / 3, child
           // Only the home-indicator inset below, plus a hair. The previous +18px, on top of
           // the Save row's own padding, was the "button floating on a panel twice its height".
           paddingBottom: keyboardUp ? 10 : 'calc(env(safe-area-inset-bottom) + 6px)',
+          // willChange keeps the drag on the compositor; the entry animation still runs
+          // first and hands the transform over to the drag engine when it ends.
+          willChange: 'transform',
           animation: 'msheet-up 240ms cubic-bezier(0.16, 1, 0.3, 1)',
         }}
       >
-        {/* The pill is 5x36 like the system's, but the target around it is 88x21 — you cannot
-            start a swipe on a 5px bar. Same handlers as the lower controls, so the handle
-            answers the exact gesture it advertises instead of just hinting at it. */}
+        {/* The system's 5x36 pill. A hint: the whole sheet drags, not just this. */}
         {handle && (
           <div aria-hidden className="shrink-0 mx-auto mb-[6px] px-[26px] py-[8px]">
             <div className="h-[5px] w-[36px] rounded-full bg-[#4a4a4a]" />
