@@ -2,11 +2,13 @@
 // because "the phone version of New Task" is the version. One panel, one behaviour on both
 // surfaces: the same chips, the same Personal-hides-Client rule, the same save-on-dismiss.
 // Imports nothing from App.tsx (App imports THIS), so there is no cycle.
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useMutation } from '@liveblocks/react/suspense';
-import { Plus, X } from 'lucide-react';
+import { motion } from 'motion/react';
+import { ChevronLeft, ChevronRight, Plus, X } from 'lucide-react';
 import type { Task, Project, Client, Person, ListId, SectionId } from './data';
 import { LIST_TITLES, LISTS, addDaysToDate, dateToISO } from './data';
+import { Capsule, CapsuleTrack, Ripple, type Feel } from './Capsules';
 
 // The four sections, in the order every switcher shows them. Hold is parked, not a day: its
 // pane is sourced straight from the section and its drop token is 'HOLD@' rather than a date.
@@ -20,10 +22,13 @@ export const PANES: { section: SectionId; label: string }[] = [
 ];
 
 
-export function SheetShell({ onClose, onSwipeDown, handle = false, floor = 1 / 3, maxWidth, children }: {
+export function SheetShell({ onClose, onSwipeDown, handle = false, floor = 1 / 3, maxWidth, placement = 'bottom', children }: {
   onClose: () => void;
   /** Desktop: cap the sheet's width and centre it. Unset = full-bleed, as on the phone. */
   maxWidth?: number;
+  /** 'bottom' (phone): docked to the bottom edge, full-bleed. 'center' (desktop): a floating
+   *  panel in the middle of the window, sized to its content, touching no edge. */
+  placement?: 'bottom' | 'center';
   /** Pull DOWN anywhere on the sheet that isn't a control (chip, field, button, chip track)
    *  — and from the top of a scrolled body — runs this. Usually the same commit as onClose. */
   onSwipeDown?: () => void;
@@ -37,6 +42,7 @@ export function SheetShell({ onClose, onSwipeDown, handle = false, floor = 1 / 3
   // stray click lands on the fresh backdrop and would close it instantly. Ignore backdrop
   // clicks for the first 500ms of the sheet's life.
   const openedAtRef = useRef(Date.now());
+  const centered = placement === 'center';
   // KEYBOARD AVOIDANCE — the overlay TRACKS THE VISUAL VIEWPORT instead of doing keyboard maths.
   //
   // Two earlier attempts failed for the same underlying reason: the overlay was `fixed inset-0`,
@@ -193,7 +199,13 @@ export function SheetShell({ onClose, onSwipeDown, handle = false, floor = 1 / 3
     // touch-action:none — a touch on this overlay must never be handed to the page beneath.
     // That hand-off is what made dragging the sheet down scroll the app underneath it.
     // The scroll body inside re-enables pan-y for itself.
-    <div className="fixed left-0 right-0 z-50" style={{ top: vvBox.top, height: vvBox.height, touchAction: 'none' }}>
+    <div
+      className={`fixed left-0 right-0 z-50 ${centered ? 'flex items-center justify-center' : ''}`}
+      style={{ top: vvBox.top, height: vvBox.height, touchAction: 'none' }}
+      // Escape closes — and commits, like every other way out. Stopped here so the app's own
+      // key handler never sees it.
+      onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); onClose(); } }}
+    >
       <div className="absolute inset-0 bg-black/50" onClick={() => { if (Date.now() - openedAtRef.current > 500) onClose(); }} />
       {/* Sheet sits at the bottom of the visible box and can never exceed it, so its top — the
           title field — is always on screen. Children lay out as a flex column, so the child
@@ -202,8 +214,23 @@ export function SheetShell({ onClose, onSwipeDown, handle = false, floor = 1 / 3
       <div
         ref={sheetRef}
         data-msheet
-        className="absolute left-0 right-0 bottom-0 flex flex-col rounded-t-[4px] px-[18px]"
-        style={{
+        className={centered
+          ? 'relative flex flex-col rounded-[6px] px-[24px]'
+          : 'absolute left-0 right-0 bottom-0 flex flex-col rounded-t-[4px] px-[18px]'}
+        style={centered ? {
+          // A floating panel: as wide as the caller asked but never wider than the window less
+          // a margin, never taller than that either, and sized to its content. The ratchet
+          // (minHeight) only stops it shrinking — and re-centring — once it has grown.
+          width: `min(${maxWidth ?? 760}px, calc(100% - 48px))`,
+          backgroundColor: SHEET_BG,
+          maxHeight: 'calc(100% - 48px)',
+          minHeight: lockedMin,
+          paddingTop: 20,
+          paddingBottom: 16,
+          boxShadow: '0 24px 64px rgba(0, 0, 0, 0.45)',
+          willChange: 'transform',
+          animation: 'msheet-pop 260ms cubic-bezier(0.2, 0, 0, 1)',
+        } : {
           maxWidth, marginLeft: 'auto', marginRight: 'auto',
           backgroundColor: SHEET_BG,
           maxHeight: '100%',
@@ -230,7 +257,7 @@ export function SheetShell({ onClose, onSwipeDown, handle = false, floor = 1 / 3
         )}
         {children}
       </div>
-      <style>{`@keyframes msheet-up { from { transform: translateY(100%); } to { transform: translateY(0); } }`}</style>
+      <style>{`@keyframes msheet-up { from { transform: translateY(100%); } to { transform: translateY(0); } } @keyframes msheet-pop { from { opacity: 0; transform: translateY(14px) scale(0.985); } to { opacity: 1; transform: none; } }`}</style>
     </div>
   );
 }
@@ -245,7 +272,14 @@ export const SHEET_BG = '#232220';
 // get a two-chip-wide track, not a full-width bar. max-w-full lets long lists still wrap.
 export const CHIP_TRACK = 'inline-flex flex-row flex-wrap items-center gap-[4px] rounded-[21px] bg-black p-[3px] max-w-full';
 export const CHIP_BASE = "h-[36px] inline-flex items-center px-[14px] rounded-full text-[13px] font-['Univers_BQ:55_Regular',sans-serif] transition-colors";
-export const chipCls = (active: boolean) => `${CHIP_BASE} ${active ? 'bg-[#232220] text-white' : 'bg-transparent text-[#656464]'}`;
+
+// "Sat 12 Sep" — the absolute date, for a capsule that names a picked day.
+function chipDate(iso: string): string {
+  const [y, m, d] = iso.split('-').map(Number);
+  const date = new Date(y, m - 1, d);
+  if (isNaN(date.getTime())) return iso;
+  return `${date.toLocaleDateString('en-US', { weekday: 'short' })} ${d} ${date.toLocaleDateString('en-US', { month: 'short' })}`;
+}
 
 
 /** Create a client by name; returns its id. Liveblocks-backed, so any surface can use it. */
@@ -271,7 +305,10 @@ return useMutation(({ storage }, p: { name: string; clientId?: string; list?: Li
 }
 
 
-export function PanelSection({ label, open, onToggle, onCreate, createPlaceholder, children }: {
+export function PanelSection({ label, open, onToggle, onCreate, createPlaceholder, active, feel = 'quintic', children }: {
+  /** data-knob-item of the selected capsule (single-select). Omit for a multi-select section. */
+  active?: string | null;
+  feel?: Feel;
   label: string;
   open?: boolean;
   onToggle?: () => void;
@@ -320,7 +357,66 @@ export function PanelSection({ label, open, onToggle, onCreate, createPlaceholde
           <button type="button" onClick={commit} className={CHIP_BASE + ' bg-[#232220] text-[var(--app-accent)]'}>Add</button>
         </div>
       )}
-      <div className={CHIP_TRACK} data-chip-track>{children}</div>
+      <CapsuleTrack active={active} feel={feel} knob={SHEET_BG} className={CHIP_TRACK} attrs={{ 'data-chip-track': '' }}>{children}</CapsuleTrack>
+    </div>
+  );
+}
+
+// The desktop's deadline picker: a month grid, always open. The selected day is an accent disc
+// that SLIDES between days (one shared-layout element on a spring) instead of blinking from one
+// cell to the next; clicking the selected day clears the deadline. Six rows always, so the grid
+// never changes height between months.
+const DOW = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
+const CAL_SPRING = { type: 'spring' as const, stiffness: 520, damping: 34, mass: 0.9 };
+function isoToDate(iso: string): Date { const [y, m, d] = iso.split('-').map(Number); return new Date(y, m - 1, d); }
+
+export function MonthCalendar({ value, onChange, todayIso }: { value: string; onChange: (iso: string) => void; todayIso: string }) {
+  const uid = useId();
+  const [month, setMonth] = useState(() => { const d = isoToDate(value || todayIso); return new Date(d.getFullYear(), d.getMonth(), 1); });
+  // Follow the value into its month when it is set from outside (a capsule).
+  useEffect(() => {
+    if (!value) return;
+    const d = isoToDate(value);
+    if (isNaN(d.getTime())) return;
+    setMonth((cur) => (cur.getFullYear() === d.getFullYear() && cur.getMonth() === d.getMonth()) ? cur : new Date(d.getFullYear(), d.getMonth(), 1));
+  }, [value]);
+  const first = new Date(month.getFullYear(), month.getMonth(), 1);
+  const start = addDaysToDate(first, -first.getDay());
+  const cells = [...Array(42)].map((_, i) => {
+    const d = addDaysToDate(start, i);
+    return { iso: dateToISO(d), day: d.getDate(), inMonth: d.getMonth() === month.getMonth() };
+  });
+  const label = month.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  const step = (n: number) => setMonth(new Date(month.getFullYear(), month.getMonth() + n, 1));
+  return (
+    <div className="flex flex-col gap-[8px] select-none">
+      <div className="flex flex-row items-center justify-between px-[6px]">
+        <button type="button" aria-label="Previous month" onClick={() => step(-1)} className="text-[#656464] hover:text-white transition-colors p-1 -m-1"><ChevronLeft size={14} /></button>
+        <span className="text-[13px] text-[#a8a8a8]">{label}</span>
+        <button type="button" aria-label="Next month" onClick={() => step(1)} className="text-[#656464] hover:text-white transition-colors p-1 -m-1"><ChevronRight size={14} /></button>
+      </div>
+      <div className="grid grid-cols-7 gap-y-[2px] text-center">
+        {DOW.map((d, i) => <div key={`dow-${i}`} className="h-[22px] flex items-center justify-center text-[11px] text-[#5e5e5e]">{d}</div>)}
+        {cells.map((c) => {
+          const selected = c.iso === value;
+          const today = c.iso === todayIso;
+          return (
+            <div key={c.iso} className="h-[36px] flex items-center justify-center">
+              <motion.button
+                type="button"
+                whileTap={{ scale: 0.88 }}
+                transition={CAL_SPRING}
+                onClick={() => onChange(selected ? '' : c.iso)}
+                className={`relative h-[32px] w-[32px] rounded-full flex items-center justify-center text-[13px] transition-colors ${selected ? 'text-white' : today ? 'text-[var(--app-accent)]' : c.inMonth ? 'text-white hover:bg-white/10' : 'text-[#4a4a4a] hover:bg-white/[0.04]'}`}
+                style={{ isolation: 'isolate', transitionDuration: '240ms' }}
+              >
+                {selected && <motion.span layoutId={`cal-${uid}`} aria-hidden className="absolute inset-0 rounded-full bg-[var(--app-accent)]" style={{ zIndex: -1 }} transition={CAL_SPRING} />}
+                {c.day}
+              </motion.button>
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -335,7 +431,7 @@ export function PanelSection({ label, open, onToggle, onCreate, createPlaceholde
 //  - Dismissing COMMITS. The backdrop, the X and Add Task all save what you have filled in, so a
 //    half-typed task can't be lost by tapping away.
 //  - Client and Project narrow to the chosen Category, since a project is pinned to a category.
-export function ComposeSheet({ listSequence, projects, clients, people, currentUserShort, defaultSection, isos, anchor, editingTask, onCreate, onUpdate, onAddClient, onAddProject, onClose, maxWidth }: {
+export function ComposeSheet({ listSequence, projects, clients, people, currentUserShort, defaultSection, isos, anchor, editingTask, onCreate, onUpdate, onAddClient, onAddProject, onClose, maxWidth, surface = 'phone' }: {
   listSequence: ListId[];
   projects: Project[]; clients: Client[]; people: Person[];
   currentUserShort: string;
@@ -353,8 +449,14 @@ export function ComposeSheet({ listSequence, projects, clients, people, currentU
   onClose: () => void;
   /** Desktop only: cap and centre the sheet. */
   maxWidth?: number;
+  /** Which surface is showing this. Desktop: a centred floating panel, spring-driven knobs,
+   *  and the month calendar exposed beside the fields. Phone: a bottom sheet, quintic knobs,
+   *  Material ripples. */
+  surface?: 'phone' | 'desktop';
 }) {
   const isEdit = !!editingTask;
+  const desktop = surface === 'desktop';
+  const feel: Feel = desktop ? 'spring' : 'quintic';
   const seedProject = editingTask?.projectId ? projects.find((p) => p.id === editingTask.projectId) : undefined;
   const [title, setTitle] = useState(editingTask?.title ?? '');
   const [listId, setListId] = useState<ListId>(() => {
@@ -451,13 +553,50 @@ export function ComposeSheet({ listSequence, projects, clients, people, currentU
   const commitAndClose = () => save(false);
   const toggleLabel = (k: string) => setOpenLabel((v) => (v === k ? null : k));
 
+  // The Deadline capsules are ONE single-select group whose value is the deadline: None, Today,
+  // +1 wk, or a custom date — the phone's native picker, the desktop's calendar.
+  const weekIso = dateToISO(addDaysToDate(anchor, 7));
+  const deadlineKey = !deadline ? 'none' : deadline === isos[0] ? 'today' : deadline === weekIso ? 'week' : 'custom';
+  const deadlineSection = (
+    <PanelSection label="Deadline" active={deadlineKey} feel={feel}>
+      <Capsule id="none" active={deadlineKey === 'none'} onClick={() => setDeadline('')}>None</Capsule>
+      <Capsule id="today" active={deadlineKey === 'today'} onClick={() => setDeadline(isos[0])}>Today</Capsule>
+      <Capsule id="week" active={deadlineKey === 'week'} onClick={() => setDeadline(weekIso)}>+1 wk</Capsule>
+      {desktop ? (
+        // The calendar beside these is the picker; this capsule only NAMES a day chosen there.
+        deadlineKey === 'custom' && <Capsule id="custom" active>{chipDate(deadline)}</Capsule>
+      ) : (
+        // The phone's picker is the native one. The capsule is sized by its LABEL — "Date" until a
+        // day outside the presets is picked, then that day — and the date field itself is an
+        // invisible layer over it: type=date brings its own intrinsic width and chrome on every
+        // engine, and letting it size the capsule put it on a line of its own. A tap anywhere on
+        // the capsule opens the picker. The knob slides under it like under any other capsule.
+        <span
+          data-knob-item="custom"
+          className={`${CHIP_BASE} relative z-10 bg-transparent ${deadlineKey === 'custom' ? 'text-white' : 'text-[#656464]'}`}
+          style={{ isolation: 'isolate', transition: 'color 240ms cubic-bezier(0.2, 0, 0, 1)', WebkitTapHighlightColor: 'transparent' }}
+        >
+          {deadlineKey === 'custom' ? chipDate(deadline) : 'Date'}
+          <input
+            type="date"
+            aria-label="Deadline"
+            value={deadline}
+            onChange={(e) => setDeadline(e.target.value)}
+            className="absolute inset-0 w-full h-full opacity-0 appearance-none cursor-pointer"
+          />
+          <Ripple />
+        </span>
+      )}
+    </PanelSection>
+  );
+
   const primaryLabel = isEdit || title.trim() || addedCount === 0 ? 'Save' : 'Done';
   const primaryEnabled = isEdit ? !!title.trim() : !!title.trim() || addedCount > 0;
   return (
     // Opens at ~62% and only grows. Pull down anywhere that isn't a control saves and
     // closes — the same commit the backdrop and the X run; a half-filled task is never
     // thrown away.
-    <SheetShell onClose={commitAndClose} onSwipeDown={commitAndClose} handle floor={0.62} maxWidth={maxWidth}>
+    <SheetShell onClose={commitAndClose} onSwipeDown={commitAndClose} handle={!desktop} floor={desktop ? 0 : 0.62} maxWidth={maxWidth} placement={desktop ? 'center' : 'bottom'}>
       {/* pt: the title used to sit hard against the handle. Same grey as the section labels
           below it — it is a label for the panel, not content. */}
       <div className="shrink-0 flex flex-row items-center justify-between pt-[10px] pb-[14px]">
@@ -504,15 +643,18 @@ export function ComposeSheet({ listSequence, projects, clients, people, currentU
           touch-action pan-y re-enables scrolling inside the overlay, which blocks all touch
           hand-off to the page beneath. */}
       <div data-sheet-scroll className="flex-1 min-h-0 overflow-y-auto overscroll-contain" style={{ touchAction: 'pan-y' }}>
-        <PanelSection label="When">
+        {/* Desktop: two columns — the fields, and the deadline with its calendar. Phone: one. */}
+        <div className={desktop ? 'grid gap-x-[32px]' : ''} style={desktop ? { gridTemplateColumns: 'minmax(0, 1fr) 296px' } : undefined}>
+        <div className="min-w-0">
+        <PanelSection label="When" active={section} feel={feel}>
           {PANES.map((p) => (
-            <button key={p.section} type="button" className={chipCls(p.section === section)} onClick={() => setSection(p.section)}>{p.label}</button>
+            <Capsule key={p.section} id={p.section} active={p.section === section} onClick={() => setSection(p.section)}>{p.label}</Capsule>
           ))}
         </PanelSection>
 
-        <PanelSection label="Category">
+        <PanelSection label="Category" active={listId} feel={feel}>
           {listSequence.map((l) => (
-            <button key={l} type="button" className={chipCls(l === listId)} onClick={() => setListId(l)}>{LIST_TITLES[l]}</button>
+            <Capsule key={l} id={l} active={l === listId} onClick={() => setListId(l)}>{LIST_TITLES[l]}</Capsule>
           ))}
         </PanelSection>
 
@@ -523,10 +665,12 @@ export function ComposeSheet({ listSequence, projects, clients, people, currentU
           onToggle={() => toggleLabel('client')}
           onCreate={(n) => setClientId(onAddClient(n))}
           createPlaceholder="New client name"
+          active={clientId || 'none'}
+          feel={feel}
         >
-          <button type="button" className={chipCls(clientId === '')} onClick={() => chooseClient('')}>None</button>
+          <Capsule id="none" active={clientId === ''} onClick={() => chooseClient('')}>None</Capsule>
           {visibleClients.map((c) => (
-            <button key={c.id} type="button" className={chipCls(clientId === c.id)} onClick={() => chooseClient(c.id)}>{c.short || c.name}</button>
+            <Capsule key={c.id} id={c.id} active={clientId === c.id} onClick={() => chooseClient(c.id)}>{c.short || c.name}</Capsule>
           ))}
         </PanelSection>
         )}
@@ -537,54 +681,45 @@ export function ComposeSheet({ listSequence, projects, clients, people, currentU
           onToggle={() => toggleLabel('project')}
           onCreate={(n) => setProjectId(onAddProject({ name: n, clientId: clientId || undefined, list: listId }))}
           createPlaceholder="New project name"
+          active={projectId || 'none'}
+          feel={feel}
         >
-          <button type="button" className={chipCls(projectId === '')} onClick={() => setProjectId('')}>None</button>
+          <Capsule id="none" active={projectId === ''} onClick={() => setProjectId('')}>None</Capsule>
           {visibleProjects.map((p) => (
-            <button key={p.id} type="button" className={chipCls(projectId === p.id)} onClick={() => chooseProject(p.id)}>{p.name}</button>
+            <Capsule key={p.id} id={p.id} active={projectId === p.id} onClick={() => chooseProject(p.id)}>{p.name}</Capsule>
           ))}
         </PanelSection>
 
-        <PanelSection label="Deadline">
-          {/* The date field is a CAPSULE like every other chip. type=date brings its own
-              intrinsic sizing on iOS — a native control height and inner padding that made it
-              stand taller than its neighbours — so appearance-none plus box-border and an
-              explicit height force it onto the same 36px as the rest. It also has no
-              placeholder of its own, so when empty its text is hidden and "Date" is laid over
-              it, and it fills with the sheet colour once set, exactly like a selected chip. */}
-          <span className="relative inline-flex">
-            <input
-              type="date"
-              value={deadline}
-              onChange={(e) => setDeadline(e.target.value)}
-              className={`${CHIP_BASE} box-border appearance-none leading-none ${deadline ? 'bg-[#232220] text-white' : 'bg-transparent text-transparent'}`}
-            />
-            {!deadline && (
-              <span className="absolute inset-0 flex items-center pl-[14px] pointer-events-none text-[#656464] text-[13px]">Date</span>
-            )}
-          </span>
-          <button type="button" className={chipCls(false)} onClick={() => setDeadline(isos[0])}>Today</button>
-          <button type="button" className={chipCls(false)} onClick={() => setDeadline(dateToISO(addDaysToDate(anchor, 7)))}>+1 wk</button>
-          {deadline && <button type="button" className={chipCls(false)} onClick={() => setDeadline('')}>Clear</button>}
-        </PanelSection>
+        {!desktop && deadlineSection}
 
-        <PanelSection label="People">
+        <PanelSection label="People" feel={feel}>
           {people.map((pr) => {
             const on = assignees.includes(pr.short);
             return (
-              <button
+              <Capsule
                 key={pr.id}
-                type="button"
-                className={chipCls(on)}
+                id={pr.id}
+                active={on}
                 onClick={() => setAssignees((a) => (on ? a.filter((x) => x !== pr.short) : [...a, pr.short]))}
-              >{pr.name}</button>
+              >{pr.name}</Capsule>
             );
           })}
         </PanelSection>
 
-        <PanelSection label="Type">
-          <button type="button" className={chipCls(!milestone)} onClick={() => setMilestone(false)}>Task</button>
-          <button type="button" className={chipCls(milestone)} onClick={() => setMilestone(true)}>Milestone</button>
+        <PanelSection label="Type" active={milestone ? 'milestone' : 'task'} feel={feel}>
+          <Capsule id="task" active={!milestone} onClick={() => setMilestone(false)}>Task</Capsule>
+          <Capsule id="milestone" active={milestone} onClick={() => setMilestone(true)}>Milestone</Capsule>
         </PanelSection>
+        </div>
+        {desktop && (
+          // The desktop has the room: the calendar sits beside the fields, always open, and is
+          // the picker for any day the capsules above it don't name.
+          <div className="min-w-0">
+            {deadlineSection}
+            <MonthCalendar value={deadline} onChange={setDeadline} todayIso={isos[0]} />
+          </div>
+        )}
+        </div>
       </div>
 
       {/* Centred pill with a little air above and below — not a full-width bar, not a
@@ -599,6 +734,7 @@ export function ComposeSheet({ listSequence, projects, clients, people, currentU
           className={`h-[38px] min-w-[168px] px-[24px] rounded-full text-[14px] font-['Univers_BQ:55_Regular',sans-serif] transition-colors ${primaryEnabled ? 'bg-[var(--app-accent)] text-white' : 'bg-[#2b2a27] text-[#5e5e5e]'}`}
         >
           {primaryLabel}
+          {!desktop && <Ripple color="rgba(255, 255, 255, 0.18)" haloColor="rgba(255, 255, 255, 0.26)" />}
         </button>
       </div>
     </SheetShell>

@@ -1,7 +1,8 @@
 import { Fragment, memo, useState, useCallback, useMemo, useRef, useEffect, useLayoutEffect, createContext, useContext } from 'react';
 import { flushSync } from 'react-dom';
 import { addDaysToDate, dateToISO } from './data';
-import { ComposeSheet, useAddClient, useAddProject } from './ComposeSheet';
+import { CHIP_TRACK, ComposeSheet, useAddClient, useAddProject } from './ComposeSheet';
+import { Capsule, CapsuleTrack } from './Capsules';
 import { motion, AnimatePresence } from 'motion/react';
 import { Plus, X, List, FolderTree, SlidersHorizontal as SettingsIcon, Folder, Trash2, Calendar as CalendarIcon, ChevronLeft, ChevronRight, ArrowUp, LayoutDashboard, SquareKanban, Heart, FileText, Search, ExternalLink, Filter } from 'lucide-react';
 // Material Symbols — only the Calendar nav icon stayed Material (the rest reverted to Lucide).
@@ -4453,19 +4454,14 @@ function CapsuleToggle<T extends string | number>({ options, value, onChange }: 
   value: T;
   onChange: (v: T) => void;
 }) {
+  // The knob is the shared engine's (src/Capsules.tsx): it slides on a spring, leading edge
+  // first, and the label dips under the pointer.
   return (
-    <div className="inline-flex flex-row items-center gap-[3px] rounded-full bg-black/30 p-[3px]">
+    <CapsuleTrack active={String(value)} feel="spring" knob="var(--app-bg)" className="inline-flex flex-row items-center gap-[3px] rounded-full bg-black/30 p-[3px]">
       {options.map((o) => (
-        <button
-          key={String(o.v)}
-          type="button"
-          onClick={() => onChange(o.v)}
-          className={`h-[26px] px-[12px] rounded-full text-[13px] font-['Univers_BQ:55_Regular',sans-serif] transition-colors ${o.v === value ? 'bg-[var(--app-bg)] text-white' : 'bg-transparent text-[#656464] hover:text-[#a8a8a8]'}`}
-        >
-          {o.label}
-        </button>
+        <Capsule key={String(o.v)} id={String(o.v)} size="sm" active={o.v === value} onClick={() => onChange(o.v)}>{o.label}</Capsule>
       ))}
-    </div>
+    </CapsuleTrack>
   );
 }
 
@@ -7614,6 +7610,9 @@ function useStorageRecord<K extends StorageRecordKey, T>(key: K) {
 //
 // Sections, top to bottom: task preview row · type · list · client · project (filtered
 // by selected client) · assignees · date quick-picks · month calendar.
+// The edit panel's own surface colour — its capsule knobs are cut from it.
+const QE_BG = '#1f1f1f';
+
 function TaskQuickEdit({
   task, projects, clients, people, mode, anchor, newId,
   onClose, onUpdateTask, onAddProject, onAddClient, onAddPerson,
@@ -7698,15 +7697,15 @@ function TaskQuickEdit({
   const todayIso = todayISO();
   const tomorrowIso = (() => { const d = new Date(); d.setDate(d.getDate() + 1); return dateToISO(d); })();
   const nextWeekIso = (() => { const d = new Date(); d.setDate(d.getDate() + 7); return dateToISO(d); })();
+  // The Date capsules are ONE selection whose value is the deadline. A range (start → deadline)
+  // and any single date outside the presets show as the "custom" capsule, named after the date.
+  const dateKey = !task.deadline ? 'none' : task.startDate ? 'custom' : task.deadline === todayIso ? 'today' : task.deadline === tomorrowIso ? 'tomorrow' : task.deadline === nextWeekIso ? 'week' : 'custom';
+  const shortDate = (iso: string) => new Date(iso + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  const dateLabel = task.deadline ? (task.startDate ? `${shortDate(task.startDate)} – ${shortDate(task.deadline)}` : shortDate(task.deadline)) : '';
 
   // Pill (default): bold-white when active, dim-gray otherwise. Used for list / client / project / etc.
   const Pill = ({ active, onClick, children }: { active?: boolean; onClick: () => void; children: React.ReactNode }) => (
     <button onClick={onClick} className={`text-[14px] font-['Untitled_Sans',sans-serif] whitespace-nowrap transition-colors ${active ? 'text-white font-bold' : 'text-[#656464] hover:text-white'}`}>{children}</button>
-  );
-  // PillType: same shape, but uses purple when active. Reserved for the Task / Milestone toggle —
-  // singling out the type as the most "categorical" decision visually.
-  const PillType = ({ active, onClick, children }: { active?: boolean; onClick: () => void; children: React.ReactNode }) => (
-    <button onClick={onClick} className={`text-[14px] font-['Untitled_Sans',sans-serif] whitespace-nowrap transition-colors ${active ? 'text-[var(--app-accent)] font-bold' : 'text-[#656464] hover:text-white'}`}>{children}</button>
   );
   const PlusBtn = ({ onClick }: { onClick: () => void }) => (
     <button onClick={onClick} className="text-[#656464] hover:text-white transition-colors p-0" aria-label="Add"><Plus size={14} /></button>
@@ -7794,24 +7793,30 @@ function TaskQuickEdit({
 
         {/* Type: Task / Milestone — uses the purple variant since type is the most categorical choice.
             mt-[37px] adds a SECOND spacer-row below the task preview for extra breathing room. */}
-        <div className="px-[31px] flex flex-row gap-4 items-center mt-[37px]">
-          <PillType active={!isMilestone} onClick={() => apply({ type: 'todo' })}>Task</PillType>
-          <PillType active={isMilestone} onClick={() => apply({ type: 'scheduled' })}>Milestone</PillType>
+        <div className="px-[31px] flex flex-row items-center mt-[37px]">
+          <CapsuleTrack active={isMilestone ? 'milestone' : 'task'} feel="spring" knob={QE_BG} className={CHIP_TRACK}>
+            <Capsule id="task" active={!isMilestone} onClick={() => apply({ type: 'todo' })}>Task</Capsule>
+            <Capsule id="milestone" active={isMilestone} onClick={() => apply({ type: 'scheduled' })}>Milestone</Capsule>
+          </CapsuleTrack>
         </div>
 
         {/* Section: Today / Tomorrow / Next — pinpoints where this task lands in its column. */}
-        <div className="px-[31px] flex flex-row gap-4 items-center">
-          <Pill active={task.section === 'today'} onClick={() => apply({ section: 'today' })}>Today</Pill>
-          <Pill active={task.section === 'tomorrow'} onClick={() => apply({ section: 'tomorrow' })}>Tomorrow</Pill>
-          <Pill active={task.section === 'next'} onClick={() => apply({ section: 'next' })}>Next</Pill>
-          <Pill active={task.section === 'hold'} onClick={() => apply({ section: 'hold' })}>Hold</Pill>
+        <div className="px-[31px] flex flex-row items-center">
+          <CapsuleTrack active={task.section} feel="spring" knob={QE_BG} className={CHIP_TRACK}>
+            <Capsule id="today" active={task.section === 'today'} onClick={() => apply({ section: 'today' })}>Today</Capsule>
+            <Capsule id="tomorrow" active={task.section === 'tomorrow'} onClick={() => apply({ section: 'tomorrow' })}>Tomorrow</Capsule>
+            <Capsule id="next" active={task.section === 'next'} onClick={() => apply({ section: 'next' })}>Next</Capsule>
+            <Capsule id="hold" active={task.section === 'hold'} onClick={() => apply({ section: 'hold' })}>Hold</Capsule>
+          </CapsuleTrack>
         </div>
 
         {/* List: Work / Projects / Admin / Personal */}
-        <div className="px-[31px] flex flex-row gap-4 items-center">
-          {LISTS.map((l) => (
-            <Pill key={l} active={task.list === l} onClick={() => apply({ list: l })}>{LIST_TITLES[l]}</Pill>
-          ))}
+        <div className="px-[31px] flex flex-row items-center">
+          <CapsuleTrack active={task.list} feel="spring" knob={QE_BG} className={CHIP_TRACK}>
+            {LISTS.map((l) => (
+              <Capsule key={l} id={l} active={task.list === l} onClick={() => apply({ list: l })}>{LIST_TITLES[l]}</Capsule>
+            ))}
+          </CapsuleTrack>
         </div>
 
         {/* Clients — selecting changes the task's clientId and clears project (so the project
@@ -7863,19 +7868,17 @@ function TaskQuickEdit({
           <PlusBtn onClick={onAddPerson} />
         </div>
 
-        {/* Date quick-picks */}
-        <div className="px-[31px] flex flex-row gap-4 items-center flex-wrap">
-          <Pill active={task.deadline === todayIso} onClick={() => apply({ deadline: todayIso })}>Today</Pill>
-          {task.deadline && task.deadline !== todayIso && task.deadline !== tomorrowIso && task.deadline !== nextWeekIso && (
-            <span className="text-white text-[14px] font-bold whitespace-nowrap">{new Date(task.deadline + 'T00:00:00').toLocaleDateString('en-US', { month: 'short', day: '2-digit', year: 'numeric' })}</span>
-          )}
-          {task.deadline && (
-            <button onClick={() => apply({ deadline: undefined, startDate: undefined })} className="text-[#656464] hover:text-white transition-colors p-1" aria-label="Clear date">
-              <Trash2 size={14} />
-            </button>
-          )}
-          <Pill active={task.deadline === tomorrowIso} onClick={() => apply({ deadline: tomorrowIso })}>Tomorrow</Pill>
-          <Pill active={task.deadline === nextWeekIso} onClick={() => apply({ deadline: nextWeekIso })}>Next Week</Pill>
+        {/* Date quick-picks — the phone's capsule row: None, the presets, and a capsule naming any
+            other date (or range) picked in the calendar below. One knob, one selection; the
+            date and the clear control no longer sit between the presets. */}
+        <div className="px-[31px] flex flex-row items-center">
+          <CapsuleTrack active={dateKey} feel="spring" knob={QE_BG} className={CHIP_TRACK}>
+            <Capsule id="none" active={dateKey === 'none'} onClick={() => apply({ deadline: undefined, startDate: undefined })}>None</Capsule>
+            <Capsule id="today" active={dateKey === 'today'} onClick={() => apply({ deadline: todayIso, startDate: undefined })}>Today</Capsule>
+            <Capsule id="tomorrow" active={dateKey === 'tomorrow'} onClick={() => apply({ deadline: tomorrowIso, startDate: undefined })}>Tomorrow</Capsule>
+            <Capsule id="week" active={dateKey === 'week'} onClick={() => apply({ deadline: nextWeekIso, startDate: undefined })}>+1 wk</Capsule>
+            {dateKey === 'custom' && <Capsule id="custom" active>{dateLabel}</Capsule>}
+          </CapsuleTrack>
         </div>
 
         {/* Month calendar — header + day grid. Selected deadline in purple. */}
@@ -14249,7 +14252,8 @@ export default function App() {
           onAddClient={addClientNamed}
           onAddProject={addProjectNamed}
           onClose={() => setComposeOpen(false)}
-          maxWidth={520}
+          maxWidth={760}
+          surface="desktop"
         />
       )}
     </DndContext>

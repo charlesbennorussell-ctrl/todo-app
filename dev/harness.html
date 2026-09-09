@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover, user-scalable=no" />
+    <title>harness</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <!-- ?fakeraf=1: a hand-cranked frame clock. The embedded browser pane stops painting while
+         it is off screen, and with it requestAnimationFrame — so every motion animation freezes
+         and timers are throttled. Here rAF only QUEUES callbacks, and window.__tick(n, step,
+         probe) runs n frames synchronously, `step` ms of real time apart (motion reads
+         performance.now() for its delta), calling probe() after each so a knob can be measured
+         frame by frame from the console. Must run before the module script. -->
+    <script>
+      if (/[?&]fakeraf=1/.test(location.search)) {
+        const pending = [];
+        let seq = 0;
+        window.__pending = pending;
+        window.__rafCalls = 0;
+        window.requestAnimationFrame = (cb) => { window.__rafCalls++; pending.push({ id: ++seq, cb }); return seq; };
+        window.cancelAnimationFrame = (id) => { const i = pending.findIndex((p) => p.id === id); if (i >= 0) pending.splice(i, 1); };
+        // Async: motion flushes some work (DOM renders among it) on microtasks, which a
+        // synchronous loop would starve — so every frame yields to the microtask queue first.
+        window.__tick = async (n, step, probe) => {
+          const out = [];
+          for (let i = 0; i < n; i++) {
+            // harness.tsx puts motion on a manual clock and hands us its frameData.
+            const fd = window.__frameData;
+            if (fd) fd.timestamp += step;
+            const now = fd ? fd.timestamp : performance.now();
+            const cbs = pending.splice(0);
+            cbs.forEach(({ cb }) => cb(now));
+            await Promise.resolve();
+            await Promise.resolve();
+            if (probe) out.push(probe(i, now));
+          }
+          return out;
+        };
+      }
+    </script>
+    <script type="module" src="/dev/harness.tsx"></script>
+  </body>
+</html>

@@ -52,7 +52,8 @@ import {
   addDaysToDate, dateToISO, useSharedTheme, useSharedSubGroup, doneTint, convertTitleCase, useSharedCaseMode,
   buildSubGroupsShared, flatGroup, milestoneBelongsTo,
 } from './App';
-import { PANES, SheetShell, CHIP_TRACK, chipCls, ComposeSheet, useAddClient, useAddProject } from './ComposeSheet';
+import { PANES, SheetShell, CHIP_TRACK, ComposeSheet, useAddClient, useAddProject } from './ComposeSheet';
+import { Capsule, CapsuleTrack, Ripple } from './Capsules';
 
 // ── Shared module state ───────────────────────────────────────────────────────
 
@@ -923,21 +924,14 @@ export default function MobileApp() {
         <div className="shrink-0 flex items-center justify-center pt-[56px] pb-[28px]">
           {/* Track is the same near-black as the bottom bar (#151412) so the switcher reads as
               chrome rather than as content. */}
-          <div className="relative inline-flex items-center rounded-full bg-black p-[3px] w-[calc(100%-36px)] max-w-[340px]">
-            {/* Sliding knob: one third of the inner width, translated by whole knob-widths.
-                It is simply the page background colour sitting on the near-black track — the
-                same one knob for all three days, no purple wash and no per-day special case. */}
-            <div
-              aria-hidden
-              className="absolute top-[3px] bottom-[3px] left-[3px] rounded-full bg-[var(--app-bg)]"
-              style={{
-                width: `calc((100% - 6px) / ${PANES.length})`,
-                transform: `translateX(${pane * 100}%)`,
-                transition: `transform 320ms cubic-bezier(0.16, 1, 0.3, 1)`,
-              }}
-            />
+          {/* The knob is the page background colour sitting on the near-black track — one knob
+              for every day, no purple wash and no per-day special case. It is the shared
+              engine's (src/Capsules.tsx): quintic ease in and out, the trailing edge a beat
+              behind the leading one, so it stretches toward the day you tapped and gathers
+              itself when it lands. Each tab is still a drop target. */}
+          <CapsuleTrack active={String(pane)} feel="quintic" knob="var(--app-bg)" className="inline-flex items-center rounded-full bg-black p-[3px] w-[calc(100%-36px)] max-w-[340px]">
             {PANES.map((p, i) => <DayTab key={p.section} idx={i} label={p.label} active={pane === i} dragging={!!activeTask} onTap={() => setPane(i)} />)}
-          </div>
+          </CapsuleTrack>
         </div>
         {/* Pager */}
         <div
@@ -1078,15 +1072,16 @@ export default function MobileApp() {
               aria-label={active ? label : `${label} — desktop only`}
               aria-disabled={!active}
               disabled={!active}
-              className={`p-3 ${active ? 'text-white' : 'text-[#2f2e2c]'}`}
-            ><Icon size={22} /></button>
+              className={`relative p-3 rounded-full ${active ? 'text-white' : 'text-[#2f2e2c]'}`}
+            ><Icon size={22} />{active && <Ripple />}</button>
           ))}
           <button
             aria-label="Add task"
             onClick={() => setComposing(true)}
-            className="size-[42px] shrink-0 rounded-full bg-[var(--app-accent)] flex items-center justify-center"
+            className="relative size-[42px] shrink-0 rounded-full bg-[var(--app-accent)] flex items-center justify-center"
           >
             <Plus size={22} color="#151412" strokeWidth={2.5} />
+            <Ripple color="rgba(255, 255, 255, 0.2)" haloColor="rgba(255, 255, 255, 0.28)" />
           </button>
           {[
             { label: 'List', Icon: List },
@@ -1298,8 +1293,9 @@ function DayTab({ idx, label, active, dragging, onTap }: { idx: number; label: s
     <button
       ref={setNodeRef}
       type="button"
+      data-knob-item={String(idx)}
       onClick={onTap}
-      className={`relative z-10 flex-1 py-[8px] rounded-full text-center transition-colors font-['Univers_BQ:55_Regular',sans-serif] text-[14px] ${
+      className={`relative z-10 flex-1 py-[8px] rounded-full text-center transition-colors duration-300 font-['Univers_BQ:55_Regular',sans-serif] text-[14px] ${
         // Mid-drag the segments read as landing zones: the one under the finger goes full
         // accent, the others hint in accent so it's obvious you can drop on them.
         isOver && dragging ? 'text-[var(--app-accent)]'
@@ -1312,6 +1308,7 @@ function DayTab({ idx, label, active, dragging, onTap }: { idx: number; label: s
       style={isOver && dragging ? { boxShadow: 'inset 0 0 0 1.5px var(--app-accent)', borderRadius: 9999 } : undefined}
     >
       {label}
+      <Ripple />
     </button>
   );
 }
@@ -1405,13 +1402,16 @@ function TaskSheet({ task, projects, clients, isos, anchor, autoFocusTitle, conv
       <div {...pullHandlers} className="mt-auto">
       {/* Same control as the day switcher and the creator panel: capsules on a dark track. */}
       <div className="pb-[16px]">
-        <div className={CHIP_TRACK} data-chip-track>
+        <CapsuleTrack active={String(currentIdx)} feel="quintic" className={CHIP_TRACK} attrs={{ 'data-chip-track': '' }}>
           {PANES.map((p, i) => (
-            <button key={p.section} type="button" className={chipCls(i === currentIdx)} onClick={() => { if (i !== currentIdx) { onMove(i); } onClose(); }}>
+            // Moving to another day: the task moves at once, the knob slides there, and the
+            // sheet leaves once the knob has landed — the slide IS the confirmation. Tapping
+            // the day it is already on just closes.
+            <Capsule key={p.section} id={String(i)} active={i === currentIdx} onClick={() => { if (i === currentIdx) { onClose(); return; } onMove(i); window.setTimeout(onClose, 420); }}>
               {p.label}
-            </button>
+            </Capsule>
           ))}
-        </div>
+        </CapsuleTrack>
       </div>
       {/* Edit · Delete · Done. Edit hands off to the same full panel the bottom "+" opens, so
           there is one task form in the app rather than two that drift.
@@ -1426,27 +1426,30 @@ function TaskSheet({ task, projects, clients, isos, anchor, autoFocusTitle, conv
         <button
           type="button"
           onClick={() => { if (confirmDelete) { setConfirmDelete(false); return; } commit(); onEdit(); }}
-          className={`justify-self-start flex flex-row items-center gap-[7px] p-2 -m-2 ${confirmDelete ? 'text-[#656464]' : 'text-[#a8a8a8]'}`}
+          className={`relative justify-self-start flex flex-row items-center gap-[7px] p-2 -m-2 rounded-[8px] ${confirmDelete ? 'text-[#656464]' : 'text-[#a8a8a8]'}`}
         >
           {confirmDelete ? <span className="text-[13px]">Cancel</span> : <><Pencil size={15} /><span className="text-[13px]">Edit</span></>}
+          <Ripple />
         </button>
 
         <button
           type="button"
           aria-label={confirmDelete ? 'Confirm delete task' : 'Delete task'}
           onClick={() => (confirmDelete ? onDelete() : setConfirmDelete(true))}
-          className={`justify-self-center flex flex-row items-center gap-[7px] p-2 -m-2 ${confirmDelete ? 'text-[#FF7171]' : 'text-[#656464]'}`}
+          className={`relative justify-self-center flex flex-row items-center gap-[7px] p-2 -m-2 rounded-[8px] ${confirmDelete ? 'text-[#FF7171]' : 'text-[#656464]'}`}
         >
           <Trash2 size={15} />
           <span className="text-[13px]">{confirmDelete ? 'Confirm' : 'Delete'}</span>
+          <Ripple />
         </button>
 
         <button
           type="button"
           onClick={() => { if (confirmDelete) { setConfirmDelete(false); return; } commit(); onClose(); }}
-          className="justify-self-end text-[var(--app-accent)] text-[13px] p-2 -m-2"
+          className="relative justify-self-end text-[var(--app-accent)] text-[13px] p-2 -m-2 rounded-[8px]"
         >
           Done
+          <Ripple />
         </button>
       </div>
       </div>
