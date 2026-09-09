@@ -8,11 +8,12 @@
 //   'spring'  (desktop, mouse) — the new knob springs in from 0.7 with a hair of overshoot; the
 //                                 label dips under the pointer while pressed, and an idle label
 //                                 brightens on hover with a 300ms fade each way.
-//   'quintic' (phone, touch)   — subtle: in from 0.92, easeInOutQuint, plus Material's bounded
-//                                 press ripple growing from the touch point.
+//   'quintic' (phone, touch)   — subtle: in from 0.92, easeInOutQuint. The knob IS the touch
+//                                 feedback: a press ripple and a halo were both tried and read
+//                                 as a flash at the end of the move.
 //
 // Imports nothing from the app, so any file can use it without a cycle.
-import { createContext, useContext, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { createContext, useContext, type CSSProperties, type ReactNode } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 
 export type Feel = 'spring' | 'quintic';
@@ -88,7 +89,7 @@ export function CapsuleKnob({ active, feel = 'spring', color = '#232220' }: { ac
 
 /**
  * One capsule. Its knob appears under it when it is active (single- and multi-select alike).
- * The label dips on press (desktop); the ripple answers a touch (phone).
+ * The label dips on press (desktop).
  */
 export function Capsule({ active, onClick, size = 'md', className = '', style, disabled, title, children }: {
   active: boolean;
@@ -125,121 +126,7 @@ export function Capsule({ active, onClick, size = 'md', className = '', style, d
       ) : (
         <span className="relative">{children}</span>
       )}
-      {feel === 'quintic' && <Ripple />}
     </button>
   );
 }
 
-// ─── Touch feedback (Material) ────────────────────────────────────────────────────────────
-// Drop <Ripple /> inside any positioned element and it answers presses on that element with a
-// BOUNDED ripple: a soft-edged disc that starts under the finger at a fifth of the element's
-// size and grows to cover it while drifting to its centre (450ms, Material's standard curve),
-// then fades out 150ms after release — but never before it has been visible for 225ms, so a
-// quick tap still shows a full press. On touch the ripple waits 150ms before starting, and a
-// finger that travels more than a few pixels first is a scroll, not a press — so a list can be
-// flicked without lighting every row. A tap released inside those 150ms still ripples, on
-// release. Numbers are Material Web's (ripple.ts): PRESS_GROW 450, MINIMUM_PRESS 225,
-// INITIAL_ORIGIN_SCALE 0.2, PADDING 10, SOFT_EDGE 35% / min 75, TOUCH_DELAY 150, pressed
-// opacity 0.12.
-const TOUCH_DELAY_MS = 150;
-const MINIMUM_PRESS_MS = 225;
-const FADE_MS = 150;
-
-type Wave = { id: number; fading: boolean; style: CSSProperties };
-
-export function Ripple({ color = 'rgba(255, 255, 255, 0.12)' }: { color?: string }) {
-  const hostRef = useRef<HTMLSpanElement>(null);
-  const [waves, setWaves] = useState<Wave[]>([]);
-  useEffect(() => {
-    const clip = hostRef.current;
-    const el = clip?.parentElement;
-    if (!clip || !el) return;
-    // The host must be positioned (the clip is absolute inside it) and its own stacking context.
-    // Inline because the host is whatever element we were dropped into.
-    if (getComputedStyle(el).position === 'static') el.style.position = 'relative';
-    el.style.isolation = 'isolate';
-
-    let seq = 0;
-    let live: { id: number; at: number } | null = null;
-    let pending: { x: number; y: number } | null = null;
-    let down: { x: number; y: number } | null = null;
-    let timer = 0;
-    const timers: number[] = [];
-    const later = (fn: () => void, ms: number) => { timers.push(window.setTimeout(fn, ms)); };
-
-    const begin = (x: number, y: number) => {
-      if (reducedMotion()) return;
-      const rect = el.getBoundingClientRect();
-      const w = rect.width, h = rect.height;
-      const maxDim = Math.max(w, h);
-      const softEdge = Math.max(0.35 * maxDim, 75);
-      const initial = Math.max(1, Math.floor(maxDim * 0.2));
-      const scaleTo = (Math.hypot(w, h) + 10 + softEdge) / initial;
-      const id = ++seq;
-      live = { id, at: performance.now() };
-      const style = {
-        width: initial, height: initial,
-        '--r-x0': `${x - rect.left - initial / 2}px`, '--r-y0': `${y - rect.top - initial / 2}px`,
-        '--r-x1': `${w / 2 - initial / 2}px`, '--r-y1': `${h / 2 - initial / 2}px`,
-        '--r-s': String(scaleTo),
-        background: `radial-gradient(closest-side, ${color} max(100% - 70px, 65%), transparent 100%)`,
-      } as CSSProperties;
-      setWaves((ws) => [...ws, { id, fading: false, style }]);
-    };
-    const end = () => {
-      const cur = live;
-      live = null;
-      if (!cur) return;
-      const wait = Math.max(0, MINIMUM_PRESS_MS - (performance.now() - cur.at));
-      later(() => {
-        setWaves((ws) => ws.map((x) => (x.id === cur.id ? { ...x, fading: true } : x)));
-        later(() => setWaves((ws) => ws.filter((x) => x.id !== cur.id)), FADE_MS + 40);
-      }, wait);
-    };
-    const onDown = (e: PointerEvent) => {
-      if (e.pointerType === 'mouse' && e.button !== 0) return;
-      // A control nested inside the host owns its own feedback.
-      const btn = (e.target as Element).closest('button');
-      if (btn && btn !== el && el.contains(btn)) return;
-      down = { x: e.clientX, y: e.clientY };
-      if (e.pointerType === 'touch') {
-        pending = { x: e.clientX, y: e.clientY };
-        timer = window.setTimeout(() => { if (pending) { begin(pending.x, pending.y); pending = null; } }, TOUCH_DELAY_MS);
-      } else {
-        begin(e.clientX, e.clientY);
-      }
-    };
-    const onMove = (e: PointerEvent) => {
-      if (!down) return;
-      if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > 12) {   // a scroll or a drag
-        window.clearTimeout(timer); pending = null; down = null; end();
-      }
-    };
-    const onUp = () => {
-      window.clearTimeout(timer);
-      if (pending) { begin(pending.x, pending.y); pending = null; }
-      down = null;
-      end();
-    };
-    const onCancel = () => { window.clearTimeout(timer); pending = null; down = null; end(); };
-    el.addEventListener('pointerdown', onDown);
-    el.addEventListener('pointermove', onMove);
-    el.addEventListener('pointerup', onUp);
-    el.addEventListener('pointercancel', onCancel);
-    el.addEventListener('pointerleave', onCancel);
-    return () => {
-      window.clearTimeout(timer);
-      timers.forEach((id) => window.clearTimeout(id));
-      el.removeEventListener('pointerdown', onDown);
-      el.removeEventListener('pointermove', onMove);
-      el.removeEventListener('pointerup', onUp);
-      el.removeEventListener('pointercancel', onCancel);
-      el.removeEventListener('pointerleave', onCancel);
-    };
-  }, [color]);
-  return (
-    <span ref={hostRef} aria-hidden className="cap-ripple-clip">
-      {waves.map((wv) => <span key={wv.id} className="cap-ripple-wave" style={{ ...wv.style, opacity: wv.fading ? 0 : 1 }} />)}
-    </span>
-  );
-}

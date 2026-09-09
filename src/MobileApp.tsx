@@ -53,7 +53,7 @@ import {
   buildSubGroupsShared, flatGroup, milestoneBelongsTo,
 } from './App';
 import { PANES, SheetShell, CHIP_TRACK, ComposeSheet, useAddClient, useAddProject } from './ComposeSheet';
-import { Capsule, CapsuleKnob, CapsuleTrack, Ripple } from './Capsules';
+import { Capsule, CapsuleKnob, CapsuleTrack } from './Capsules';
 
 // ── Shared module state ───────────────────────────────────────────────────────
 
@@ -361,25 +361,6 @@ function PaneDroppable({ id, width, children }: { id: string; width: number; chi
 // scroll, and a pull slower than the old 600ms cap was silently discarded. Fires once per
 // gesture, ignores mostly-horizontal moves (the day-chip row's territory), and asks for a
 // decisive 36px so a tap or a wobble never triggers it.
-function useVerticalSwipe(handlers: { up?: () => void; down?: () => void }) {
-  const ref = useRef<{ x: number; y: number; fired: boolean } | null>(null);
-  const start = (e: React.TouchEvent) => {
-    const t = e.touches[0];
-    ref.current = { x: t.clientX, y: t.clientY, fired: false };
-  };
-  const move = (e: React.TouchEvent) => {
-    const s = ref.current;
-    if (!s || s.fired) return;
-    const t = e.touches[0];
-    const dy = t.clientY - s.y;
-    const dx = Math.abs(t.clientX - s.x);
-    if (dx > 60) return;
-    if (dy < -36 && handlers.up) { s.fired = true; handlers.up(); }
-    else if (dy > 36 && handlers.down) { s.fired = true; handlers.down(); }
-  };
-  const end = () => { ref.current = null; };
-  return { onTouchStart: start, onTouchMove: move, onTouchEnd: end, onTouchCancel: end };
-}
 
 // ── The app ───────────────────────────────────────────────────────────────────
 
@@ -1072,7 +1053,7 @@ export default function MobileApp() {
               aria-disabled={!active}
               disabled={!active}
               className={`relative p-3 rounded-full ${active ? 'text-white' : 'text-[#2f2e2c]'}`}
-            ><Icon size={22} />{active && <Ripple />}</button>
+            ><Icon size={22} /></button>
           ))}
           <button
             aria-label="Add task"
@@ -1080,7 +1061,6 @@ export default function MobileApp() {
             className="relative size-[42px] shrink-0 rounded-full bg-[var(--app-accent)] flex items-center justify-center"
           >
             <Plus size={22} color="#151412" strokeWidth={2.5} />
-            <Ripple color="rgba(255, 255, 255, 0.2)" />
           </button>
           {[
             { label: 'List', Icon: List },
@@ -1307,7 +1287,6 @@ function DayTab({ idx, label, active, dragging, onTap }: { idx: number; label: s
     >
       <CapsuleKnob active={active} feel="quintic" color="var(--app-bg)" />
       {label}
-      <Ripple />
     </button>
   );
 }
@@ -1347,14 +1326,6 @@ function TaskSheet({ task, projects, clients, isos, anchor, autoFocusTitle, conv
     titleRef.current?.focus();
   }, [autoFocusTitle]);
 
-  // Swipe UP anywhere on the sheet's lower controls (day chips + Edit/Delete/
-  // Done row) = the Edit button. Pulling the bar upward to expand into the full
-  // panel is the gesture the layout already suggests. Taps are untouched: we
-  // only act past a decisive vertical threshold, and never when the gesture is
-  // mostly horizontal (that's the day-chip row's own territory).
-  // Pull UP on the lower controls expands into the full panel. Pull DOWN is the shell's,
-  // sheet-wide, so it isn't duplicated here.
-  const pullHandlers = useVerticalSwipe({ up: () => { commit(); onEdit(); } });
   const project = task.projectId ? projects.find((p) => p.id === task.projectId) : undefined;
   const client = (task.clientId ?? project?.clientId) ? clients.find((c) => c.id === (task.clientId ?? project?.clientId)) : undefined;
   // Highlight the chip for the day the task DISPLAYS on. For dated tasks that's the deadline
@@ -1367,7 +1338,16 @@ function TaskSheet({ task, projects, clients, isos, anchor, autoFocusTitle, conv
     ? (task.deadline <= isos[0] ? 0 : task.deadline === isos[1] ? 1 : 2)
     : task.section === 'today' ? 0 : task.section === 'tomorrow' ? 1 : 2;
   return (
-    <SheetShell onClose={() => { commit(); onClose(); }} onSwipeDown={() => { commit(); onClose(); }} handle>
+    // Pull DOWN anywhere that isn't a control saves and closes; pull UP over the same area
+    // expands into the full panel. Both are the shell's, so the hot zone is the whole sheet —
+    // it used to be the strip of lower controls, which is why the pull-up only answered from
+    // down there.
+    <SheetShell
+      onClose={() => { commit(); onClose(); }}
+      onSwipeDown={() => { commit(); onClose(); }}
+      onSwipeUp={() => { commit(); onEdit(); }}
+      handle
+    >
       <input
         ref={titleRef}
         value={title}
@@ -1393,12 +1373,10 @@ function TaskSheet({ task, projects, clients, isos, anchor, autoFocusTitle, conv
           {client?.short}{client && project ? <Arrowhead /> : null}{project?.name}
         </p>
       )}
-      {/* Lower controls, and the pull-up-to-edit target: dragging this whole
-          block upward opens the full task panel. */}
-      {/* mt-auto: the sheet is now taller than its content, and free space in a flex column
-          pools at the END — which would leave this row floating above a band of dead sheet.
-          Pushing it to the bottom puts the slack under the title, where it belongs. */}
-      <div {...pullHandlers} className="mt-auto">
+      {/* mt-auto: the sheet is taller than its content, and free space in a flex column pools
+          at the END — which would leave this row floating above a band of dead sheet. Pushing
+          it to the bottom puts the slack under the title, where it belongs. */}
+      <div className="mt-auto">
       {/* Same control as the day switcher and the creator panel: capsules on a dark track. */}
       <div className="pb-[16px]">
         <CapsuleTrack feel="quintic" className={CHIP_TRACK} attrs={{ 'data-chip-track': '' }}>
@@ -1428,7 +1406,6 @@ function TaskSheet({ task, projects, clients, isos, anchor, autoFocusTitle, conv
           className={`relative justify-self-start flex flex-row items-center gap-[7px] p-2 -m-2 rounded-[8px] ${confirmDelete ? 'text-[#656464]' : 'text-[#a8a8a8]'}`}
         >
           {confirmDelete ? <span className="text-[13px]">Cancel</span> : <><Pencil size={15} /><span className="text-[13px]">Edit</span></>}
-          <Ripple />
         </button>
 
         <button
@@ -1439,7 +1416,6 @@ function TaskSheet({ task, projects, clients, isos, anchor, autoFocusTitle, conv
         >
           <Trash2 size={15} />
           <span className="text-[13px]">{confirmDelete ? 'Confirm' : 'Delete'}</span>
-          <Ripple />
         </button>
 
         <button
@@ -1448,7 +1424,6 @@ function TaskSheet({ task, projects, clients, isos, anchor, autoFocusTitle, conv
           className="relative justify-self-end text-[var(--app-accent)] text-[13px] p-2 -m-2 rounded-[8px]"
         >
           Done
-          <Ripple />
         </button>
       </div>
       </div>

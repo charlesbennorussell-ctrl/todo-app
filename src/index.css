@@ -335,30 +335,3 @@ textarea:focus-visible,
 .focus-search-input::placeholder { color: #656464; }
 
 
-/* --- Touch feedback (src/Capsules.tsx <Ripple />) ---------------------------------
-   Material's press: a soft-edged disc grows from under the finger to cover the control
-   while drifting to its centre (450ms, the standard curve), then fades out in 150ms. The
-   start/end offsets and the final scale are per-press, so they arrive as custom
-   properties set inline by the component. These elements carry no utilities, so this
-   unlayered block overrides nothing. */
-.cap-ripple-clip {
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  overflow: hidden;
-  pointer-events: none;
-}
-.cap-ripple-wave {
-  position: absolute;
-  left: 0;
-  top: 0;
-  border-radius: 50%;
-  transform-origin: center;
-  will-change: transform, opacity;
-  animation: cap-ripple-grow 450ms cubic-bezier(0.2, 0, 0, 1) forwards;
-  transition: opacity 150ms linear;
-}
-@keyframes cap-ripple-grow {
-  from { transform: translate(var(--r-x0), var(--r-y0)) scale(1); }
-  to   { transform: translate(var(--r-x1), var(--r-y1)) scale(var(--r-s)); }
-}

@@ -23,7 +23,7 @@ const probeLeft = motionValue(0);
 function Probe() {
   return <motion.div data-probe style={{ x: probeX, left: probeLeft, position: 'relative', width: 8, height: 8, background: '#7666fc' }} />;
 }
-import { ComposeSheet } from '../src/ComposeSheet';
+import { ComposeSheet, SheetShell } from '../src/ComposeSheet';
 import { Capsule, CapsuleTrack } from '../src/Capsules';
 import type { Client, Project, Person } from '../src/data';
 import { LISTS, addDaysToDate, dateToISO } from '../src/data';
@@ -45,6 +45,27 @@ const people = [
   { id: 'u2', name: 'Sam', short: 'S' },
 ] as unknown as Person[];
 
+// ?shell=1 — the bare SheetShell with BOTH gestures wired and a plain (control-free) body, so
+// the card sheet's pull-up/pull-down engine can be driven with synthetic touches and the
+// result read out of the log. This is the same code path TaskSheet uses.
+function ShellProbe() {
+  const [log, setLog] = useState<string[]>([]);
+  const say = (what: string) => setLog((l) => [...l, what]);
+  return (
+    <>
+      <p data-testid="shell-log" style={{ color: '#a8a8a8' }}>{log.join(',') || 'none'}</p>
+      <SheetShell onClose={() => say('close')} onSwipeDown={() => say('down')} onSwipeUp={() => say('up')} handle>
+        <div data-testid="probe-body" style={{ height: 220, paddingTop: 16 }}>
+          <p style={{ color: '#656464' }}>plain body — the gesture's</p>
+          <div data-chip-track="" style={{ marginTop: 16, padding: 3, background: 'black', borderRadius: 21, display: 'inline-flex' }}>
+            <button type="button" data-testid="probe-chip" style={{ height: 36, padding: '0 16px', borderRadius: 999, color: 'white', background: 'transparent' }}>chip</button>
+          </div>
+        </div>
+      </SheetShell>
+    </>
+  );
+}
+
 function Harness() {
   const [open, setOpen] = useState(true);
   const [v, setV] = useState('today');
@@ -61,7 +82,8 @@ function Harness() {
         </CapsuleTrack>
       </div>
       <button type="button" onClick={() => setOpen(true)} style={{ marginTop: 24, color: '#a8a8a8' }}>open sheet</button>
-      {open && (
+      {params.get('shell') && <ShellProbe />}
+      {open && !params.get('shell') && (
         <ComposeSheet
           listSequence={LISTS}
           projects={projects}
@@ -77,7 +99,7 @@ function Harness() {
           onAddClient={(n) => { console.log('client', n); return 'c-new'; }}
           onAddProject={(p) => { console.log('project', p); return 'p-new'; }}
           onClose={() => setOpen(false)}
-          maxWidth={surface === 'desktop' ? 560 : undefined}
+          maxWidth={surface === 'desktop' ? 520 : undefined}
           surface={surface}
         />
       )}

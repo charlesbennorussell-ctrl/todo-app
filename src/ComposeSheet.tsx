@@ -8,7 +8,7 @@ import { motion } from 'motion/react';
 import { ChevronLeft, ChevronRight, Plus, X } from 'lucide-react';
 import type { Task, Project, Client, Person, ListId, SectionId } from './data';
 import { LIST_TITLES, LISTS, addDaysToDate, dateToISO } from './data';
-import { Capsule, CapsuleKnob, CapsuleTrack, Ripple, type Feel } from './Capsules';
+import { Capsule, CapsuleKnob, CapsuleTrack, type Feel } from './Capsules';
 
 // The four sections, in the order every switcher shows them. Hold is parked, not a day: its
 // pane is sourced straight from the section and its drop token is 'HOLD@' rather than a date.
@@ -22,7 +22,16 @@ export const PANES: { section: SectionId; label: string }[] = [
 ];
 
 
-export function SheetShell({ onClose, onSwipeDown, handle = false, floor = 1 / 3, maxWidth, placement = 'bottom', children }: {
+// A pull UP has nowhere to rest — it hands the sheet off to another one — so it drags at a
+// third of the finger, no further than the cap, and springs home once it has been answered.
+const PULL_DIVISOR = 3;
+const PULL_CAP = 64;
+// A decisive pull up: this far, or a shorter flick with real upward speed.
+const PULL_COMMIT_PX = 44;
+// Coming back this far from the furthest point of a drag, in either direction, cancels it.
+const REVERSE_PX = 20;
+
+export function SheetShell({ onClose, onSwipeDown, onSwipeUp, handle = false, floor = 1 / 3, maxWidth, placement = 'bottom', children }: {
   onClose: () => void;
   /** Desktop: cap the sheet's width and centre it. Unset = full-bleed, as on the phone. */
   maxWidth?: number;
@@ -32,6 +41,9 @@ export function SheetShell({ onClose, onSwipeDown, handle = false, floor = 1 / 3
   /** Pull DOWN anywhere on the sheet that isn't a control (chip, field, button, chip track)
    *  — and from the top of a scrolled body — runs this. Usually the same commit as onClose. */
   onSwipeDown?: () => void;
+  /** Pull UP over the same area runs this — for a sheet that expands into another one. Unset
+   *  (the compose sheet) leaves upward drags to the page, so a scroll body still scrolls. */
+  onSwipeUp?: () => void;
   /** Show the grab pill. Purely a hint now: the whole sheet answers the gesture. */
   handle?: boolean;
   /** Opening height as a fraction of the window. The sheet only ever GROWS from here. */
@@ -103,23 +115,29 @@ export function SheetShell({ onClose, onSwipeDown, handle = false, floor = 1 / 3
   const docked = Number.isFinite(minGap) ? vvBox.height - minGap : 0;
   const lockedMin = Math.min(vvBox.height, Math.max(sheetFloor, docked));
 
-  // DRAG TO DISMISS, the way the system sheets do it. The sheet FOLLOWS the finger while it
-  // is down — you can pull it partway, change your mind, and push it back up — and only on
-  // release is anything decided: past ~28% of its height, or a decisive flick, it slides off
-  // the bottom edge and THEN closes; otherwise it springs back. Nothing happens on a small
-  // move, which is what the previous "36px and it's gone" felt like.
+  // DRAG, the way the system sheets do it. DOWN dismisses: the sheet follows the finger 1:1
+  // and only on release is anything decided — past ~28% of its height, or a decisive flick, it
+  // slides off the bottom edge and THEN closes; otherwise it springs back. UP expands, for a
+  // sheet that has somewhere to go (the card sheet hands off to the full panel): it drags
+  // against resistance, because there is no second position to park in, and springs home once
+  // the pull has been answered. Nothing happens on a small move, which is what the old "36px
+  // and it's gone" felt like.
   //
-  // Native listeners, not React's: touchmove must be non-passive so the drag can
-  // preventDefault the scroll it would otherwise turn into. A touch that begins on a
-  // control (chip, field, button, the chip track) is that control's; one inside a scroll
-  // body that has been scrolled is a scroll — only from the very top does a pull mean
-  // "close". The drag only ever moves DOWN; upward is clamped to rest.
+  // Native listeners, not React's: touchmove must be non-passive so the drag can preventDefault
+  // the scroll it would otherwise become — which is also what makes deciding on touchend safe
+  // at all, since iOS swallows the touchend of a drag it has turned into a scroll. A touch that
+  // begins on a control (chip, field, button, the chip track) is that control's; one inside a
+  // scroll body that has been scrolled is a scroll, so only from the very top does a pull count.
+  // Everything else on the sheet is the gesture's, which is why the card sheet no longer has a
+  // pull-up strip along its bottom: the whole panel answers.
   const onSwipeDownRef = useRef(onSwipeDown);
   onSwipeDownRef.current = onSwipeDown;
+  const onSwipeUpRef = useRef(onSwipeUp);
+  onSwipeUpRef.current = onSwipeUp;
   useEffect(() => {
     const el = sheetRef.current;
-    if (!el || !onSwipeDownRef.current) return;
-    let drag: { y0: number; dy: number; maxDy: number; lastY: number; lastT: number; v: number } | null = null;
+    if (!el || !(onSwipeDownRef.current || onSwipeUpRef.current)) return;
+    let drag: { y0: number; dy: number; maxDown: number; maxUp: number; lastY: number; lastT: number; v: number } | null = null;
     let leaving = false;
     const onStart = (e: TouchEvent) => {
       if (leaving) return;
@@ -128,29 +146,43 @@ export function SheetShell({ onClose, onSwipeDown, handle = false, floor = 1 / 3
       const body = target.closest<HTMLElement>('[data-sheet-scroll]');
       if (body && body.scrollTop > 0) return;
       const t = e.touches[0];
-      drag = { y0: t.clientY, dy: 0, maxDy: 0, lastY: t.clientY, lastT: e.timeStamp, v: 0 };
+      drag = { y0: t.clientY, dy: 0, maxDown: 0, maxUp: 0, lastY: t.clientY, lastT: e.timeStamp, v: 0 };
       el.style.transition = 'none';
     };
     const onMove = (e: TouchEvent) => {
       if (!drag) return;
       const t = e.touches[0];
-      const dy = Math.max(0, t.clientY - drag.y0);
+      const dy = t.clientY - drag.y0;                   // signed: + down, - up
       const dt = Math.max(1, e.timeStamp - drag.lastT);
-      drag.v = (t.clientY - drag.lastY) / dt;          // px per ms, + = downward
+      drag.v = (t.clientY - drag.lastY) / dt;           // px per ms, + = downward
       drag.lastY = t.clientY; drag.lastT = e.timeStamp; drag.dy = dy;
-      if (dy > drag.maxDy) drag.maxDy = dy;
-      if (dy > 0) e.preventDefault();                   // the sheet moves, not the page
-      el.style.transform = `translateY(${dy}px)`;
+      drag.maxDown = Math.max(drag.maxDown, dy);
+      drag.maxUp = Math.max(drag.maxUp, -dy);
+      const down = dy > 0 && !!onSwipeDownRef.current;
+      const up = dy < 0 && !!onSwipeUpRef.current;
+      if (down || up) e.preventDefault();                // the sheet moves, not the page
+      el.style.transform = `translateY(${down ? dy : up ? Math.max(dy / PULL_DIVISOR, -PULL_CAP) : 0}px)`;
     };
     const onEnd = () => {
       if (!drag) return;
-      const { dy, v, maxDy } = drag;
+      const { dy, v, maxDown, maxUp } = drag;
       drag = null;
+      const home = () => {
+        el.style.transition = 'transform 260ms cubic-bezier(0.2, 0.9, 0.3, 1.1)';
+        el.style.transform = 'translateY(0)';
+      };
+      // Changing your mind wins, in both directions: coming back REVERSE_PX from the furthest
+      // point of the drag, or letting go with momentum against it, cancels. A twitch of a few
+      // pixels doesn't count as reversing.
+      if (dy < 0 && onSwipeUpRef.current) {
+        const reversed = (maxUp + dy) >= REVERSE_PX || v > 0.3;
+        home();                                          // the sheet always returns; the expand
+        if (!reversed && (-dy > PULL_COMMIT_PX || (v < -0.6 && -dy > 20))) onSwipeUpRef.current();
+        return;
+      }
+      if (!onSwipeDownRef.current) { home(); return; }
       const h = el.offsetHeight || 1;
-      // Changing your mind wins. If the finger came back UP from its lowest point by 20px,
-      // or let go with upward momentum, the sheet snaps home and stays open — no matter how
-      // far down it had been. A twitch of a few pixels doesn't count as reversing.
-      const reversed = (maxDy - dy) >= 20 || v < -0.3;
+      const reversed = (maxDown - dy) >= REVERSE_PX || v < -0.3;
       const commit = !reversed && (dy > h * 0.28 || (v > 0.6 && dy > 24));
       if (commit) {
         leaving = true;
@@ -162,8 +194,7 @@ export function SheetShell({ onClose, onSwipeDown, handle = false, floor = 1 / 3
         el.addEventListener('transitionend', finish, { once: true });
         window.setTimeout(finish, 260);
       } else {
-        el.style.transition = 'transform 260ms cubic-bezier(0.2, 0.9, 0.3, 1.1)';
-        el.style.transform = 'translateY(0)';
+        home();
       }
     };
     el.addEventListener('touchstart', onStart, { passive: true });
@@ -604,7 +635,6 @@ export function ComposeSheet({ listSequence, projects, clients, people, currentU
             onClick={desktop ? (e) => { try { (e.currentTarget as HTMLInputElement & { showPicker?: () => void }).showPicker?.(); } catch { /* not supported: the field still takes typed dates */ } } : undefined}
             className="absolute inset-0 w-full h-full opacity-0 appearance-none cursor-pointer"
           />
-          <Ripple />
         </span>
       )}
     </PanelSection>
@@ -745,7 +775,6 @@ export function ComposeSheet({ listSequence, projects, clients, people, currentU
           className={`h-[38px] min-w-[168px] px-[24px] rounded-full text-[14px] font-['Univers_BQ:55_Regular',sans-serif] transition-colors ${primaryEnabled ? 'bg-[var(--app-accent)] text-white' : 'bg-[#2b2a27] text-[#5e5e5e]'}`}
         >
           {primaryLabel}
-          {!desktop && <Ripple color="rgba(255, 255, 255, 0.18)" />}
         </button>
       </div>
     </SheetShell>
