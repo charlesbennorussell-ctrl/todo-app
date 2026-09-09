@@ -53,7 +53,7 @@ import {
   buildSubGroupsShared, flatGroup, milestoneBelongsTo,
 } from './App';
 import { PANES, SheetShell, CHIP_TRACK, ComposeSheet, useAddClient, useAddProject } from './ComposeSheet';
-import { Capsule, CapsuleTrack, Ripple } from './Capsules';
+import { Capsule, CapsuleKnob, CapsuleTrack, Ripple } from './Capsules';
 
 // ── Shared module state ───────────────────────────────────────────────────────
 
@@ -924,12 +924,11 @@ export default function MobileApp() {
         <div className="shrink-0 flex items-center justify-center pt-[56px] pb-[28px]">
           {/* Track is the same near-black as the bottom bar (#151412) so the switcher reads as
               chrome rather than as content. */}
-          {/* The knob is the page background colour sitting on the near-black track — one knob
-              for every day, no purple wash and no per-day special case. It is the shared
-              engine's (src/Capsules.tsx): quintic ease in and out, the trailing edge a beat
-              behind the leading one, so it stretches toward the day you tapped and gathers
-              itself when it lands. Each tab is still a drop target. */}
-          <CapsuleTrack active={String(pane)} feel="quintic" knob="var(--app-bg)" className="inline-flex items-center rounded-full bg-black p-[3px] w-[calc(100%-36px)] max-w-[340px]">
+          {/* The knob is the page background colour sitting on the near-black track — no purple
+              wash and no per-day special case. It is the shared one (src/Capsules.tsx): it does
+              not slide; the old knob fades and shrinks away and a new one scales and fades in
+              under the day you tapped, quintic in and out. Each tab is still a drop target. */}
+          <CapsuleTrack feel="quintic" className="inline-flex items-center rounded-full bg-black p-[3px] w-[calc(100%-36px)] max-w-[340px]">
             {PANES.map((p, i) => <DayTab key={p.section} idx={i} label={p.label} active={pane === i} dragging={!!activeTask} onTap={() => setPane(i)} />)}
           </CapsuleTrack>
         </div>
@@ -1285,15 +1284,14 @@ function DiagPanel({ onClose }: { onClose: () => void }) {
 }
 
 // One segment of the day switcher: tap target + drop target ("drop a card on Tomorrow to move
-// it there"). The active pill is the shared sliding knob behind these, so a segment paints no
-// background of its own — only its label colour changes. z-10 keeps the labels above the knob.
+// it there"). The active pill is the shared knob (CapsuleKnob) inside the segment, so a segment
+// paints no background of its own — only its label colour changes.
 function DayTab({ idx, label, active, dragging, onTap }: { idx: number; label: string; active: boolean; dragging: boolean; onTap: () => void }) {
   const { setNodeRef, isOver } = useDroppable({ id: `mtab:${idx}` });
   return (
     <button
       ref={setNodeRef}
       type="button"
-      data-knob-item={String(idx)}
       onClick={onTap}
       className={`relative z-10 flex-1 py-[8px] rounded-full text-center transition-colors duration-300 font-['Univers_BQ:55_Regular',sans-serif] text-[14px] ${
         // Mid-drag the segments read as landing zones: the one under the finger goes full
@@ -1307,6 +1305,7 @@ function DayTab({ idx, label, active, dragging, onTap }: { idx: number; label: s
       }`}
       style={isOver && dragging ? { boxShadow: 'inset 0 0 0 1.5px var(--app-accent)', borderRadius: 9999 } : undefined}
     >
+      <CapsuleKnob active={active} feel="quintic" color="var(--app-bg)" />
       {label}
       <Ripple />
     </button>
@@ -1402,12 +1401,12 @@ function TaskSheet({ task, projects, clients, isos, anchor, autoFocusTitle, conv
       <div {...pullHandlers} className="mt-auto">
       {/* Same control as the day switcher and the creator panel: capsules on a dark track. */}
       <div className="pb-[16px]">
-        <CapsuleTrack active={String(currentIdx)} feel="quintic" className={CHIP_TRACK} attrs={{ 'data-chip-track': '' }}>
+        <CapsuleTrack feel="quintic" className={CHIP_TRACK} attrs={{ 'data-chip-track': '' }}>
           {PANES.map((p, i) => (
-            // Moving to another day: the task moves at once, the knob slides there, and the
-            // sheet leaves once the knob has landed — the slide IS the confirmation. Tapping
+            // Moving to another day: the task moves at once, the knob appears under the new day,
+            // and the sheet leaves once it has — that appearance IS the confirmation. Tapping
             // the day it is already on just closes.
-            <Capsule key={p.section} id={String(i)} active={i === currentIdx} onClick={() => { if (i === currentIdx) { onClose(); return; } onMove(i); window.setTimeout(onClose, 420); }}>
+            <Capsule key={p.section} active={i === currentIdx} onClick={() => { if (i === currentIdx) { onClose(); return; } onMove(i); window.setTimeout(onClose, 420); }}>
               {p.label}
             </Capsule>
           ))}

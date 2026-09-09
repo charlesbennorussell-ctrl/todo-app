@@ -4454,12 +4454,13 @@ function CapsuleToggle<T extends string | number>({ options, value, onChange }: 
   value: T;
   onChange: (v: T) => void;
 }) {
-  // The knob is the shared engine's (src/Capsules.tsx): it slides on a spring, leading edge
-  // first, and the label dips under the pointer.
+  // The knob is the shared one (src/Capsules.tsx): it does not slide — the old one fades and
+  // shrinks away, the new one springs in under the chosen option — and the label dips under
+  // the pointer.
   return (
-    <CapsuleTrack active={String(value)} feel="spring" knob="var(--app-bg)" className="inline-flex flex-row items-center gap-[3px] rounded-full bg-black/30 p-[3px]">
+    <CapsuleTrack feel="spring" knob="var(--app-bg)" className="inline-flex flex-row items-center gap-[3px] rounded-full bg-black/30 p-[3px]">
       {options.map((o) => (
-        <Capsule key={String(o.v)} id={String(o.v)} size="sm" active={o.v === value} onClick={() => onChange(o.v)}>{o.label}</Capsule>
+        <Capsule key={String(o.v)} size="sm" active={o.v === value} onClick={() => onChange(o.v)}>{o.label}</Capsule>
       ))}
     </CapsuleTrack>
   );
@@ -7794,27 +7795,27 @@ function TaskQuickEdit({
         {/* Type: Task / Milestone — uses the purple variant since type is the most categorical choice.
             mt-[37px] adds a SECOND spacer-row below the task preview for extra breathing room. */}
         <div className="px-[31px] flex flex-row items-center mt-[37px]">
-          <CapsuleTrack active={isMilestone ? 'milestone' : 'task'} feel="spring" knob={QE_BG} className={CHIP_TRACK}>
-            <Capsule id="task" active={!isMilestone} onClick={() => apply({ type: 'todo' })}>Task</Capsule>
-            <Capsule id="milestone" active={isMilestone} onClick={() => apply({ type: 'scheduled' })}>Milestone</Capsule>
+          <CapsuleTrack feel="spring" knob={QE_BG} className={CHIP_TRACK}>
+            <Capsule active={!isMilestone} onClick={() => apply({ type: 'todo' })}>Task</Capsule>
+            <Capsule active={isMilestone} onClick={() => apply({ type: 'scheduled' })}>Milestone</Capsule>
           </CapsuleTrack>
         </div>
 
         {/* Section: Today / Tomorrow / Next — pinpoints where this task lands in its column. */}
         <div className="px-[31px] flex flex-row items-center">
-          <CapsuleTrack active={task.section} feel="spring" knob={QE_BG} className={CHIP_TRACK}>
-            <Capsule id="today" active={task.section === 'today'} onClick={() => apply({ section: 'today' })}>Today</Capsule>
-            <Capsule id="tomorrow" active={task.section === 'tomorrow'} onClick={() => apply({ section: 'tomorrow' })}>Tomorrow</Capsule>
-            <Capsule id="next" active={task.section === 'next'} onClick={() => apply({ section: 'next' })}>Next</Capsule>
-            <Capsule id="hold" active={task.section === 'hold'} onClick={() => apply({ section: 'hold' })}>Hold</Capsule>
+          <CapsuleTrack feel="spring" knob={QE_BG} className={CHIP_TRACK}>
+            <Capsule active={task.section === 'today'} onClick={() => apply({ section: 'today' })}>Today</Capsule>
+            <Capsule active={task.section === 'tomorrow'} onClick={() => apply({ section: 'tomorrow' })}>Tomorrow</Capsule>
+            <Capsule active={task.section === 'next'} onClick={() => apply({ section: 'next' })}>Next</Capsule>
+            <Capsule active={task.section === 'hold'} onClick={() => apply({ section: 'hold' })}>Hold</Capsule>
           </CapsuleTrack>
         </div>
 
         {/* List: Work / Projects / Admin / Personal */}
         <div className="px-[31px] flex flex-row items-center">
-          <CapsuleTrack active={task.list} feel="spring" knob={QE_BG} className={CHIP_TRACK}>
+          <CapsuleTrack feel="spring" knob={QE_BG} className={CHIP_TRACK}>
             {LISTS.map((l) => (
-              <Capsule key={l} id={l} active={task.list === l} onClick={() => apply({ list: l })}>{LIST_TITLES[l]}</Capsule>
+              <Capsule key={l} active={task.list === l} onClick={() => apply({ list: l })}>{LIST_TITLES[l]}</Capsule>
             ))}
           </CapsuleTrack>
         </div>
@@ -7872,12 +7873,12 @@ function TaskQuickEdit({
             other date (or range) picked in the calendar below. One knob, one selection; the
             date and the clear control no longer sit between the presets. */}
         <div className="px-[31px] flex flex-row items-center">
-          <CapsuleTrack active={dateKey} feel="spring" knob={QE_BG} className={CHIP_TRACK}>
-            <Capsule id="none" active={dateKey === 'none'} onClick={() => apply({ deadline: undefined, startDate: undefined })}>None</Capsule>
-            <Capsule id="today" active={dateKey === 'today'} onClick={() => apply({ deadline: todayIso, startDate: undefined })}>Today</Capsule>
-            <Capsule id="tomorrow" active={dateKey === 'tomorrow'} onClick={() => apply({ deadline: tomorrowIso, startDate: undefined })}>Tomorrow</Capsule>
-            <Capsule id="week" active={dateKey === 'week'} onClick={() => apply({ deadline: nextWeekIso, startDate: undefined })}>+1 wk</Capsule>
-            {dateKey === 'custom' && <Capsule id="custom" active>{dateLabel}</Capsule>}
+          <CapsuleTrack feel="spring" knob={QE_BG} className={CHIP_TRACK}>
+            <Capsule active={dateKey === 'none'} onClick={() => apply({ deadline: undefined, startDate: undefined })}>None</Capsule>
+            <Capsule active={dateKey === 'today'} onClick={() => apply({ deadline: todayIso, startDate: undefined })}>Today</Capsule>
+            <Capsule active={dateKey === 'tomorrow'} onClick={() => apply({ deadline: tomorrowIso, startDate: undefined })}>Tomorrow</Capsule>
+            <Capsule active={dateKey === 'week'} onClick={() => apply({ deadline: nextWeekIso, startDate: undefined })}>+1 wk</Capsule>
+            {dateKey === 'custom' && <Capsule active>{dateLabel}</Capsule>}
           </CapsuleTrack>
         </div>
 

@@ -56,8 +56,8 @@ function Harness() {
       <p style={{ color: '#656464' }}>harness · {surface}</p>
       <Probe />
       <div style={{ marginTop: 24 }} data-testid="track">
-        <CapsuleTrack active={v} feel={feel} knob="var(--app-bg)" className="inline-flex flex-row flex-wrap items-center gap-[4px] rounded-[21px] bg-black p-[3px] max-w-full">
-          {['today', 'tomorrow', 'next', 'hold'].map((k) => <Capsule key={k} id={k} active={v === k} onClick={() => setV(k)}>{k}</Capsule>)}
+        <CapsuleTrack feel={feel} knob="var(--app-bg)" className="inline-flex flex-row flex-wrap items-center gap-[4px] rounded-[21px] bg-black p-[3px] max-w-full">
+          {['today', 'tomorrow', 'next', 'hold'].map((k) => <Capsule key={k} active={v === k} onClick={() => setV(k)}>{k}</Capsule>)}
         </CapsuleTrack>
       </div>
       <button type="button" onClick={() => setOpen(true)} style={{ marginTop: 24, color: '#a8a8a8' }}>open sheet</button>

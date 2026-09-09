@@ -2,13 +2,13 @@
 // because "the phone version of New Task" is the version. One panel, one behaviour on both
 // surfaces: the same chips, the same Personal-hides-Client rule, the same save-on-dismiss.
 // Imports nothing from App.tsx (App imports THIS), so there is no cycle.
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useMutation } from '@liveblocks/react/suspense';
 import { motion } from 'motion/react';
 import { ChevronLeft, ChevronRight, Plus, X } from 'lucide-react';
 import type { Task, Project, Client, Person, ListId, SectionId } from './data';
 import { LIST_TITLES, LISTS, addDaysToDate, dateToISO } from './data';
-import { Capsule, CapsuleTrack, Ripple, type Feel } from './Capsules';
+import { Capsule, CapsuleKnob, CapsuleTrack, Ripple, type Feel } from './Capsules';
 
 // The four sections, in the order every switcher shows them. Hold is parked, not a day: its
 // pane is sourced straight from the section and its drop token is 'HOLD@' rather than a date.
@@ -305,9 +305,7 @@ return useMutation(({ storage }, p: { name: string; clientId?: string; list?: Li
 }
 
 
-export function PanelSection({ label, open, onToggle, onCreate, createPlaceholder, active, feel = 'quintic', children }: {
-  /** data-knob-item of the selected capsule (single-select). Omit for a multi-select section. */
-  active?: string | null;
+export function PanelSection({ label, open, onToggle, onCreate, createPlaceholder, feel = 'quintic', children }: {
   feel?: Feel;
   label: string;
   open?: boolean;
@@ -357,21 +355,19 @@ export function PanelSection({ label, open, onToggle, onCreate, createPlaceholde
           <button type="button" onClick={commit} className={CHIP_BASE + ' bg-[#232220] text-[var(--app-accent)]'}>Add</button>
         </div>
       )}
-      <CapsuleTrack active={active} feel={feel} knob={SHEET_BG} className={CHIP_TRACK} attrs={{ 'data-chip-track': '' }}>{children}</CapsuleTrack>
+      <CapsuleTrack feel={feel} knob={SHEET_BG} className={CHIP_TRACK} attrs={{ 'data-chip-track': '' }}>{children}</CapsuleTrack>
     </div>
   );
 }
 
 // The desktop's deadline picker: a month grid, always open. The selected day is an accent disc
-// that SLIDES between days (one shared-layout element on a spring) instead of blinking from one
-// cell to the next; clicking the selected day clears the deadline. Six rows always, so the grid
-// never changes height between months.
+// that scales and fades in under the day (the same knob as the capsules'); clicking the selected
+// day clears the deadline. Six rows always, so the grid never changes height between months.
 const DOW = ['S', 'M', 'T', 'W', 'T', 'F', 'S'];
 const CAL_SPRING = { type: 'spring' as const, stiffness: 520, damping: 34, mass: 0.9 };
 function isoToDate(iso: string): Date { const [y, m, d] = iso.split('-').map(Number); return new Date(y, m - 1, d); }
 
 export function MonthCalendar({ value, onChange, todayIso }: { value: string; onChange: (iso: string) => void; todayIso: string }) {
-  const uid = useId();
   const [month, setMonth] = useState(() => { const d = isoToDate(value || todayIso); return new Date(d.getFullYear(), d.getMonth(), 1); });
   // Follow the value into its month when it is set from outside (a capsule).
   useEffect(() => {
@@ -410,7 +406,7 @@ export function MonthCalendar({ value, onChange, todayIso }: { value: string; on
                 className={`relative h-[32px] w-[32px] rounded-full flex items-center justify-center text-[13px] transition-colors ${selected ? 'text-white' : today ? 'text-[var(--app-accent)]' : c.inMonth ? 'text-white hover:bg-white/10' : 'text-[#4a4a4a] hover:bg-white/[0.04]'}`}
                 style={{ isolation: 'isolate', transitionDuration: '240ms' }}
               >
-                {selected && <motion.span layoutId={`cal-${uid}`} aria-hidden className="absolute inset-0 rounded-full bg-[var(--app-accent)]" style={{ zIndex: -1 }} transition={CAL_SPRING} />}
+                <CapsuleKnob active={selected} feel="spring" color="var(--app-accent)" />
                 {c.day}
               </motion.button>
             </div>
@@ -558,24 +554,24 @@ export function ComposeSheet({ listSequence, projects, clients, people, currentU
   const weekIso = dateToISO(addDaysToDate(anchor, 7));
   const deadlineKey = !deadline ? 'none' : deadline === isos[0] ? 'today' : deadline === weekIso ? 'week' : 'custom';
   const deadlineSection = (
-    <PanelSection label="Deadline" active={deadlineKey} feel={feel}>
-      <Capsule id="none" active={deadlineKey === 'none'} onClick={() => setDeadline('')}>None</Capsule>
-      <Capsule id="today" active={deadlineKey === 'today'} onClick={() => setDeadline(isos[0])}>Today</Capsule>
-      <Capsule id="week" active={deadlineKey === 'week'} onClick={() => setDeadline(weekIso)}>+1 wk</Capsule>
+    <PanelSection label="Deadline" feel={feel}>
+      <Capsule active={deadlineKey === 'none'} onClick={() => setDeadline('')}>None</Capsule>
+      <Capsule active={deadlineKey === 'today'} onClick={() => setDeadline(isos[0])}>Today</Capsule>
+      <Capsule active={deadlineKey === 'week'} onClick={() => setDeadline(weekIso)}>+1 wk</Capsule>
       {desktop ? (
         // The calendar beside these is the picker; this capsule only NAMES a day chosen there.
-        deadlineKey === 'custom' && <Capsule id="custom" active>{chipDate(deadline)}</Capsule>
+        deadlineKey === 'custom' && <Capsule active>{chipDate(deadline)}</Capsule>
       ) : (
         // The phone's picker is the native one. The capsule is sized by its LABEL — "Date" until a
         // day outside the presets is picked, then that day — and the date field itself is an
         // invisible layer over it: type=date brings its own intrinsic width and chrome on every
         // engine, and letting it size the capsule put it on a line of its own. A tap anywhere on
-        // the capsule opens the picker. The knob slides under it like under any other capsule.
+        // the capsule opens the picker. Its knob appears under it like under any other capsule.
         <span
-          data-knob-item="custom"
-          className={`${CHIP_BASE} relative z-10 bg-transparent ${deadlineKey === 'custom' ? 'text-white' : 'text-[#656464]'}`}
+          className={`${CHIP_BASE} relative bg-transparent ${deadlineKey === 'custom' ? 'text-white' : 'text-[#656464]'}`}
           style={{ isolation: 'isolate', transition: 'color 240ms cubic-bezier(0.2, 0, 0, 1)', WebkitTapHighlightColor: 'transparent' }}
         >
+          <CapsuleKnob active={deadlineKey === 'custom'} feel={feel} color={SHEET_BG} />
           {deadlineKey === 'custom' ? chipDate(deadline) : 'Date'}
           <input
             type="date"
@@ -646,15 +642,15 @@ export function ComposeSheet({ listSequence, projects, clients, people, currentU
         {/* Desktop: two columns — the fields, and the deadline with its calendar. Phone: one. */}
         <div className={desktop ? 'grid gap-x-[32px]' : ''} style={desktop ? { gridTemplateColumns: 'minmax(0, 1fr) 296px' } : undefined}>
         <div className="min-w-0">
-        <PanelSection label="When" active={section} feel={feel}>
+        <PanelSection label="When" feel={feel}>
           {PANES.map((p) => (
-            <Capsule key={p.section} id={p.section} active={p.section === section} onClick={() => setSection(p.section)}>{p.label}</Capsule>
+            <Capsule key={p.section} active={p.section === section} onClick={() => setSection(p.section)}>{p.label}</Capsule>
           ))}
         </PanelSection>
 
-        <PanelSection label="Category" active={listId} feel={feel}>
+        <PanelSection label="Category" feel={feel}>
           {listSequence.map((l) => (
-            <Capsule key={l} id={l} active={l === listId} onClick={() => setListId(l)}>{LIST_TITLES[l]}</Capsule>
+            <Capsule key={l} active={l === listId} onClick={() => setListId(l)}>{LIST_TITLES[l]}</Capsule>
           ))}
         </PanelSection>
 
@@ -665,12 +661,11 @@ export function ComposeSheet({ listSequence, projects, clients, people, currentU
           onToggle={() => toggleLabel('client')}
           onCreate={(n) => setClientId(onAddClient(n))}
           createPlaceholder="New client name"
-          active={clientId || 'none'}
           feel={feel}
         >
-          <Capsule id="none" active={clientId === ''} onClick={() => chooseClient('')}>None</Capsule>
+          <Capsule active={clientId === ''} onClick={() => chooseClient('')}>None</Capsule>
           {visibleClients.map((c) => (
-            <Capsule key={c.id} id={c.id} active={clientId === c.id} onClick={() => chooseClient(c.id)}>{c.short || c.name}</Capsule>
+            <Capsule key={c.id} active={clientId === c.id} onClick={() => chooseClient(c.id)}>{c.short || c.name}</Capsule>
           ))}
         </PanelSection>
         )}
@@ -681,12 +676,11 @@ export function ComposeSheet({ listSequence, projects, clients, people, currentU
           onToggle={() => toggleLabel('project')}
           onCreate={(n) => setProjectId(onAddProject({ name: n, clientId: clientId || undefined, list: listId }))}
           createPlaceholder="New project name"
-          active={projectId || 'none'}
           feel={feel}
         >
-          <Capsule id="none" active={projectId === ''} onClick={() => setProjectId('')}>None</Capsule>
+          <Capsule active={projectId === ''} onClick={() => setProjectId('')}>None</Capsule>
           {visibleProjects.map((p) => (
-            <Capsule key={p.id} id={p.id} active={projectId === p.id} onClick={() => chooseProject(p.id)}>{p.name}</Capsule>
+            <Capsule key={p.id} active={projectId === p.id} onClick={() => chooseProject(p.id)}>{p.name}</Capsule>
           ))}
         </PanelSection>
 
@@ -698,7 +692,6 @@ export function ComposeSheet({ listSequence, projects, clients, people, currentU
             return (
               <Capsule
                 key={pr.id}
-                id={pr.id}
                 active={on}
                 onClick={() => setAssignees((a) => (on ? a.filter((x) => x !== pr.short) : [...a, pr.short]))}
               >{pr.name}</Capsule>
@@ -706,9 +699,9 @@ export function ComposeSheet({ listSequence, projects, clients, people, currentU
           })}
         </PanelSection>
 
-        <PanelSection label="Type" active={milestone ? 'milestone' : 'task'} feel={feel}>
-          <Capsule id="task" active={!milestone} onClick={() => setMilestone(false)}>Task</Capsule>
-          <Capsule id="milestone" active={milestone} onClick={() => setMilestone(true)}>Milestone</Capsule>
+        <PanelSection label="Type" feel={feel}>
+          <Capsule active={!milestone} onClick={() => setMilestone(false)}>Task</Capsule>
+          <Capsule active={milestone} onClick={() => setMilestone(true)}>Milestone</Capsule>
         </PanelSection>
         </div>
         {desktop && (
