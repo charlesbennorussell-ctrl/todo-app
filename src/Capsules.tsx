@@ -31,6 +31,13 @@ const ENTER: Record<Feel, object> = {
   spring: { scale: { type: 'spring', stiffness: 520, damping: 30, mass: 0.8, delay: 0.07 }, opacity: { duration: 0.18, ease: [0.2, 0, 0, 1], delay: 0.07 } },
   quintic: { duration: 0.36, ease: QUINT, delay: 0.1 },
 };
+// Phone only: the knob's HALO. A copy of the knob in the accent colour sits behind it and, as
+// the knob locks into place (0.33s in, the quintic is ~93% grown), continues that motion
+// outward — 1 → 1.38 of the capsule, its own shape — and dissipates. Behind the knob, so only
+// the band beyond the capsule ever shows; it belongs to the arrival, not to the touch.
+const HALO = { duration: 0.42, ease: [0.2, 0, 0, 1], delay: 0.33 };
+const HALO_SCALE = 1.38;
+const HALO_OPACITY = 0.5;
 const SPRING_PRESS = { type: 'spring' as const, stiffness: 700, damping: 34, mass: 0.6 };
 
 function reducedMotion(): boolean {
@@ -66,6 +73,7 @@ export function CapsuleTrack({ feel = 'spring', knob = '#232220', className = ''
  */
 export function CapsuleKnob({ active, feel = 'spring', color = '#232220' }: { active: boolean; feel?: Feel; color?: string }) {
   const instant = reducedMotion();
+  const halo = feel === 'quintic' && !instant;
   return (
     <AnimatePresence initial={false}>
       {active && (
@@ -77,6 +85,17 @@ export function CapsuleKnob({ active, feel = 'spring', color = '#232220' }: { ac
           initial={instant ? false : { opacity: 0, scale: 0.7 }}
           animate={{ opacity: 1, scale: 1, transition: instant ? { duration: 0 } : ENTER[feel] }}
           exit={{ opacity: 0, scale: 0.85, transition: instant ? { duration: 0 } : EXIT[feel] }}
+        />
+      )}
+      {active && halo && (
+        <motion.span
+          key="halo"
+          aria-hidden
+          className="absolute inset-0 rounded-full pointer-events-none"
+          style={{ backgroundColor: 'var(--app-accent)', zIndex: -2 }}
+          initial={{ opacity: 0, scale: 1 }}
+          animate={{ opacity: [HALO_OPACITY, 0], scale: [1, HALO_SCALE], transition: HALO }}
+          exit={{ opacity: 0, transition: { duration: 0.1 } }}
         />
       )}
     </AnimatePresence>
@@ -101,7 +120,8 @@ export function Capsule({ active, onClick, size = 'md', className = '', style, d
   const ctx = useContext(TrackCtx);
   const feel = ctx?.feel ?? 'spring';
   const knob = ctx?.knob ?? '#232220';
-  const dims = size === 'sm' ? 'h-[26px] px-[12px]' : 'h-[36px] px-[14px]';
+  // 16 / 14 of side padding: the 14 / 12 the sheets shipped with read as cramped.
+  const dims = size === 'sm' ? 'h-[26px] px-[14px]' : 'h-[36px] px-[16px]';
   const tone = active ? 'text-white' : feel === 'spring' ? 'text-[#656464] hover:text-[#a8a8a8]' : 'text-[#656464]';
   return (
     <button
@@ -120,7 +140,8 @@ export function Capsule({ active, onClick, size = 'md', className = '', style, d
       ) : (
         <span className="relative">{children}</span>
       )}
-      {feel === 'quintic' && <Ripple />}
+      {/* The press ripple only: the halo is the knob's, and follows its arrival. */}
+      {feel === 'quintic' && <Ripple halo={false} />}
     </button>
   );
 }

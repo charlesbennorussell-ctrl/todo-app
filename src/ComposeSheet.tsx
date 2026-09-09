@@ -271,7 +271,7 @@ export const SHEET_BG = '#232220';
 // Track hugs its capsules (inline-flex) instead of stretching edge to edge — two People chips
 // get a two-chip-wide track, not a full-width bar. max-w-full lets long lists still wrap.
 export const CHIP_TRACK = 'inline-flex flex-row flex-wrap items-center gap-[4px] rounded-[21px] bg-black p-[3px] max-w-full';
-export const CHIP_BASE = "h-[36px] inline-flex items-center px-[14px] rounded-full text-[13px] font-['Univers_BQ:55_Regular',sans-serif] transition-colors";
+export const CHIP_BASE = "h-[36px] inline-flex items-center px-[16px] rounded-full text-[13px] font-['Univers_BQ:55_Regular',sans-serif] transition-colors";
 
 // "Sat 12 Sep" — the absolute date, for a capsule that names a picked day.
 function chipDate(iso: string): string {

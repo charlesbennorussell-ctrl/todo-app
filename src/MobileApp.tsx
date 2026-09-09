@@ -1307,7 +1307,7 @@ function DayTab({ idx, label, active, dragging, onTap }: { idx: number; label: s
     >
       <CapsuleKnob active={active} feel="quintic" color="var(--app-bg)" />
       {label}
-      <Ripple />
+      <Ripple halo={false} />
     </button>
   );
 }
