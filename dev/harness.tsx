@@ -77,7 +77,7 @@ function Harness() {
           onAddClient={(n) => { console.log('client', n); return 'c-new'; }}
           onAddProject={(p) => { console.log('project', p); return 'p-new'; }}
           onClose={() => setOpen(false)}
-          maxWidth={surface === 'desktop' ? 760 : undefined}
+          maxWidth={surface === 'desktop' ? 560 : undefined}
           surface={surface}
         />
       )}

@@ -385,7 +385,7 @@ export function MonthCalendar({ value, onChange, todayIso }: { value: string; on
   const label = month.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
   const step = (n: number) => setMonth(new Date(month.getFullYear(), month.getMonth() + n, 1));
   return (
-    <div className="flex flex-col gap-[8px] select-none">
+    <div className="flex flex-col gap-[8px] select-none max-w-[300px]">
       <div className="flex flex-row items-center justify-between px-[6px]">
         <button type="button" aria-label="Previous month" onClick={() => step(-1)} className="text-[#656464] hover:text-white transition-colors p-1 -m-1"><ChevronLeft size={14} /></button>
         <span className="text-[13px] text-[#a8a8a8]">{label}</span>
@@ -446,13 +446,34 @@ export function ComposeSheet({ listSequence, projects, clients, people, currentU
   /** Desktop only: cap and centre the sheet. */
   maxWidth?: number;
   /** Which surface is showing this. Desktop: a centred floating panel, spring-driven knobs,
-   *  and the month calendar exposed beside the fields. Phone: a bottom sheet, quintic knobs,
-   *  Material ripples. */
+   *  and the month calendar exposed under the deadline row when the window is tall enough.
+   *  Phone: a bottom sheet, quintic knobs, Material ripples. */
   surface?: 'phone' | 'desktop';
 }) {
   const isEdit = !!editingTask;
   const desktop = surface === 'desktop';
   const feel: Feel = desktop ? 'spring' : 'quintic';
+  // DESKTOP, ONE COLUMN. The month calendar is exposed under the deadline capsules when the
+  // window has the height for it. When it doesn't — the body would have to scroll — the row
+  // falls back to the phone's language: the Date capsule and the native pop-up picker.
+  // Measured, not guessed: after every render with the calendar open, an overflowing body flips
+  // to the compact row in a layout effect (before paint, so nothing flashes); a window resize
+  // tries the calendar again the same way.
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+  const [crushed, setCrushed] = useState(false);
+  const [, setRetry] = useState(0);
+  const calendarOpen = desktop && !crushed;
+  useLayoutEffect(() => {
+    if (!calendarOpen) return;
+    const body = bodyRef.current;
+    if (body && body.scrollHeight > body.clientHeight + 2) setCrushed(true);
+  });
+  useEffect(() => {
+    if (!desktop) return;
+    const retry = () => { setCrushed(false); setRetry((n) => n + 1); };
+    window.addEventListener('resize', retry);
+    return () => window.removeEventListener('resize', retry);
+  }, [desktop]);
   const seedProject = editingTask?.projectId ? projects.find((p) => p.id === editingTask.projectId) : undefined;
   const [title, setTitle] = useState(editingTask?.title ?? '');
   const [listId, setListId] = useState<ListId>(() => {
@@ -558,15 +579,17 @@ export function ComposeSheet({ listSequence, projects, clients, people, currentU
       <Capsule active={deadlineKey === 'none'} onClick={() => setDeadline('')}>None</Capsule>
       <Capsule active={deadlineKey === 'today'} onClick={() => setDeadline(isos[0])}>Today</Capsule>
       <Capsule active={deadlineKey === 'week'} onClick={() => setDeadline(weekIso)}>+1 wk</Capsule>
-      {desktop ? (
-        // The calendar beside these is the picker; this capsule only NAMES a day chosen there.
+      {calendarOpen ? (
+        // The calendar below these is the picker; this capsule only NAMES a day chosen there.
         deadlineKey === 'custom' && <Capsule active>{chipDate(deadline)}</Capsule>
       ) : (
-        // The phone's picker is the native one. The capsule is sized by its LABEL — "Date" until a
-        // day outside the presets is picked, then that day — and the date field itself is an
-        // invisible layer over it: type=date brings its own intrinsic width and chrome on every
-        // engine, and letting it size the capsule put it on a line of its own. A tap anywhere on
-        // the capsule opens the picker. Its knob appears under it like under any other capsule.
+        // The phone's picker is the native one — and the desktop's too when the window is too
+        // short for the calendar. The capsule is sized by its LABEL — "Date" until a day outside
+        // the presets is picked, then that day — and the date field itself is an invisible layer
+        // over it: type=date brings its own intrinsic width and chrome on every engine, and
+        // letting it size the capsule put it on a line of its own. A tap anywhere on the capsule
+        // opens the picker (on the desktop that takes showPicker(): a click only focuses a date
+        // field there). Its knob appears under it like under any other capsule.
         <span
           className={`${CHIP_BASE} relative bg-transparent ${deadlineKey === 'custom' ? 'text-white' : 'text-[#656464]'}`}
           style={{ isolation: 'isolate', transition: 'color 240ms cubic-bezier(0.2, 0, 0, 1)', WebkitTapHighlightColor: 'transparent' }}
@@ -578,6 +601,7 @@ export function ComposeSheet({ listSequence, projects, clients, people, currentU
             aria-label="Deadline"
             value={deadline}
             onChange={(e) => setDeadline(e.target.value)}
+            onClick={desktop ? (e) => { try { (e.currentTarget as HTMLInputElement & { showPicker?: () => void }).showPicker?.(); } catch { /* not supported: the field still takes typed dates */ } } : undefined}
             className="absolute inset-0 w-full h-full opacity-0 appearance-none cursor-pointer"
           />
           <Ripple />
@@ -638,10 +662,7 @@ export function ComposeSheet({ listSequence, projects, clients, people, currentU
       {/* data-sheet-scroll: the pull-down gesture defers to this while it is scrolled.
           touch-action pan-y re-enables scrolling inside the overlay, which blocks all touch
           hand-off to the page beneath. */}
-      <div data-sheet-scroll className="flex-1 min-h-0 overflow-y-auto overscroll-contain" style={{ touchAction: 'pan-y' }}>
-        {/* Desktop: two columns — the fields, and the deadline with its calendar. Phone: one. */}
-        <div className={desktop ? 'grid gap-x-[32px]' : ''} style={desktop ? { gridTemplateColumns: 'minmax(0, 1fr) 296px' } : undefined}>
-        <div className="min-w-0">
+      <div ref={bodyRef} data-sheet-scroll className="flex-1 min-h-0 overflow-y-auto overscroll-contain" style={{ touchAction: 'pan-y' }}>
         <PanelSection label="When" feel={feel}>
           {PANES.map((p) => (
             <Capsule key={p.section} active={p.section === section} onClick={() => setSection(p.section)}>{p.label}</Capsule>
@@ -684,7 +705,14 @@ export function ComposeSheet({ listSequence, projects, clients, people, currentU
           ))}
         </PanelSection>
 
-        {!desktop && deadlineSection}
+        {deadlineSection}
+        {calendarOpen && (
+          // The desktop has the room: the calendar sits under the deadline capsules, always open,
+          // and is the picker for any day they don't name.
+          <div className="pb-[22px] -mt-[4px]">
+            <MonthCalendar value={deadline} onChange={setDeadline} todayIso={isos[0]} />
+          </div>
+        )}
 
         <PanelSection label="People" feel={feel}>
           {people.map((pr) => {
@@ -703,16 +731,6 @@ export function ComposeSheet({ listSequence, projects, clients, people, currentU
           <Capsule active={!milestone} onClick={() => setMilestone(false)}>Task</Capsule>
           <Capsule active={milestone} onClick={() => setMilestone(true)}>Milestone</Capsule>
         </PanelSection>
-        </div>
-        {desktop && (
-          // The desktop has the room: the calendar sits beside the fields, always open, and is
-          // the picker for any day the capsules above it don't name.
-          <div className="min-w-0">
-            {deadlineSection}
-            <MonthCalendar value={deadline} onChange={setDeadline} todayIso={isos[0]} />
-          </div>
-        )}
-        </div>
       </div>
 
       {/* Centred pill with a little air above and below — not a full-width bar, not a
@@ -727,7 +745,7 @@ export function ComposeSheet({ listSequence, projects, clients, people, currentU
           className={`h-[38px] min-w-[168px] px-[24px] rounded-full text-[14px] font-['Univers_BQ:55_Regular',sans-serif] transition-colors ${primaryEnabled ? 'bg-[var(--app-accent)] text-white' : 'bg-[#2b2a27] text-[#5e5e5e]'}`}
         >
           {primaryLabel}
-          {!desktop && <Ripple color="rgba(255, 255, 255, 0.18)" haloColor="rgba(255, 255, 255, 0.26)" />}
+          {!desktop && <Ripple color="rgba(255, 255, 255, 0.18)" />}
         </button>
       </div>
     </SheetShell>

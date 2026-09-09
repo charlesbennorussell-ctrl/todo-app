@@ -5,11 +5,11 @@
 // away and a new one scales and fades in under the new capsule, a beat later — a change of
 // state, not a journey. Two feels, chosen by surface:
 //
-//   'spring'  (desktop, mouse) — the new knob springs in with a hair of overshoot, and the label
-//                                 dips under the pointer while it is pressed.
-//   'quintic' (phone, touch)   — easeInOutQuint in and out. Plus Material's touch feedback: a
-//                                 bounded ripple growing from the touch point, and a halo the
-//                                 shape of the capsule that swells a little and is gone.
+//   'spring'  (desktop, mouse) — the new knob springs in from 0.7 with a hair of overshoot; the
+//                                 label dips under the pointer while pressed, and an idle label
+//                                 brightens on hover with a 300ms fade each way.
+//   'quintic' (phone, touch)   — subtle: in from 0.92, easeInOutQuint, plus Material's bounded
+//                                 press ripple growing from the touch point.
 //
 // Imports nothing from the app, so any file can use it without a cycle.
 import { createContext, useContext, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
@@ -19,25 +19,21 @@ export type Feel = 'spring' | 'quintic';
 
 // ─── Motion vocabulary ────────────────────────────────────────────────────────────────────
 export const QUINT: [number, number, number, number] = [0.83, 0, 0.17, 1];
+// Where the knob starts from and shrinks to. The phone's are close to 1: a very subtle move.
+const FROM_SCALE: Record<Feel, number> = { spring: 0.7, quintic: 0.92 };
+const TO_SCALE: Record<Feel, number> = { spring: 0.85, quintic: 0.95 };
 // The knob leaving: quick, shrinking a little as it goes.
 const EXIT: Record<Feel, object> = {
   spring: { duration: 0.15, ease: [0.4, 0, 1, 1] },
-  quintic: { duration: 0.2, ease: QUINT },
+  quintic: { duration: 0.16, ease: QUINT },
 };
 // The knob arriving: after the old one is mostly gone (the delay is about half the exit), so
 // the change reads as "gone, then here" rather than as two knobs at once. On the desktop the
 // scale rides a spring (ζ≈0.74 → a ~3% swell before it settles) while the opacity simply fades.
 const ENTER: Record<Feel, object> = {
   spring: { scale: { type: 'spring', stiffness: 520, damping: 30, mass: 0.8, delay: 0.07 }, opacity: { duration: 0.18, ease: [0.2, 0, 0, 1], delay: 0.07 } },
-  quintic: { duration: 0.36, ease: QUINT, delay: 0.1 },
+  quintic: { duration: 0.28, ease: QUINT, delay: 0.06 },
 };
-// Phone only: the knob's HALO. A copy of the knob in the accent colour sits behind it and, as
-// the knob locks into place (0.33s in, the quintic is ~93% grown), continues that motion
-// outward — 1 → 1.38 of the capsule, its own shape — and dissipates. Behind the knob, so only
-// the band beyond the capsule ever shows; it belongs to the arrival, not to the touch.
-const HALO = { duration: 0.42, ease: [0.2, 0, 0, 1], delay: 0.33 };
-const HALO_SCALE = 1.38;
-const HALO_OPACITY = 0.5;
 const SPRING_PRESS = { type: 'spring' as const, stiffness: 700, damping: 34, mass: 0.6 };
 
 function reducedMotion(): boolean {
@@ -73,7 +69,6 @@ export function CapsuleTrack({ feel = 'spring', knob = '#232220', className = ''
  */
 export function CapsuleKnob({ active, feel = 'spring', color = '#232220' }: { active: boolean; feel?: Feel; color?: string }) {
   const instant = reducedMotion();
-  const halo = feel === 'quintic' && !instant;
   return (
     <AnimatePresence initial={false}>
       {active && (
@@ -82,20 +77,9 @@ export function CapsuleKnob({ active, feel = 'spring', color = '#232220' }: { ac
           aria-hidden
           className="absolute inset-0 rounded-full pointer-events-none"
           style={{ backgroundColor: color, zIndex: -1 }}
-          initial={instant ? false : { opacity: 0, scale: 0.7 }}
+          initial={instant ? false : { opacity: 0, scale: FROM_SCALE[feel] }}
           animate={{ opacity: 1, scale: 1, transition: instant ? { duration: 0 } : ENTER[feel] }}
-          exit={{ opacity: 0, scale: 0.85, transition: instant ? { duration: 0 } : EXIT[feel] }}
-        />
-      )}
-      {active && halo && (
-        <motion.span
-          key="halo"
-          aria-hidden
-          className="absolute inset-0 rounded-full pointer-events-none"
-          style={{ backgroundColor: 'var(--app-accent)', zIndex: -2 }}
-          initial={{ opacity: 0, scale: 1 }}
-          animate={{ opacity: [HALO_OPACITY, 0], scale: [1, HALO_SCALE], transition: HALO }}
-          exit={{ opacity: 0, transition: { duration: 0.1 } }}
+          exit={{ opacity: 0, scale: TO_SCALE[feel], transition: instant ? { duration: 0 } : EXIT[feel] }}
         />
       )}
     </AnimatePresence>
@@ -104,7 +88,7 @@ export function CapsuleKnob({ active, feel = 'spring', color = '#232220' }: { ac
 
 /**
  * One capsule. Its knob appears under it when it is active (single- and multi-select alike).
- * The label dips on press (desktop); the ripple and halo answer a touch (phone).
+ * The label dips on press (desktop); the ripple answers a touch (phone).
  */
 export function Capsule({ active, onClick, size = 'md', className = '', style, disabled, title, children }: {
   active: boolean;
@@ -130,9 +114,10 @@ export function Capsule({ active, onClick, size = 'md', className = '', style, d
       disabled={disabled}
       title={title}
       className={`relative inline-flex items-center rounded-full bg-transparent select-none whitespace-nowrap text-[13px] font-['Univers_BQ:55_Regular',sans-serif] ${dims} ${tone} ${className}`}
-      // isolation: the knob and the halo sit at z-index -1, which must land behind the label
-      // and NOT behind the track. The colour eases so the label turns as the knob arrives.
-      style={{ transition: 'color 240ms cubic-bezier(0.2, 0, 0, 1)', WebkitTapHighlightColor: 'transparent', isolation: 'isolate', ...style }}
+      // isolation: the knob sits at z-index -1, which must land behind the label and NOT behind
+      // the track. The colour eases 300ms each way — the hover brightening and the turn to
+      // white as the knob arrives are the same fade.
+      style={{ transition: 'color 300ms ease', WebkitTapHighlightColor: 'transparent', isolation: 'isolate', ...style }}
     >
       <CapsuleKnob active={active} feel={feel} color={knob} />
       {feel === 'spring' ? (
@@ -140,46 +125,37 @@ export function Capsule({ active, onClick, size = 'md', className = '', style, d
       ) : (
         <span className="relative">{children}</span>
       )}
-      {/* The press ripple only: the halo is the knob's, and follows its arrival. */}
-      {feel === 'quintic' && <Ripple halo={false} />}
+      {feel === 'quintic' && <Ripple />}
     </button>
   );
 }
 
 // ─── Touch feedback (Material) ────────────────────────────────────────────────────────────
-// Drop <Ripple /> inside any positioned element and it answers presses on that element:
-//   • a BOUNDED ripple — a soft-edged disc that starts under the finger at a fifth of the
-//     element's size and grows to cover it while drifting to its centre (450ms, Material's
-//     standard curve), then fades out 150ms after release, but never before it has been
-//     visible for 225ms, so a quick tap still shows a full press;
-//   • a HALO — the element's own shape (border-radius: inherit), swelling to 1.2× and fading
-//     in 320ms. Quiet on purpose: it is a confirmation, not a balloon.
-// On touch the ripple waits 150ms before starting, and a finger that travels more than a few
-// pixels first is a scroll, not a press — so a list can be flicked without lighting every row.
-// A tap released inside those 150ms still ripples, on release. Numbers are Material Web's
-// (ripple.ts): PRESS_GROW 450, MINIMUM_PRESS 225, INITIAL_ORIGIN_SCALE 0.2, PADDING 10,
-// SOFT_EDGE 35% / min 75, TOUCH_DELAY 150, pressed opacity 0.12.
+// Drop <Ripple /> inside any positioned element and it answers presses on that element with a
+// BOUNDED ripple: a soft-edged disc that starts under the finger at a fifth of the element's
+// size and grows to cover it while drifting to its centre (450ms, Material's standard curve),
+// then fades out 150ms after release — but never before it has been visible for 225ms, so a
+// quick tap still shows a full press. On touch the ripple waits 150ms before starting, and a
+// finger that travels more than a few pixels first is a scroll, not a press — so a list can be
+// flicked without lighting every row. A tap released inside those 150ms still ripples, on
+// release. Numbers are Material Web's (ripple.ts): PRESS_GROW 450, MINIMUM_PRESS 225,
+// INITIAL_ORIGIN_SCALE 0.2, PADDING 10, SOFT_EDGE 35% / min 75, TOUCH_DELAY 150, pressed
+// opacity 0.12.
 const TOUCH_DELAY_MS = 150;
 const MINIMUM_PRESS_MS = 225;
 const FADE_MS = 150;
 
 type Wave = { id: number; fading: boolean; style: CSSProperties };
 
-export function Ripple({ color = 'rgba(255, 255, 255, 0.12)', haloColor = 'rgba(255, 255, 255, 0.14)', halo = true }: {
-  color?: string;
-  haloColor?: string;
-  halo?: boolean;
-}) {
+export function Ripple({ color = 'rgba(255, 255, 255, 0.12)' }: { color?: string }) {
   const hostRef = useRef<HTMLSpanElement>(null);
   const [waves, setWaves] = useState<Wave[]>([]);
-  const [halos, setHalos] = useState<number[]>([]);
   useEffect(() => {
     const clip = hostRef.current;
     const el = clip?.parentElement;
     if (!clip || !el) return;
-    // The host must clip nothing (the halo swells past it) and must be its own stacking
-    // context, so the halo's negative z-index lands behind the label and NOT behind the host's
-    // parent. Inline because the host is whatever element we were dropped into.
+    // The host must be positioned (the clip is absolute inside it) and its own stacking context.
+    // Inline because the host is whatever element we were dropped into.
     if (getComputedStyle(el).position === 'static') el.style.position = 'relative';
     el.style.isolation = 'isolate';
 
@@ -209,10 +185,6 @@ export function Ripple({ color = 'rgba(255, 255, 255, 0.12)', haloColor = 'rgba(
         background: `radial-gradient(closest-side, ${color} max(100% - 70px, 65%), transparent 100%)`,
       } as CSSProperties;
       setWaves((ws) => [...ws, { id, fading: false, style }]);
-      if (halo) {
-        setHalos((hs) => [...hs, id]);
-        later(() => setHalos((hs) => hs.filter((x) => x !== id)), 360);
-      }
     };
     const end = () => {
       const cur = live;
@@ -264,13 +236,10 @@ export function Ripple({ color = 'rgba(255, 255, 255, 0.12)', haloColor = 'rgba(
       el.removeEventListener('pointercancel', onCancel);
       el.removeEventListener('pointerleave', onCancel);
     };
-  }, [color, halo]);
+  }, [color]);
   return (
-    <>
-      <span ref={hostRef} aria-hidden className="cap-ripple-clip">
-        {waves.map((wv) => <span key={wv.id} className="cap-ripple-wave" style={{ ...wv.style, opacity: wv.fading ? 0 : 1 }} />)}
-      </span>
-      {halos.map((id) => <span key={id} aria-hidden className="cap-halo" style={{ backgroundColor: haloColor }} />)}
-    </>
+    <span ref={hostRef} aria-hidden className="cap-ripple-clip">
+      {waves.map((wv) => <span key={wv.id} className="cap-ripple-wave" style={{ ...wv.style, opacity: wv.fading ? 0 : 1 }} />)}
+    </span>
   );
 }

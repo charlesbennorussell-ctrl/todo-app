@@ -1080,7 +1080,7 @@ export default function MobileApp() {
             className="relative size-[42px] shrink-0 rounded-full bg-[var(--app-accent)] flex items-center justify-center"
           >
             <Plus size={22} color="#151412" strokeWidth={2.5} />
-            <Ripple color="rgba(255, 255, 255, 0.2)" haloColor="rgba(255, 255, 255, 0.28)" />
+            <Ripple color="rgba(255, 255, 255, 0.2)" />
           </button>
           {[
             { label: 'List', Icon: List },
@@ -1307,7 +1307,7 @@ function DayTab({ idx, label, active, dragging, onTap }: { idx: number; label: s
     >
       <CapsuleKnob active={active} feel="quintic" color="var(--app-bg)" />
       {label}
-      <Ripple halo={false} />
+      <Ripple />
     </button>
   );
 }

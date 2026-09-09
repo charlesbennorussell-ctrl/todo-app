@@ -14253,7 +14253,7 @@ export default function App() {
           onAddClient={addClientNamed}
           onAddProject={addProjectNamed}
           onClose={() => setComposeOpen(false)}
-          maxWidth={760}
+          maxWidth={560}
           surface="desktop"
         />
       )}
