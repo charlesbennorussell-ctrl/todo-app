@@ -17,6 +17,19 @@ export interface Task {
   list: ListId;
   section: SectionId;
   order: number;
+  // Hand-placed position in the TODAY column, within this task's category band.
+  //
+  // `order` cannot do this job. Today's column is ASSEMBLED from several buckets — tasks due
+  // today, every overdue task no matter which section it sits in, and the undated section-
+  // 'today' work — while `order` is only meaningful inside one (list, section) bucket. Two
+  // cards sitting next to each other on Today can therefore have order values that were never
+  // comparable. todayRank is scoped to exactly what the column shows: one band, one sequence.
+  //
+  // Set by dragging a card inside the Today column, which rewrites it across the WHOLE band so
+  // there are never gaps or ties. Absent on a task that has never been placed by hand — those
+  // sort after the placed ones, by the automatic rules. Cleared when a task moves in time
+  // (another day, another section), so a stale position can't come back with it.
+  todayRank?: number;
   projectId?: string;
   // Optional explicit client link. Normally client is derived from projectId → project.clientId,
   // but a task can be linked directly to a client when it has no project (e.g. a milestone tied

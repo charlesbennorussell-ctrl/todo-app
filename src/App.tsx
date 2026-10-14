@@ -5263,6 +5263,48 @@ function queueOrder(tasks: Task[]): Task[] {
   return [...roundRobinByProject(tasks.filter(startedSettled)), ...roundRobinByProject(tasks.filter((t) => !startedSettled(t)))];
 }
 
+/**
+ * ONE category band of the TODAY column, in the exact order it is drawn — the single source of
+ * truth for "what is on Today and in what sequence", shared by the distribution (so every view
+ * renders it) and by the drag handlers (so a drop lands where the user saw the gap).
+ *
+ * Membership mirrors the column: anything anchored today or earlier (overdue included, whatever
+ * section it sits in), plus the undated section-'today' work.
+ *
+ * Sequence is MANUAL FIRST. Tasks the user has dragged into place carry a todayRank and come
+ * back in that order, ahead of everything else; the rest follow by the automatic rules — oldest
+ * deadline first, then undated with started work sunk to the bottom. So a band nobody has
+ * touched behaves exactly as it always did, and one drag inside a band ranks all of it (see
+ * applyTodayOrder) and hands the whole thing over to the user for good.
+ *
+ * `cp` is the Sort-by-Client/Project comparator when that setting is on. It orders the automatic
+ * remainder only: a hand-placed sequence outranks a grouping preference.
+ */
+export function todayBandOf(tasks: Task[], listId: ListId, todayIso: string, cp?: ((a: Task, b: Task) => number) | null): Task[] {
+  const anchorOf = (t: Task) => (t.startDate && t.deadline) ? t.startDate : t.deadline;
+  const mine = tasks.filter((t) => t.list === listId && t.type !== 'scheduled' && onBoard(t));
+  const dated = mine
+    .filter((t) => { const anc = anchorOf(t); return !!anc && anc <= todayIso; })
+    .sort((x, y) => { const xa = anchorOf(x)!, ya = anchorOf(y)!; return xa !== ya ? (xa < ya ? -1 : 1) : x.order - y.order; });
+  const undated = mine
+    .filter((t) => t.section === 'today' && !t.deadline)
+    .sort((x, y) => (startedSettled(x) ? 1 : 0) - (startedSettled(y) ? 1 : 0) || x.order - y.order);
+  const auto = cp ? [...dated, ...undated].sort(cp) : [...dated, ...undated];
+  const placed = auto.filter((t) => typeof t.todayRank === 'number');
+  if (placed.length === 0) return auto;
+  return [...placed.sort((x, y) => x.todayRank! - y.todayRank!), ...auto.filter((t) => typeof t.todayRank !== 'number')];
+}
+
+/**
+ * Stamp `ordered` (one Today band, in its new sequence) onto the task array as todayRank 0..n-1.
+ * The rewrite is total — every card in the band is numbered — so the sequence can never develop
+ * gaps, ties or half-placed bands, whichever surface did the dragging.
+ */
+export function applyTodayOrder(all: Task[], ordered: Task[]): Task[] {
+  const rank = new Map(ordered.map((t, i) => [t.id, i] as const));
+  return all.map((t) => (rank.has(t.id) ? { ...t, todayRank: rank.get(t.id)! } : t));
+}
+
 // The calendar's day-distribution, extracted from WeekCalendarMode so the focus page's
 // mini-calendar strip renders EXACTLY what the week calendar's day columns show. Returns a
 // map keyed '<iso>:<listId>' → tasks for `horizonDays` days starting at todayAnchor
@@ -5324,17 +5366,17 @@ export function computeCalendarDistribution(tasks: Task[], todayAnchor: Date, ho
         const anc = anchorOf(t);
         return anc === iso || (iso === todayIso && !!anc && anc < todayIso);
       };
-      m.push(...tasks.filter((t) =>
-        t.list === listId && datedHere(t) && t.type !== 'scheduled' && onBoard(t)
-      ).sort((a, b) => { const aa = anchorOf(a), bb = anchorOf(b); return aa !== bb ? (aa! < bb! ? -1 : 1) : a.order - b.order; }));
       if (iso === todayIso) {
-        // TODAY sinks started tasks to the BOTTOM of the category. You've picked it up, so it
-        // stops competing for attention with what you haven't touched yet — the top of Today is
-        // "what's left". Dated tasks were pushed above, so this only reorders the undated group.
-        // The sink waits out STARTED_GRACE_MS so the row doesn't jump the instant you click it.
+        // TODAY IS HAND-SEQUENCED. Its band — dated, overdue and undated together — arrives in
+        // one piece from todayBandOf, already carrying whatever order the user dragged into it,
+        // so nothing downstream may re-sort it. (The automatic rules it falls back to for an
+        // untouched band are the same ones that used to live here: oldest deadline first, then
+        // the undated group with started work sunk after STARTED_GRACE_MS.)
+        m.push(...todayBandOf(tasks, listId, todayIso, sortByCP ? cpCompare : null));
+      } else {
         m.push(...tasks.filter((t) =>
-          t.list === listId && t.section === 'today' && !t.deadline && t.type !== 'scheduled' && onBoard(t)
-        ).sort((a, b) => (startedSettled(a) ? 1 : 0) - (startedSettled(b) ? 1 : 0) || a.order - b.order));
+          t.list === listId && datedHere(t) && t.type !== 'scheduled' && onBoard(t)
+        ).sort((a, b) => { const aa = anchorOf(a), bb = anchorOf(b); return aa !== bb ? (aa! < bb! ? -1 : 1) : a.order - b.order; }));
       }
       if (iso === tomorrowIso) {
         // TOMORROW (and Next, via queueOrder) does the opposite: started work floats to the top
@@ -5370,7 +5412,12 @@ export function computeCalendarDistribution(tasks: Task[], todayAnchor: Date, ho
         t.list === listId && t.completed && t.type !== 'scheduled' &&
         t.completedDay === iso && iso !== todayIso
       ).sort((a, b) => a.order - b.order);
-      map[`${iso}:${listId}`] = sortByCP ? [...[...m, ...fillers].sort(cpCompare), ...residue] : [...m, ...fillers, ...residue];
+      // Today is exempt from the client/project pass: todayBandOf has already applied it (and
+      // the user's own sequence on top), and a second sort here would undo the arrangement.
+      // Today has no fillers or residue anyway — it is sealed, and residue needs iso !== today.
+      map[`${iso}:${listId}`] = (sortByCP && iso !== todayIso)
+        ? [...[...m, ...fillers].sort(cpCompare), ...residue]
+        : [...m, ...fillers, ...residue];
     }
   }
   return map;
@@ -8792,7 +8839,15 @@ export default function App() {
   }, []);
 
   const updateTask = useCallback((id: string, patch: Partial<Omit<Task, 'id' | 'order'>>) => {
-    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, ...patch } : t)));
+    setTasks((prev) => prev.map((t) => {
+      if (t.id !== id) return t;
+      // Moving a task in TIME gives up its hand-placed spot in the Today column — otherwise a
+      // task sent to Next would drag its old position back the day it returns. Dragging inside
+      // Today re-ranks the whole band, so this only covers the panels and the date shortcuts.
+      const movedInTime = ('section' in patch && patch.section !== t.section)
+        || ('deadline' in patch && patch.deadline !== t.deadline);
+      return movedInTime ? { ...t, ...patch, todayRank: undefined } : { ...t, ...patch };
+    }));
   }, []);
   // Quick reschedule shortcut used by late-date click handlers in the row renderers.
   //   'today'    → deadline = today + section = 'today'
@@ -10721,9 +10776,29 @@ export default function App() {
           const without = prev.filter((t) => t.id !== srcTask.id);
           // Rule A vs B: rewrite deadline only when the source already had one. Queue tasks
           // keep their (undefined) deadline so they stay in the auto-distributed queue.
+          // todayRank is cleared on every move: landing anywhere but Today should not keep a
+          // position in Today, and landing ON Today gets a fresh one from applyTodayOrder below.
           const moved: Task = isQueueTask
-            ? { ...srcTask, list: targetList, section: targetSection }
-            : { ...srcTask, list: targetList, section: targetSection, deadline: keepExistingDeadline ? srcTask.deadline : targetDate };
+            ? { ...srcTask, list: targetList, section: targetSection, todayRank: undefined }
+            : { ...srcTask, list: targetList, section: targetSection, deadline: keepExistingDeadline ? srcTask.deadline : targetDate, todayRank: undefined };
+          // TODAY IS HAND-SEQUENCED, so a drop there rewrites the sequence of the whole band
+          // rather than the `order` of one (list, section) bucket — the column is assembled from
+          // several of those and no single `order` run can describe it. Same insert rules as
+          // everywhere else: onto a card in your own band puts you above it, into the band's
+          // empty space puts you last, anywhere else puts you on top.
+          if (targetSection === 'today') {
+            const band = todayBandOf(without, targetList, dateToISO(today), sortByCP ? makeCpCompare(projects, clients) : null);
+            let at: number;
+            // droppedInOwnBand's own declaration sits further down, inside the bucket path
+            // this branch returns before reaching — so the test is spelled out here.
+            const ownBand = droppedListId === targetList;
+            if (ownBand && intendedOverTaskId) {
+              const i = band.findIndex((t) => t.id === intendedOverTaskId);
+              at = i >= 0 ? i : 0;
+            } else if (ownBand) at = band.length;
+            else at = 0;
+            return applyTodayOrder([...without, moved], [...band.slice(0, at), moved, ...band.slice(at)]);
+          }
           // Build the destination bucket without the source.
           const toBucket = without.filter((t) => t.list === targetList && t.section === targetSection).sort((a, b) => a.order - b.order);
           // Insert position (per user spec): positional control ONLY when the card is
@@ -10858,7 +10933,7 @@ export default function App() {
       handleCrossSectionMove(a, o);
     }
     setActiveId(null); setActiveTaskIdState(null); setActiveType(null); setActiveCalendarCellId(null); setColumnOffset(0); pendingOffsetRef.current = 0; if (dwellTimerRef.current) { clearTimeout(dwellTimerRef.current); dwellTimerRef.current = null; } if (collapseTimerRef.current) { clearTimeout(collapseTimerRef.current); collapseTimerRef.current = null; } setSourceCollapsed(false);
-  }, [tasks, mode, reorderFocusSubtask, reorderFocusFolder, moveFocusImagesToFolder, moveFocusImagesToBucket, setFocusImages]);
+  }, [tasks, mode, reorderFocusSubtask, reorderFocusFolder, moveFocusImagesToFolder, moveFocusImagesToBucket, setFocusImages, sortByCP, projects, clients]);
 
   // Default to first person if unset. Auth mode never auto-defaults — the
   // membership row IS the identity, and "new device briefly impersonates
@@ -11280,11 +11355,20 @@ export default function App() {
         // NEXT bucket: "touched" tasks rise to the top — STARTED (half-finished, solid tick)
         // above COMPLETED, both above untouched pending. Elsewhere the normal 3-tier order.
         const nextBucket = k.endsWith(':next');
+        // The Today bucket shows the sequence the user dragged into the Today COLUMN, so the
+        // two never disagree about the order of the same day's work.
+        const todayBucket = k.endsWith(':today');
         const tierFor = (t: Task) => { const b = tier(t); if (!nextBucket) return b; return b === 1 ? -2 : b === 2 ? -1 : 0; };
         m[k].sort((a, b) => {
           const at = tierFor(a);
           const bt = tierFor(b);
           if (at !== bt) return at - bt;
+          if (todayBucket) {
+            const ar = typeof a.todayRank === 'number';
+            const br = typeof b.todayRank === 'number';
+            if (ar && br && a.todayRank !== b.todayRank) return a.todayRank! - b.todayRank!;
+            if (ar !== br) return ar ? -1 : 1;
+          }
           const ad = a.deadline;
           const bd = b.deadline;
           if (ad && bd) return ad === bd ? a.order - b.order : ad < bd ? -1 : 1;

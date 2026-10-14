@@ -48,7 +48,7 @@ import type { Task, Project, Client, Person, ListId, SectionId } from './data';
 import { LIST_TITLES, LISTS, PERSONAL_CLIENT_ID, formatDeadline, isLateDeadline, todayISO } from './data';
 import { useMembership, projectAllowed } from './auth';
 import {
-  computeCalendarDistribution, makeCpCompare, TaskCheckbox, Arrowhead, DeadlineArrow,
+  computeCalendarDistribution, makeCpCompare, todayBandOf, applyTodayOrder, TaskCheckbox, Arrowhead, DeadlineArrow,
   addDaysToDate, dateToISO, useSharedTheme, useSharedSubGroup, doneTint, convertTitleCase, useSharedCaseMode,
   buildSubGroupsShared, flatGroup, milestoneBelongsTo,
 } from './App';
@@ -445,6 +445,8 @@ export default function MobileApp() {
   }, [setTasks, convertTitle]);
 
   /** Patch any field set on a task — what the full panel writes back when editing. */
+  // Moving a task in TIME gives up its hand-placed spot in the Today column — see the desktop's
+  // updateTask for why. Dragging inside Today re-ranks the whole band instead.
   const updateTask = useCallback((id: string, patch: Partial<Task>) => {
     // Title is optional on a patch, and an absent key must stay absent rather than become ''.
     const next = patch.title === undefined ? patch : { ...patch, title: convertTitle(patch.title) };
@@ -528,9 +530,25 @@ export default function MobileApp() {
       const src = prev.find((t) => t.id === srcTask.id);
       if (!src) return prev;
       const without = prev.filter((t) => t.id !== src.id);
+      // todayRank is cleared on every move: landing anywhere but Today should not keep a
+      // position in Today, and landing ON Today gets a fresh one from applyTodayOrder below.
       const moved: Task = isQueueTask
-        ? { ...src, list: targetList, section: targetSection }
-        : { ...src, list: targetList, section: targetSection, deadline: targetDate };
+        ? { ...src, list: targetList, section: targetSection, todayRank: undefined }
+        : { ...src, list: targetList, section: targetSection, deadline: targetDate, todayRank: undefined };
+      // TODAY IS HAND-SEQUENCED — the desktop's rule, the desktop's helper, so the two surfaces
+      // cannot drift. A drop on Today rewrites the sequence of the whole band (which spans
+      // several (list, section) buckets) rather than one bucket's `order`.
+      if (targetSection === 'today') {
+        const t0 = new Date(); t0.setHours(0, 0, 0, 0);
+        const band = todayBandOf(without, targetList, dateToISO(t0), sortByCP ? makeCpCompare(projects, clients) : null);
+        let at: number;
+        if (droppedInOwnBand && intendedOverTaskId) {
+          const i = band.findIndex((t) => t.id === intendedOverTaskId);
+          at = i >= 0 ? i : 0;
+        } else if (droppedInOwnBand) at = band.length;
+        else at = 0;
+        return applyTodayOrder([...without, moved], [...band.slice(0, at), moved, ...band.slice(at)]);
+      }
       const toBucket = without.filter((t) => t.list === targetList && t.section === targetSection).sort((a, b) => a.order - b.order);
       let insertAt: number;
       // Deferring into Next OR parking into Hold lands at the top: resurface first.
@@ -548,7 +566,7 @@ export default function MobileApp() {
       if (sameBucket) return [...untouched, ...reorderedTo];
       return [...untouched, ...fromOthers, ...reorderedTo];
     });
-  }, [setTasks]);
+  }, [setTasks, sortByCP, projects, clients]);
 
   // ── Distribution (the desktop Focus engine, verbatim) ──────────────────────
   const calendarTasks = useMemo(
