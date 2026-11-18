@@ -334,4 +334,21 @@ textarea:focus-visible,
    the app's muted list-gray to match every other resting label. */
 .focus-search-input::placeholder { color: #656464; }
 
-
+/* Desktop Focus accordion (FocusFoldBody in App.tsx). Today stays put; of Tomorrow / Next /
+   Hold one is open and two are folded bars. A click swaps them in overlapping beats:
+     0–480ms    the grid re-divides its widths (easeInOutQuart — liquid, no snap at either end)
+     0–120ms    the outgoing content fades out (120 = FOCUS_FOLD_OUT_MS; ease-out, so it is
+                actually gone when the swap lands)
+     240–440ms  the folded bar's counts fade in
+     320–540ms  the opening column's cards fade in, once it has mostly finished widening, so
+                they never visibly re-wrap while the column grows. */
+.focus-grid { transition: grid-template-columns 480ms cubic-bezier(0.76, 0, 0.24, 1); }
+.fc-out { opacity: 0; transition: opacity 120ms cubic-bezier(0.2, 0, 0, 1); }
+.fc-in-fold { animation: fc-fade-in 200ms cubic-bezier(0.2, 0, 0, 1) 120ms both; }
+.fc-in-open { animation: fc-fade-in 220ms cubic-bezier(0.2, 0, 0, 1) 200ms both; }
+.fc-count { animation: fc-fade-in 200ms cubic-bezier(0.2, 0, 0, 1) 140ms both; }
+@keyframes fc-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .focus-grid, .fc-out { transition: none; }
+  .fc-in-fold, .fc-in-open, .fc-count { animation: none; }
+}

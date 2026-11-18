@@ -450,7 +450,15 @@ export default function MobileApp() {
   const updateTask = useCallback((id: string, patch: Partial<Task>) => {
     // Title is optional on a patch, and an absent key must stay absent rather than become ''.
     const next = patch.title === undefined ? patch : { ...patch, title: convertTitle(patch.title) };
-    setTasks((prev) => prev.map((t) => (t.id === id ? { ...t, ...next } : t)));
+    setTasks((prev) => prev.map((t) => {
+      if (t.id !== id) return t;
+      // Same rule as the desktop's updateTask: leaving the Today band — by section, deadline or
+      // category — gives up the hand-placed spot there (see todayRank in data.ts).
+      const leftBand = ('section' in patch && patch.section !== t.section)
+        || ('deadline' in patch && patch.deadline !== t.deadline)
+        || ('list' in patch && patch.list !== t.list);
+      return leftBand ? { ...t, ...next, todayRank: undefined } : { ...t, ...next };
+    }));
   }, [setTasks, convertTitle]);
 
   const deleteTask = useCallback((id: string) => {
@@ -1122,6 +1130,20 @@ export default function MobileApp() {
               const targetDate = paneTargetDate(idx);
               dropTask(liveSheetTask, targetDate, targetSection, null, false);
             }}
+            listSequence={listSequence}
+            onSetList={(l) => {
+              const t = liveSheetTask;
+              const patch: Partial<Task> = { list: l };
+              // The full panel's rules (ComposeSheet): a project pinned to another category can't
+              // come along — its client stays on the task — and Personal carries no client at all.
+              const proj = t.projectId ? projects.find((p) => p.id === t.projectId) : undefined;
+              if (proj?.list && proj.list !== l) {
+                patch.projectId = undefined;
+                if (!t.clientId && proj.clientId && proj.clientId !== PERSONAL_CLIENT_ID) patch.clientId = proj.clientId;
+              }
+              if (l === 'personal') patch.clientId = undefined;
+              updateTask(t.id, patch);
+            }}
             onDelete={() => { deleteTask(liveSheetTask.id); setSheetTaskId(null); }}
             onEdit={() => { setEditingId(liveSheetTask.id); setSheetTaskId(null); }}
             onClose={() => setSheetTaskId(null)}
@@ -1309,8 +1331,12 @@ function DayTab({ idx, label, active, dragging, onTap }: { idx: number; label: s
   );
 }
 
-function TaskSheet({ task, projects, clients, isos, anchor, autoFocusTitle, convertTitle, onRename, onMove, onDelete, onEdit, onClose }: {
+function TaskSheet({ task, projects, clients, isos, anchor, listSequence, autoFocusTitle, convertTitle, onRename, onMove, onSetList, onDelete, onEdit, onClose }: {
   task: Task; projects: Project[]; clients: Client[]; isos: string[]; anchor: Date;
+  /** The categories in the user's order — the Category row's capsules. */
+  listSequence: ListId[];
+  /** Re-file the task under another category (the sheet stays open). */
+  onSetList: (list: ListId) => void;
   /** Sheet was opened by creating this task → focus the title and raise the keyboard. */
   autoFocusTitle?: boolean;
   /** The same auto-capitalisation renameTask applies. Needed here for the dirty-check only —
@@ -1404,6 +1430,18 @@ function TaskSheet({ task, projects, clients, isos, anchor, autoFocusTitle, conv
             // the day it is already on just closes.
             <Capsule key={p.section} active={i === currentIdx} onClick={() => { if (i === currentIdx) { onClose(); return; } onMove(i); window.setTimeout(onClose, 420); }}>
               {p.label}
+            </Capsule>
+          ))}
+        </CapsuleTrack>
+      </div>
+      {/* Category — the same capsules, the same track. Unlike a day, a category change keeps
+          the sheet up: the card stays on this day (it only changes band), and you may well want
+          to set the day next — which does close it. */}
+      <div className="pb-[16px]">
+        <CapsuleTrack feel="quintic" className={CHIP_TRACK} attrs={{ 'data-chip-track': '' }}>
+          {listSequence.map((l) => (
+            <Capsule key={l} active={task.list === l} onClick={() => { if (task.list !== l) onSetList(l); }}>
+              {LIST_TITLES[l]}
             </Capsule>
           ))}
         </CapsuleTrack>

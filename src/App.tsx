@@ -5024,6 +5024,64 @@ function CalendarColumnDroppable({ date, children, className = 'min-w-[200px] fl
   );
 }
 
+// ─── Desktop Focus accordion ──────────────────────────────────────────────────────────────
+// Today is always open; of Tomorrow, Next and Hold exactly one is, and the other two fold into
+// narrow bars. Every day track is a minmax(px, fr) pair so the swap INTERPOLATES: Chromium
+// animates grid-template-columns only between track lists of the same shape, and a px↔fr or
+// fr↔minmax change would jump. A folded column takes 0.25fr against an open one's 1fr — about
+// 0.4 of the width it had when all four were equal — and the total stays 2.5fr either way, so
+// Today never moves while the other two trade places. The timing lives in index.css
+// (.focus-grid / .fc-*).
+type FocusFoldCol = 'tomorrow' | 'next' | 'hold';
+const FOCUS_COL_MIN = 240;
+const FOCUS_BAR_MIN = 120;
+const FOCUS_BAR_FR = 0.25;
+const focusTrack = (open: boolean) => (open ? `minmax(${FOCUS_COL_MIN}px, 1fr)` : `minmax(${FOCUS_BAR_MIN}px, ${FOCUS_BAR_FR}fr)`);
+// How long the outgoing content takes to fade before the incoming one replaces it (must match
+// .fc-out in index.css).
+const FOCUS_FOLD_OUT_MS = 120;
+
+/**
+ * A foldable Focus column's body. `folded` flips the instant a bar is clicked — the grid starts
+ * re-dividing its widths straight away — and the body follows a beat behind: the outgoing
+ * content fades out, then the incoming content fades in; an opening column's cards wait until
+ * the column has nearly finished widening, so they never visibly re-wrap while it grows.
+ * Nothing animates on mount, so launching or coming back to Focus just shows the columns.
+ */
+function FocusFoldBody({ folded, renderOpen, renderFold }: { folded: boolean; renderOpen: () => React.ReactNode; renderFold: () => React.ReactNode }) {
+  const [shown, setShown] = useState(folded);
+  const [swapped, setSwapped] = useState(false);
+  // Derived in render, not set from an effect, so the fade-out starts in the SAME frame as the
+  // grid's width change. (Through an effect it began a frame late and was cut off at ~20%.)
+  // Clicking back before the swap simply clears it: what is showing stays.
+  const leaving = folded !== shown;
+  useEffect(() => {
+    if (!leaving) return;
+    const t = window.setTimeout(() => { setShown(folded); setSwapped(true); }, FOCUS_FOLD_OUT_MS);
+    return () => window.clearTimeout(t);
+  }, [folded, leaving]);
+  const fx = leaving ? 'fc-out' : swapped ? (shown ? 'fc-in-fold' : 'fc-in-open') : '';
+  // Keyed on what it shows, so each swap mounts fresh and its fade-in runs once.
+  return <div key={shown ? 'fold' : 'open'} className={`flex-1 min-h-0 flex flex-col ${fx}`}>{shown ? renderFold() : renderOpen()}</div>;
+}
+
+/** One category row of a folded Focus bar — the band's drop cell, washed like an open band's. */
+function FocusFoldDrop({ id, children }: { id: string; children: React.ReactNode }) {
+  // data.fold tells calendarCollision this cell has no cards, so no stale "over card" from
+  // earlier in the drag can pick the landing slot.
+  const { setNodeRef, isOver, active } = useDroppable({ id, data: { fold: true } });
+  const taskOver = isOver && (active?.data.current?.type === 'task' || active?.data.current?.type === 'projTask');
+  return (
+    <div
+      ref={setNodeRef}
+      className="rounded-[4px] transition-colors duration-200 ease-in-out"
+      style={taskOver ? { backgroundColor: 'rgb(from var(--app-accent) r g b / 0.1)' } : undefined}
+    >
+      {children}
+    </div>
+  );
+}
+
 const CAL_LISTS: { id: ListId; label: string }[] = [
   { id: 'admin', label: 'Admin' },
   { id: 'work', label: 'Work' },
@@ -7868,10 +7926,12 @@ function TaskQuickEdit({
         </div>
 
         {/* Clients — selecting changes the task's clientId and clears project (so the project
-            list filters to the new client cleanly). Just-created clients render inline-editable. */}
+            list filters to the new client cleanly). Just-created clients render inline-editable;
+            naming one here also gives it to this task (the compose sheet does the same), so the
+            project row opens under it straight away. */}
         <div className="px-[31px] flex flex-row flex-wrap gap-x-4 gap-y-3 items-center">
           {sortedClients.map((c) => c.id === newId ? (
-            <EditableText key={c.id} value={c.name} placeholder="New Client" autoFocus onChange={(v) => onRenameClient(c.id, v)} onDiscardIfEmpty={() => onDeleteClient(c.id)} className="text-[14px] font-['Untitled_Sans',sans-serif] whitespace-nowrap text-white font-bold" />
+            <EditableText key={c.id} value={c.name} placeholder="New Client" autoFocus onChange={(v) => { onRenameClient(c.id, v); if (!c.name.trim()) onUpdateTask(task.id, { clientId: c.id, projectId: undefined }); }} onDiscardIfEmpty={() => onDeleteClient(c.id)} className="text-[14px] font-['Untitled_Sans',sans-serif] whitespace-nowrap text-white font-bold" />
           ) : (
             <Pill key={c.id} active={resolvedClientId === c.id} onClick={() => apply({ clientId: c.id, projectId: undefined })}>{c.name || 'New Client'}</Pill>
           ))}
@@ -7883,7 +7943,7 @@ function TaskQuickEdit({
         {resolvedClientId && (
           <div className="px-[31px] flex flex-row flex-wrap gap-x-4 gap-y-3 items-center">
             {projectsForClient.map((p) => p.id === newId ? (
-              <EditableText key={p.id} value={p.name} placeholder="New Project" autoFocus onChange={(v) => onRenameProject(p.id, v)} onDiscardIfEmpty={() => onDeleteProject(p.id)} className="text-[14px] font-['Untitled_Sans',sans-serif] whitespace-nowrap text-white font-bold" />
+              <EditableText key={p.id} value={p.name} placeholder="New Project" autoFocus onChange={(v) => { onRenameProject(p.id, v); if (!p.name.trim()) onUpdateTask(task.id, { projectId: p.id }); }} onDiscardIfEmpty={() => onDeleteProject(p.id)} className="text-[14px] font-['Untitled_Sans',sans-serif] whitespace-nowrap text-white font-bold" />
             ) : (
               <Pill key={p.id} active={task.projectId === p.id} onClick={() => { onPinProjectList(p.id, task.list); apply({ projectId: p.id }); }}>{p.name || 'New Project'}</Pill>
             ))}
@@ -8841,12 +8901,15 @@ export default function App() {
   const updateTask = useCallback((id: string, patch: Partial<Omit<Task, 'id' | 'order'>>) => {
     setTasks((prev) => prev.map((t) => {
       if (t.id !== id) return t;
-      // Moving a task in TIME gives up its hand-placed spot in the Today column — otherwise a
-      // task sent to Next would drag its old position back the day it returns. Dragging inside
-      // Today re-ranks the whole band, so this only covers the panels and the date shortcuts.
-      const movedInTime = ('section' in patch && patch.section !== t.section)
-        || ('deadline' in patch && patch.deadline !== t.deadline);
-      return movedInTime ? { ...t, ...patch, todayRank: undefined } : { ...t, ...patch };
+      // Leaving its Today band — in TIME (section, deadline) or by CATEGORY (list; each category
+      // is its own band) — gives up a task's hand-placed spot there. Otherwise a task sent to
+      // Next would drag its old position back the day it returns, and one moved to another
+      // category would arrive ranked and jump to the top of that band. Dragging inside Today
+      // re-ranks the whole band, so this only covers the panels and the date shortcuts.
+      const leftBand = ('section' in patch && patch.section !== t.section)
+        || ('deadline' in patch && patch.deadline !== t.deadline)
+        || ('list' in patch && patch.list !== t.list);
+      return leftBand ? { ...t, ...patch, todayRank: undefined } : { ...t, ...patch };
     }));
   }, []);
   // Quick reschedule shortcut used by late-date click handlers in the row renderers.
@@ -8919,6 +8982,16 @@ export default function App() {
   // Mirror for the blank-task sweep (declared next to the sweep effect, which runs above
   // this state's declaration in file order).
   useEffect(() => { newlyCreatedIdRef.current = newId; }, [newId]);
+  // `newId` marks the ONE client / project / person being NAMED, and the task panel renders
+  // that item as a text field rather than a pickable chip. Nothing used to clear it, so a
+  // freshly created client stayed a text field — clicking it re-entered naming instead of
+  // assigning it — until a restart reset the state ("a new client only works after restarting
+  // the app"). Naming is over the moment the item has a name, so the marker goes then.
+  useEffect(() => {
+    if (!newId) return;
+    const named = (x: { name: string } | undefined) => !!x && !!(x.name || '').trim();
+    if (named(clients.find((c) => c.id === newId)) || named(projects.find((p) => p.id === newId)) || named(people.find((p) => p.id === newId))) setNewId(null);
+  }, [newId, clients, projects, people]);
   // Pending destructive-confirm: when set, the TrashConfirmModal renders. The user must type
   // "TRASH" in the modal before the actual delete fires.
   const [pendingTrash, setPendingTrash] = useState<{ kind: 'project' | 'client'; id: string; name: string } | null>(null);
@@ -9395,6 +9468,9 @@ export default function App() {
   const [focusClientId, setFocusClientId] = useState<string | null>(null);
   // Focus-page live search query — filters the day columns + the Milestones column.
   const [focusSearch, setFocusSearch] = useState('');
+  // Desktop Focus accordion (see FocusFoldBody): which of Tomorrow / Next / Hold is open beside
+  // Today. Tomorrow by default, and on purpose not persisted — every launch starts there.
+  const [focusOpenCol, setFocusOpenCol] = useState<FocusFoldCol>('tomorrow');
   // Assignees filter (Focus left column): selected shorts. Intersection
   // semantics — with ['P','B'] selected, only tasks assigned to BOTH show.
   const [assigneeFilter, setAssigneeFilter] = useState<string[]>([]);
@@ -12141,6 +12217,9 @@ export default function App() {
         // drop handler uses this to know if the user released above / below / inside the
         // source category band.
         lastCalOverCellIdRef.current = id;
+        // A folded Focus bar's rows hold no cards, so a card hovered earlier in this drag must
+        // not pick the slot: a drop there lands like one into a band's empty space.
+        if (args.droppableContainers.find((d) => d.id === c.id)?.data?.current?.fold) lastCalOverTaskIdRef.current = null;
         if (allowListChange || list === activeList) {
           if (!seen.has(id)) { cellHits.push(c); seen.add(id); }
         } else {
@@ -12530,7 +12609,10 @@ export default function App() {
                   freed space, so the calendar gets wider. */}
               {/* PIP: ONLY the three day columns — no filter panel, no Milestones column.
                   Full mode: cols 1–2 are content-sized (longest entry + 30px), days split the rest. */}
-              <div className="grid gap-0 flex-1 min-h-0 w-full overflow-x-auto" style={{ gridTemplateColumns: PIP_MODE ? '1fr 1fr 1fr' : stackSide ? `${sideW}px 1fr 1fr 1fr 1fr` : `${sideW * 2}px 1fr 1fr 1fr 1fr` }}>
+              {/* The four day tracks are the accordion: Today and the open one of Tomorrow /
+                  Next / Hold at minmax(240px, 1fr), the two folded ones at minmax(120px, 0.25fr).
+                  .focus-grid transitions the template, so a click re-divides the widths smoothly. */}
+              <div className="focus-grid grid gap-0 flex-1 min-h-0 w-full overflow-x-auto" style={{ gridTemplateColumns: PIP_MODE ? '1fr 1fr 1fr' : `${stackSide ? sideW : sideW * 2}px ${[true, focusOpenCol === 'tomorrow', focusOpenCol === 'next', focusOpenCol === 'hold'].map(focusTrack).join(' ')}` }}>
                 {/* Column 1 — Projects panel: flat master list (milestones pinned on top);
                     clicking a project FILTERS the Dashboard stack + all three calendar
                     columns (focusProjectId). Active row shows an ×; click again to clear.
@@ -12739,13 +12821,11 @@ export default function App() {
                   const stripAnchor = (() => { const d = new Date(); d.setHours(0, 0, 0, 0); return d; })();
                   // One band block (label + cards) per CAL_LIST, aggregated over the
                   // column's iso set. Mirrors WeekCalendarMode's per-day band rendering.
-                  const dayBands = (isos: string[], colKey: string, section: SectionId) => listSequence.map((listId, bandIdx) => {
-                    // Sub-grouping is per SCOPE now (Settings -> Sub-grouping), not
-                    // hard-wired to the Next column. 'inbox' can't reach here.
-                    const grouped = section === 'today' ? subGroup.today
-                                  : section === 'tomorrow' ? subGroup.tomorrow
-                                  : subGroup.next; // Hold follows the Next switch — both are the "not now" pile
-                    const bandLabel = LIST_TITLES[listId];
+                  // The cards one band shows: the column's tasks in that category after the active
+                  // filter, with the column's milestones on top. Shared by an open column's bands
+                  // and a folded bar's counts, so the number on a bar is exactly what opening it
+                  // will show.
+                  const bandCellTasks = (isos: string[], section: SectionId, listId: ListId): Task[] => {
                     const isoSet = new Set(isos);
                     // Filter helper — project narrows to one, else client narrows to all its tasks.
                     const clientOfT = (t: Task) => t.clientId ?? (t.projectId ? projects.find((p) => p.id === t.projectId)?.clientId : undefined);
@@ -12775,8 +12855,17 @@ export default function App() {
                       if (!passesFilter(t)) return false;
                       return milestoneBelongsTo(t, listId, projects);
                     }).sort((a, b) => (a.deadline! < b.deadline! ? -1 : a.deadline! > b.deadline! ? 1 : a.title.localeCompare(b.title)));
+                    return [...bandMilestones, ...bucket];
+                  };
+                  const dayBands = (isos: string[], colKey: string, section: SectionId) => listSequence.map((listId, bandIdx) => {
+                    // Sub-grouping is per SCOPE now (Settings -> Sub-grouping), not
+                    // hard-wired to the Next column. 'inbox' can't reach here.
+                    const grouped = section === 'today' ? subGroup.today
+                                  : section === 'tomorrow' ? subGroup.tomorrow
+                                  : subGroup.next; // Hold follows the Next switch — both are the "not now" pile
+                    const bandLabel = LIST_TITLES[listId];
                     const cellId = `cal:${isos[0]}:${listId}`;
-                    const cellTasks = [...bandMilestones, ...bucket];
+                    const cellTasks = bandCellTasks(isos, section, listId);
                     // The rendered order. Grouping permutes cellTasks (the partition is
                     // stable, but clients interleave in the bucket), and SortableContext's
                     // `items` below must match what is actually emitted — see the note there.
@@ -12945,33 +13034,22 @@ export default function App() {
                   const nextIsos = [2, 3, 4, 5, 6, 7, 8].map((off) => dateToISO(addDaysToDate(stripAnchor, off)));
                   // Day headers replicate the calendar view's: NB-font weekday + Univers
                   // date number, purple for today with the "(Today)" suffix.
-                  const dayHeader = (d: Date, isToday: boolean) => (
-                    <div className={`shrink-0 h-[37px] flex items-center gap-2 px-[16px] ${isToday ? 'text-[var(--app-accent)]' : 'text-white'}`} style={{ marginBottom: SPACING.dcr }}>
+                  const dayTitle = (d: Date, isToday: boolean) => (
+                    <>
                       <p className="font-['NB_International:Regular',sans-serif]">{d.toLocaleDateString('en-US', { weekday: 'short' })}</p>
                       <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap">{d.getDate()}</p>
                       {isToday && <p className="font-['NB_International:Regular',sans-serif]">(Today)</p>}
-                    </div>
+                    </>
                   );
-                  const cols: Array<{ key: string; header: React.ReactNode; isos: string[]; section: SectionId }> = [
-                    { key: 'fc-today', header: dayHeader(d0, true), isos: [dateToISO(d0)], section: 'today' },
-                    { key: 'fc-tomorrow', header: dayHeader(d1, false), isos: [dateToISO(d1)], section: 'tomorrow' },
-                    {
-                      key: 'fc-next',
-                      header: (
-                        <div className="shrink-0 h-[37px] flex items-center gap-2 px-[16px] text-white" style={{ marginBottom: SPACING.dcr }}>
-                          <p className="font-['NB_International:Regular',sans-serif]">Next</p>
-                        </div>
-                      ),
-                      isos: nextIsos,
-                      section: 'next',
-                    },
+                  const plainTitle = (label: string) => <p className="font-['NB_International:Regular',sans-serif]">{label}</p>;
+                  const cols: Array<{ key: string; name: string; title: React.ReactNode; isos: string[]; section: SectionId }> = [
+                    { key: 'fc-today', name: 'Today', title: dayTitle(d0, true), isos: [dateToISO(d0)], section: 'today' },
+                    { key: 'fc-tomorrow', name: 'Tomorrow', title: dayTitle(d1, false), isos: [dateToISO(d1)], section: 'tomorrow' },
+                    { key: 'fc-next', name: 'Next', title: plainTitle('Next'), isos: nextIsos, section: 'next' },
                     {
                       key: 'fc-hold',
-                      header: (
-                        <div className="shrink-0 h-[37px] flex items-center gap-2 px-[16px] text-white" style={{ marginBottom: SPACING.dcr }}>
-                          <p className="font-['NB_International:Regular',sans-serif]">Hold</p>
-                        </div>
-                      ),
+                      name: 'Hold',
+                      title: plainTitle('Hold'),
                       // A synthetic token, not a date: Hold has no day. It flows through the
                       // same cal:<token>:<list> cell ids the drop engine already parses (it
                       // splits on ':' and never interprets the middle), and the drop branch
@@ -12992,9 +13070,10 @@ export default function App() {
                     .sort((a, b) => (a.deadline! < b.deadline! ? -1 : a.deadline! > b.deadline! ? 1 : a.title.localeCompare(b.title)));
                   // PIP is the reduced quick-view — three day columns on a three-track
                   // grid, no side panel. Hold would wrap there too, so it stays desktop-only.
-                  return cols.filter((col) => !(PIP_MODE && col.section === 'hold')).map((col) => (
-                    <CalendarColumnDroppable key={col.key} date={col.isos[0]} className="min-w-[240px] flex flex-col min-h-0 overflow-hidden">
-                      {col.header}
+                  // THE ACCORDION (desktop, not PIP): Today is always open; of Tomorrow, Next and
+                  // Hold only `focusOpenCol` is — the other two are folded bars. The grid's tracks
+                  // (focusDayTracks) carry the widths; a click just names the column to open.
+                  const openBody = (col: (typeof cols)[number]) => (
                       <CustomScroll bandIndicator={activeTask ? { list: activeTask.list, label: LIST_TITLES[activeTask.list] } : null}>
                         {/* Next column only: upcoming milestones beyond the window, featured up top. */}
                         {col.section === 'next' && comingUpMilestones.length > 0 && (
@@ -13022,8 +13101,55 @@ export default function App() {
                         )}
                         {dayBands(col.isos, col.key, col.section)}
                       </CustomScroll>
-                    </CalendarColumnDroppable>
-                  ));
+                  );
+                  // A folded bar: one quiet row per category with its count, on a faint strip that
+                  // brightens under the pointer. Every row is also that band's drop cell, so a card
+                  // can be parked in a folded column without opening it (the category lock still
+                  // routes it into its own band, which is the row that lights up).
+                  const foldBody = (col: (typeof cols)[number], counts: { listId: ListId; n: number }[]) => (
+                    <div className="flex-1 min-h-0 mx-[6px] mb-[8px] rounded-[6px] bg-white/[0.02] group-hover/fold:bg-white/[0.045] transition-colors duration-300">
+                      {counts.map(({ listId, n }) => (
+                        <FocusFoldDrop key={listId} id={`cal:${col.isos[0]}:${listId}`}>
+                          <div className="h-[37px] px-[10px] flex items-center gap-2 whitespace-nowrap overflow-hidden">
+                            <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] text-[#5e5e5e] overflow-hidden text-ellipsis">{LIST_TITLES[listId]}</p>
+                            {n > 0 && <span className="ml-auto font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] text-[14px] text-[#656464] tabular-nums">{n}</span>}
+                          </div>
+                        </FocusFoldDrop>
+                      ))}
+                    </div>
+                  );
+                  // PIP is the reduced quick-view — three day columns on a three-track
+                  // grid, no side panel. Hold would wrap there too, so it stays desktop-only.
+                  return cols.filter((col) => !(PIP_MODE && col.section === 'hold')).map((col) => {
+                    const foldable = !PIP_MODE && col.section !== 'today';
+                    const folded = foldable && col.section !== focusOpenCol;
+                    const counts = folded ? listSequence.map((listId) => ({ listId, n: bandCellTasks(col.isos, col.section, listId).length })) : [];
+                    const total = counts.reduce((sum, c) => sum + c.n, 0);
+                    const open = () => setFocusOpenCol(col.section as FocusFoldCol);
+                    return (
+                      <CalendarColumnDroppable key={col.key} date={col.isos[0]} className={`${PIP_MODE ? 'min-w-[240px]' : 'min-w-0'} flex flex-col min-h-0 overflow-hidden`}>
+                        {/* The whole folded column is the button — heading, counts and strip. */}
+                        <div
+                          className={`flex-1 min-h-0 flex flex-col ${folded ? 'group/fold cursor-pointer outline-none' : ''}`}
+                          {...(folded ? {
+                            role: 'button',
+                            tabIndex: 0,
+                            'aria-label': `Open ${col.name}`,
+                            onClick: open,
+                            onKeyDown: (e: React.KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } },
+                          } : {})}
+                        >
+                          <div className={`shrink-0 h-[37px] flex items-center gap-2 px-[16px] whitespace-nowrap overflow-hidden ${col.section === 'today' ? 'text-[var(--app-accent)]' : 'text-white'}`} style={{ marginBottom: SPACING.dcr }}>
+                            {col.title}
+                            {folded && total > 0 && <span className="fc-count font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] text-[14px] text-[#656464] tabular-nums">{total}</span>}
+                          </div>
+                          {foldable
+                            ? <FocusFoldBody folded={folded} renderOpen={() => openBody(col)} renderFold={() => foldBody(col, counts.length ? counts : listSequence.map((listId) => ({ listId, n: bandCellTasks(col.isos, col.section, listId).length })))} />
+                            : openBody(col)}
+                        </div>
+                      </CalendarColumnDroppable>
+                    );
+                  });
                 })()}
                 {/* Column 2 — Project / Task Information (Brief + Integrations).
                     Title sits in the same row as the Dashboard column header so the three

@@ -7,7 +7,7 @@ import { useMutation } from '@liveblocks/react/suspense';
 import { motion } from 'motion/react';
 import { ChevronLeft, ChevronRight, Plus, X } from 'lucide-react';
 import type { Task, Project, Client, Person, ListId, SectionId } from './data';
-import { LIST_TITLES, LISTS, addDaysToDate, dateToISO } from './data';
+import { LIST_TITLES, LISTS, PERSONAL_CLIENT_ID, addDaysToDate, dateToISO } from './data';
 import { Capsule, CapsuleKnob, CapsuleTrack, type Feel } from './Capsules';
 
 // The four sections, in the order every switcher shows them. Hold is parked, not a day: its
@@ -532,10 +532,15 @@ export function ComposeSheet({ listSequence, projects, clients, people, currentU
     () => projects.filter((p) => !p.list || p.list === listId),
     [projects, listId]
   );
+  // A client with NO projects yet isn't pinned anywhere, so like an unpinned project it belongs
+  // in every category. Without this a brand-new client was offered only while it was the
+  // selection: the next sheet had nowhere to find it until it owned a project.
   const visibleClients = useMemo(() => {
     const owners = new Set(categoryProjects.map((p) => p.clientId).filter(Boolean) as string[]);
-    return clients.filter((c) => owners.has(c.id) || c.id === clientId);
-  }, [clients, categoryProjects, clientId]);
+    const anyOwners = new Set(projects.map((p) => p.clientId).filter(Boolean) as string[]);
+    const unpinned = (c: Client) => !anyOwners.has(c.id) && c.id !== PERSONAL_CLIENT_ID && !!(c.name || '').trim();
+    return clients.filter((c) => owners.has(c.id) || unpinned(c) || c.id === clientId);
+  }, [clients, projects, categoryProjects, clientId]);
   const visibleProjects = useMemo(
     () => (clientId ? categoryProjects.filter((p) => p.clientId === clientId) : categoryProjects),
     [categoryProjects, clientId]
