@@ -336,7 +336,13 @@ textarea:focus-visible,
 
 /* Desktop Focus accordion (FocusFoldBody in App.tsx). Today stays put; of Tomorrow / Next /
    Hold one is open and the other two are plain bars under their titles. A click morphs them,
-   never through a blank frame (FOCUS_OPEN_MS / FOCUS_CLOSE_MS in App.tsx cover these beats):
+   never through a blank frame (FOCUS_OPEN_MS / FOCUS_CLOSE_MS in App.tsx cover these beats).
+
+   TEMPO: the beats below are in tempo-1 milliseconds (the v0.7.23 film). Every duration and
+   delay in this block is multiplied by --fc-k, which the grid sets to 1 / FOCUS_MORPH_SPEED
+   (App.tsx; 3 since v0.7.24, so the opening runs ~500ms and the closing ~250ms). Change the speed
+   THERE, never here: the JS timers that end each direction are derived from the same number.
+   The hover tint isn't part of the film and keeps its own 300ms.
 
    OPENING   0-300ms    the bar dissolves into the column's cards. They arrive as blank tiles of
                         the bar's own faint white, the bar fading out under them on the same
@@ -353,7 +359,7 @@ textarea:focus-visible,
    wherever they got to (the ink's draw-on is a keyframe animation; see below). The grid waits
    140ms so the closing column's ink is gone before the widths move; a click that lands mid-morph
    skips that wait (openFocusCol in App.tsx). */
-.focus-grid { transition: grid-template-columns 600ms cubic-bezier(0.65, 0, 0.25, 1) 140ms; }
+.focus-grid { transition: grid-template-columns calc(600ms * var(--fc-k, 1)) cubic-bezier(0.65, 0, 0.25, 1) calc(140ms * var(--fc-k, 1)); }
 
 .fc-bar {
   /* The cards' own insets (mx-6, plus CustomScroll's 14px gutter on the right), so every tile
@@ -361,25 +367,25 @@ textarea:focus-visible,
   position: absolute; left: 6px; right: 20px; top: 0; bottom: 8px;
   border-radius: 3.333px;
   background-color: rgb(255 255 255 / 0.03);
-  transition: opacity 320ms cubic-bezier(0.45, 0, 0.55, 1) 440ms, background-color 300ms ease;
+  transition: opacity calc(320ms * var(--fc-k, 1)) cubic-bezier(0.45, 0, 0.55, 1) calc(440ms * var(--fc-k, 1)), background-color 300ms ease;
 }
 .group\/fold:hover .fc-bar { background-color: rgb(255 255 255 / 0.05); }
 .fc-bar[data-fc="opening"], .fc-bar[data-fc="open"] {
   opacity: 0;
-  transition: opacity 300ms cubic-bezier(0.45, 0, 0.55, 1), background-color 300ms ease;
+  transition: opacity calc(300ms * var(--fc-k, 1)) cubic-bezier(0.45, 0, 0.55, 1), background-color 300ms ease;
 }
 
 .fc-cards {
   position: relative; flex: 1 1 0%; min-height: 0; display: flex; flex-direction: column;
-  transition: opacity 300ms cubic-bezier(0.45, 0, 0.55, 1);
+  transition: opacity calc(300ms * var(--fc-k, 1)) cubic-bezier(0.45, 0, 0.55, 1);
 }
 .fc-cards[data-fc="pre"] { opacity: 0; }
 /* Inert until the first lines of ink are up: the pointer is usually sitting on the column it
    just clicked, and a hover-only control (a card's + and trash) must not pop in on a blank tile. */
 .fc-cards[data-fc="pre"], .fc-cards[data-fc="out"] { pointer-events: none; }
-.fc-cards[data-fc="in"] { animation: fc-inert 900ms; }
+.fc-cards[data-fc="in"] { animation: fc-inert calc(900ms * var(--fc-k, 1)); }
 @keyframes fc-inert { from, to { pointer-events: none; } }
-.fc-cards[data-fc="out"] { opacity: 0; transition: opacity 320ms cubic-bezier(0.45, 0, 0.55, 1) 440ms; }
+.fc-cards[data-fc="out"] { opacity: 0; transition: opacity calc(320ms * var(--fc-k, 1)) cubic-bezier(0.45, 0, 0.55, 1) calc(440ms * var(--fc-k, 1)); }
 
 /* The ink: a gradient mask 2.5x the element's width, slid from fully off (100%) to fully on
    (0%), so a soft edge sweeps across each line as it fades up. Only present mid-morph.
@@ -397,8 +403,8 @@ textarea:focus-visible,
   -webkit-mask-position: 0% 0; mask-position: 0% 0;
 }
 .fc-cards[data-fc="pre"] [data-ink], .fc-cards[data-fc="in"] [data-ink] {
-  animation: fc-ink-on 640ms cubic-bezier(0.22, 1, 0.36, 1) both;
-  animation-delay: calc(520ms + var(--ink-i, 0) * 24ms);
+  animation: fc-ink-on calc(640ms * var(--fc-k, 1)) cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation-delay: calc((520ms + var(--ink-i, 0) * 24ms) * var(--fc-k, 1));
 }
 @keyframes fc-ink-on {
   from { opacity: 0; -webkit-mask-position: 100% 0; mask-position: 100% 0; }
@@ -409,9 +415,9 @@ textarea:focus-visible,
   /* Lifts evenly, then the mask resets out of sight. */
   opacity: 0; -webkit-mask-position: 100% 0; mask-position: 100% 0;
   transition-property: opacity, -webkit-mask-position, mask-position;
-  transition-duration: 160ms, 0s, 0s;
+  transition-duration: calc(160ms * var(--fc-k, 1)), 0s, 0s;
   transition-timing-function: cubic-bezier(0.4, 0, 1, 1);
-  transition-delay: 0s, 160ms, 160ms;
+  transition-delay: 0s, calc(160ms * var(--fc-k, 1)), calc(160ms * var(--fc-k, 1));
 }
 @media (prefers-reduced-motion: reduce) {
   .focus-grid, .fc-bar, .fc-cards, .fc-cards[data-fc] [data-ink] { transition: none !important; }

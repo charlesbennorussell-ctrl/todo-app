@@ -54,7 +54,7 @@ import {
   addDaysToDate, dateToISO, useSharedTheme, useSharedSubGroup, doneTint, convertTitleCase, useSharedCaseMode,
   buildSubGroupsShared, flatGroup, milestoneBelongsTo,
 } from './App';
-import { PANES, SheetShell, CHIP_TRACK, ComposeSheet, useAddClient, useAddProject } from './ComposeSheet';
+import { PANES, SheetShell, CHIP_TRACK, ComposeSheet, noteSheetHandoff, useAddClient, useAddProject } from './ComposeSheet';
 import { Capsule, CapsuleKnob, CapsuleTrack } from './Capsules';
 
 // ── Shared module state ───────────────────────────────────────────────────────
@@ -1413,10 +1413,10 @@ function TaskSheet({ task, projects, clients, isos, anchor, listSequence, autoFo
     ? (task.deadline <= isos[0] ? 0 : task.deadline === isos[1] ? 1 : 2)
     : task.section === 'today' ? 0 : task.section === 'tomorrow' ? 1 : 2;
   return (
-    // Pull DOWN anywhere that isn't a control saves and closes; pull UP over the same area
-    // expands into the full panel. Both are the shell's, so the hot zone is the whole sheet —
-    // it used to be the strip of lower controls, which is why the pull-up only answered from
-    // down there.
+    // Pull DOWN anywhere, capsules and buttons included, saves and closes; pull UP anywhere
+    // expands into the full panel, mid-swipe, and the panel grows out of this sheet's top edge.
+    // Both are the shell's, so the hot zone is the whole sheet. (It used to skip every control,
+    // which on this sheet left only the gaps between the capsule rows to grab.)
     <SheetShell
       onClose={() => { commit(); onClose(); }}
       onSwipeDown={() => { commit(); onClose(); }}
@@ -1489,7 +1489,8 @@ function TaskSheet({ task, projects, clients, isos, anchor, listSequence, autoFo
       <div className="shrink-0 grid grid-cols-3 items-center border-t border-[#33312e] pt-[14px]">
         <button
           type="button"
-          onClick={() => { if (confirmDelete) { setConfirmDelete(false); return; } commit(); onEdit(); }}
+          // noteSheetHandoff: the full panel grows out of this sheet, as it does on a pull-up.
+          onClick={() => { if (confirmDelete) { setConfirmDelete(false); return; } commit(); noteSheetHandoff(); onEdit(); }}
           className={`relative justify-self-start flex flex-row items-center gap-[7px] p-2 -m-2 rounded-[8px] ${confirmDelete ? 'text-[#656464]' : 'text-[#a8a8a8]'}`}
         >
           {confirmDelete ? <span className="text-[13px]">Cancel</span> : <><Pencil size={15} /><span className="text-[13px]">Edit</span></>}

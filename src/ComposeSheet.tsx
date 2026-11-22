@@ -23,14 +23,49 @@ export const PANES: { section: SectionId; label: string }[] = [
 ];
 
 
-// A pull UP has nowhere to rest — it hands the sheet off to another one — so it drags at a
-// third of the finger, no further than the cap, and springs home once it has been answered.
-const PULL_DIVISOR = 3;
-const PULL_CAP = 64;
-// A decisive pull up: this far, or a shorter flick with real upward speed.
-const PULL_COMMIT_PX = 44;
+// A pull UP has nowhere to rest: it hands the sheet off to another one (the card sheet → the
+// full panel). So it doesn't wait for the finger to lift. The sheet rises at half the finger's
+// speed and, the moment the finger is PULL_COMMIT_PX above where it landed, the next sheet takes
+// over, mid-swipe. On release a shorter pull still counts unless the finger was heading back
+// down, and so does a quick flick.
+const PULL_DIVISOR = 2;
+const PULL_CAP = 48;
+const PULL_COMMIT_PX = 32;
+const PULL_RELEASE_PX = 20;
+const FLICK_UP_PX = 14;
+const FLICK_UP_V = 0.4;
+// A pull DOWN dismisses on release: past this share of the sheet's height, or a flick this fast.
+const DISMISS_SHARE = 0.28;
+const FLICK_DOWN_PX = 24;
+const FLICK_DOWN_V = 0.5;
 // Coming back this far from the furthest point of a drag, in either direction, cancels it.
 const REVERSE_PX = 20;
+// Under this much movement a touch is still a tap, and the control under the finger keeps it.
+// Past it, a mostly-vertical move belongs to the sheet; a mostly-sideways one is let go.
+const SLOP_PX = 8;
+// Release speed is averaged over the end of the drag, not read off the last sample: at 120Hz the
+// finger's last few pixels as it lifts are mostly wobble, and that wobble used to read as a
+// reversal and cancel the pull.
+const VELOCITY_WINDOW_MS = 90;
+
+// A sheet that REPLACES another (the card sheet's pull-up, or its Edit button, opening the full
+// panel) grows out of it. It starts with its top edge where the old sheet's top edge was and
+// rises from there, instead of the old one vanishing and the new one sliding up from the bottom
+// of the screen. noteSheetHandoff() records that edge just before the swap; the next bottom sheet
+// to mount within HANDOFF_FRESH_MS starts from it.
+const HANDOFF_FRESH_MS = 600;
+const GROW_MS = 440;
+const GROW_EASE = 'cubic-bezier(0.32, 0.72, 0, 1)';
+let sheetHandoff: { top: number; at: number } | null = null;
+export function noteSheetHandoff(sheet?: Element | null) {
+  const el = sheet ?? Array.from(document.querySelectorAll('[data-msheet]')).pop();
+  if (el) sheetHandoff = { top: el.getBoundingClientRect().top, at: performance.now() };
+}
+// Read during render, so the new sheet's first frame can skip its slide-in; cleared by its layout
+// effect, never in render, because StrictMode renders twice.
+function peekSheetHandoff() {
+  return sheetHandoff && performance.now() - sheetHandoff.at < HANDOFF_FRESH_MS ? sheetHandoff.top : null;
+}
 
 export function SheetShell({ onClose, onSwipeDown, onSwipeUp, handle = false, floor = 1 / 3, maxWidth, placement = 'bottom', children }: {
   onClose: () => void;
@@ -39,11 +74,12 @@ export function SheetShell({ onClose, onSwipeDown, onSwipeUp, handle = false, fl
   /** 'bottom' (phone): docked to the bottom edge, full-bleed. 'center' (desktop): a floating
    *  panel in the middle of the window, sized to its content, touching no edge. */
   placement?: 'bottom' | 'center';
-  /** Pull DOWN anywhere on the sheet that isn't a control (chip, field, button, chip track)
-   *  — and from the top of a scrolled body — runs this. Usually the same commit as onClose. */
+  /** Pull DOWN anywhere on the sheet, capsules and buttons included (the drag engine below has
+   *  the few exceptions), runs this. Usually the same commit as onClose. */
   onSwipeDown?: () => void;
-  /** Pull UP over the same area runs this — for a sheet that expands into another one. Unset
-   *  (the compose sheet) leaves upward drags to the page, so a scroll body still scrolls. */
+  /** Pull UP runs this, mid-swipe: for a sheet that expands into another one, which then grows
+   *  out of this one's top edge. Unset (the compose sheet) leaves upward drags to the page, so a
+   *  scroll body still scrolls. */
   onSwipeUp?: () => void;
   /** Show the grab pill. Purely a hint now: the whole sheet answers the gesture. */
   handle?: boolean;
@@ -117,20 +153,25 @@ export function SheetShell({ onClose, onSwipeDown, onSwipeUp, handle = false, fl
   const lockedMin = Math.min(vvBox.height, Math.max(sheetFloor, docked));
 
   // DRAG, the way the system sheets do it. DOWN dismisses: the sheet follows the finger 1:1
-  // and only on release is anything decided — past ~28% of its height, or a decisive flick, it
-  // slides off the bottom edge and THEN closes; otherwise it springs back. UP expands, for a
-  // sheet that has somewhere to go (the card sheet hands off to the full panel): it drags
-  // against resistance, because there is no second position to park in, and springs home once
-  // the pull has been answered. Nothing happens on a small move, which is what the old "36px
-  // and it's gone" felt like.
+  // and only on release is anything decided — past DISMISS_SHARE of its height, or a decisive
+  // flick, it slides off the bottom edge and THEN closes; otherwise it springs back. UP expands,
+  // for a sheet that has somewhere to go (the card sheet hands off to the full panel): it rises
+  // against resistance, and the hand-off fires mid-swipe as soon as the pull is unmistakable
+  // (PULL_COMMIT_PX), so it never hangs on release rules.
+  //
+  // WHERE a drag can start: anywhere on the sheet, capsules, buttons and an idle title field
+  // included. A touch only becomes the sheet's once it has moved SLOP_PX, mostly vertically;
+  // until then it is a tap and the control under it keeps it, and after a drag the touchend is
+  // cancelled so that control never also gets a click. (Controls used to be off limits, which
+  // left the card sheet nothing to grab but the gaps between its capsule rows: most swipes
+  // landed on a capsule and did nothing, hence "five swipes to get it to go up".) The
+  // exceptions: a field being typed in keeps its touches (caret, selection), as does a native
+  // select; and in a scroll body, a body that has been scrolled is scrolling, while at its very
+  // top its controls stay theirs and a pull from anywhere else in it is decided on the FIRST
+  // move. That one can't wait out the slop: a move iOS has begun to scroll can't be cancelled.
   //
   // Native listeners, not React's: touchmove must be non-passive so the drag can preventDefault
-  // the scroll it would otherwise become — which is also what makes deciding on touchend safe
-  // at all, since iOS swallows the touchend of a drag it has turned into a scroll. A touch that
-  // begins on a control (chip, field, button, the chip track) is that control's; one inside a
-  // scroll body that has been scrolled is a scroll, so only from the very top does a pull count.
-  // Everything else on the sheet is the gesture's, which is why the card sheet no longer has a
-  // pull-up strip along its bottom: the whole panel answers.
+  // the scroll it would otherwise become, and touchend so a drag can cancel its click.
   const onSwipeDownRef = useRef(onSwipeDown);
   onSwipeDownRef.current = onSwipeDown;
   const onSwipeUpRef = useRef(onSwipeUp);
@@ -138,53 +179,94 @@ export function SheetShell({ onClose, onSwipeDown, onSwipeUp, handle = false, fl
   useEffect(() => {
     const el = sheetRef.current;
     if (!el || !(onSwipeDownRef.current || onSwipeUpRef.current)) return;
-    let drag: { y0: number; dy: number; maxDown: number; maxUp: number; lastY: number; lastT: number; v: number } | null = null;
+    let drag: {
+      id: number; x0: number; y0: number;
+      inBody: boolean;     // began inside a scroll body (at its top)
+      claimed: boolean;    // past the slop and vertical: the sheet owns this touch now
+      base: number;        // the finger's y when claimed; the sheet's offset counts from here
+      maxDown: number;
+      trail: { t: number; y: number }[];
+    } | null = null;
     let leaving = false;
+    const touchOf = (list: TouchList, id: number) => {
+      for (let i = 0; i < list.length; i++) if (list[i].identifier === id) return list[i];
+      return null;
+    };
+    const home = () => {
+      el.style.transition = 'transform 260ms cubic-bezier(0.2, 0.9, 0.3, 1.1)';
+      el.style.transform = 'translateY(0)';
+    };
+    const expand = () => {
+      drag = null;
+      leaving = true;
+      noteSheetHandoff(el);                      // the next sheet grows from this one's top edge
+      onSwipeUpRef.current?.();
+      // The swap unmounts this sheet. Should it ever stay up, put it back where it was.
+      window.setTimeout(() => { if (el.isConnected) { leaving = false; home(); } }, 400);
+    };
     const onStart = (e: TouchEvent) => {
-      if (leaving) return;
+      if (leaving || drag || e.touches.length !== 1) return;
       const target = e.target as Element;
-      if (target.closest('button, input, textarea, select, a, [data-chip-track]')) return;
+      const field = target.closest('input, textarea, select, [contenteditable="true"]');
+      if (field && (field === document.activeElement || field.tagName === 'SELECT')) return;
       const body = target.closest<HTMLElement>('[data-sheet-scroll]');
-      if (body && body.scrollTop > 0) return;
+      if (body && (body.scrollTop > 0 || target.closest('button, input, textarea, select, a, [data-chip-track]'))) return;
       const t = e.touches[0];
-      drag = { y0: t.clientY, dy: 0, maxDown: 0, maxUp: 0, lastY: t.clientY, lastT: e.timeStamp, v: 0 };
-      el.style.transition = 'none';
+      drag = { id: t.identifier, x0: t.clientX, y0: t.clientY, inBody: !!body, claimed: false, base: t.clientY, maxDown: 0, trail: [{ t: e.timeStamp, y: t.clientY }] };
     };
     const onMove = (e: TouchEvent) => {
       if (!drag) return;
-      const t = e.touches[0];
-      const dy = t.clientY - drag.y0;                   // signed: + down, - up
-      const dt = Math.max(1, e.timeStamp - drag.lastT);
-      drag.v = (t.clientY - drag.lastY) / dt;           // px per ms, + = downward
-      drag.lastY = t.clientY; drag.lastT = e.timeStamp; drag.dy = dy;
-      drag.maxDown = Math.max(drag.maxDown, dy);
-      drag.maxUp = Math.max(drag.maxUp, -dy);
-      const down = dy > 0 && !!onSwipeDownRef.current;
-      const up = dy < 0 && !!onSwipeUpRef.current;
-      if (down || up) e.preventDefault();                // the sheet moves, not the page
-      el.style.transform = `translateY(${down ? dy : up ? Math.max(dy / PULL_DIVISOR, -PULL_CAP) : 0}px)`;
+      const t = touchOf(e.touches, drag.id);
+      if (!t) return;
+      const rise = drag.y0 - t.clientY;                // finger travel since it landed, + = up
+      if (!drag.claimed) {
+        const dx = t.clientX - drag.x0;
+        if (!drag.inBody) {
+          if (Math.hypot(dx, rise) < SLOP_PX) return;   // still a tap
+          if (Math.abs(dx) > Math.abs(rise)) { drag = null; return; }   // sideways: not ours
+        } else if (rise === 0) return;
+        // A direction this sheet has no use for is left alone (up on the compose sheet: its body
+        // scrolls).
+        if (!(rise < 0 ? onSwipeDownRef.current : onSwipeUpRef.current)) { drag = null; return; }
+        drag.claimed = true;
+        drag.base = t.clientY;
+        el.style.transition = 'none';
+      }
+      e.preventDefault();                              // the sheet moves, not the page
+      drag.trail.push({ t: e.timeStamp, y: t.clientY });
+      if (drag.trail.length > 32) drag.trail.shift();
+      if (rise >= PULL_COMMIT_PX && onSwipeUpRef.current) { expand(); return; }
+      const off = t.clientY - drag.base;              // the sheet's offset, + = down
+      drag.maxDown = Math.max(drag.maxDown, off);
+      const down = off > 0 && !!onSwipeDownRef.current;
+      const up = off < 0 && !!onSwipeUpRef.current;
+      el.style.transform = `translateY(${down ? off : up ? Math.max(off / PULL_DIVISOR, -PULL_CAP) : 0}px)`;
     };
-    const onEnd = () => {
+    const onEnd = (e: TouchEvent) => {
       if (!drag) return;
-      const { dy, v, maxDown, maxUp } = drag;
+      const t = touchOf(e.changedTouches, drag.id);
+      if (!t) return;
+      const d = drag;
       drag = null;
-      const home = () => {
-        el.style.transition = 'transform 260ms cubic-bezier(0.2, 0.9, 0.3, 1.1)';
-        el.style.transform = 'translateY(0)';
-      };
-      // Changing your mind wins, in both directions: coming back REVERSE_PX from the furthest
-      // point of the drag, or letting go with momentum against it, cancels. A twitch of a few
-      // pixels doesn't count as reversing.
-      if (dy < 0 && onSwipeUpRef.current) {
-        const reversed = (maxUp + dy) >= REVERSE_PX || v > 0.3;
-        home();                                          // the sheet always returns; the expand
-        if (!reversed && (-dy > PULL_COMMIT_PX || (v < -0.6 && -dy > 20))) onSwipeUpRef.current();
+      if (!d.claimed) return;                          // a tap: its control gets the click
+      if (e.cancelable) e.preventDefault();            // a drag never also clicks what it began on
+      // Speed over the last VELOCITY_WINDOW_MS, measured up to the lift itself, so a finger that
+      // stopped before letting go reads as still. px/ms, + = downward.
+      const from = d.trail.find((p) => e.timeStamp - p.t <= VELOCITY_WINDOW_MS);
+      const v = from ? (t.clientY - from.y) / Math.max(16, e.timeStamp - from.t) : 0;
+      const rise = d.y0 - t.clientY;
+      const off = t.clientY - d.base;
+      if (off < 0 && onSwipeUpRef.current) {
+        if ((rise >= PULL_RELEASE_PX && v <= 0.25) || (rise >= FLICK_UP_PX && v <= -FLICK_UP_V)) expand();
+        else home();
         return;
       }
       if (!onSwipeDownRef.current) { home(); return; }
+      // Changing your mind wins: coming back REVERSE_PX from the furthest point of the drag, or
+      // letting go while heading back up, cancels.
       const h = el.offsetHeight || 1;
-      const reversed = (maxDown - dy) >= REVERSE_PX || v < -0.3;
-      const commit = !reversed && (dy > h * 0.28 || (v > 0.6 && dy > 24));
+      const reversed = (d.maxDown - off) >= REVERSE_PX || v < -0.3;
+      const commit = !reversed && (off > h * DISMISS_SHARE || (v > FLICK_DOWN_V && off > FLICK_DOWN_PX));
       if (commit) {
         leaving = true;
         el.style.transition = 'transform 220ms cubic-bezier(0.32, 0.72, 0, 1)';
@@ -198,17 +280,42 @@ export function SheetShell({ onClose, onSwipeDown, onSwipeUp, handle = false, fl
         home();
       }
     };
+    // The system took the touch (a notification pull, a call): put the sheet back, decide nothing.
+    const onCancel = (e: TouchEvent) => {
+      if (!drag || !touchOf(e.changedTouches, drag.id)) return;
+      const claimed = drag.claimed;
+      drag = null;
+      if (claimed) home();
+    };
     el.addEventListener('touchstart', onStart, { passive: true });
     el.addEventListener('touchmove', onMove, { passive: false });
-    el.addEventListener('touchend', onEnd, { passive: true });
-    el.addEventListener('touchcancel', onEnd, { passive: true });
+    el.addEventListener('touchend', onEnd, { passive: false });
+    el.addEventListener('touchcancel', onCancel, { passive: true });
     return () => {
       el.removeEventListener('touchstart', onStart);
       el.removeEventListener('touchmove', onMove);
       el.removeEventListener('touchend', onEnd);
-      el.removeEventListener('touchcancel', onEnd);
+      el.removeEventListener('touchcancel', onCancel);
     };
   }, []);
+
+  // Growing out of the sheet this one replaced (see noteSheetHandoff): start with the top edge
+  // where the old sheet's was, then rise to the natural height. The slide-in is skipped for it.
+  const [growFrom] = useState(() => (centered ? null : peekSheetHandoff()));
+  useLayoutEffect(() => {
+    if (growFrom == null) return;
+    sheetHandoff = null;
+    const el = sheetRef.current;
+    if (!el) return;
+    el.style.transition = 'none';
+    el.style.transform = 'none';
+    const delta = growFrom - el.getBoundingClientRect().top;
+    if (delta <= 1) { el.style.transform = ''; return; }
+    el.style.transform = `translateY(${delta}px)`;
+    void el.offsetHeight;                              // commit the start so it transitions
+    el.style.transition = `transform ${GROW_MS}ms ${GROW_EASE}`;
+    el.style.transform = 'translateY(0)';
+  }, [growFrom]);
   useEffect(() => {
     const vv = window.visualViewport;
     const update = () => {
@@ -276,9 +383,10 @@ export function SheetShell({ onClose, onSwipeDown, onSwipeUp, handle = false, fl
           // the Save row's own padding, was the "button floating on a panel twice its height".
           paddingBottom: keyboardUp ? 10 : 'calc(env(safe-area-inset-bottom) + 6px)',
           // willChange keeps the drag on the compositor; the entry animation still runs
-          // first and hands the transform over to the drag engine when it ends.
+          // first and hands the transform over to the drag engine when it ends. A sheet that
+          // grows out of another (growFrom) has no slide-in: its layout effect moves it.
           willChange: 'transform',
-          animation: 'msheet-up 240ms cubic-bezier(0.16, 1, 0.3, 1)',
+          animation: growFrom == null ? 'msheet-up 240ms cubic-bezier(0.16, 1, 0.3, 1)' : undefined,
         }}
       >
         {/* The system's 5x36 pill. A hint: the whole sheet drags, not just this. */}
@@ -649,9 +757,9 @@ export function ComposeSheet({ listSequence, projects, clients, people, currentU
   const primaryLabel = isEdit || title.trim() || addedCount === 0 ? 'Save' : 'Done';
   const primaryEnabled = isEdit ? !!title.trim() : !!title.trim() || addedCount > 0;
   return (
-    // Opens at ~62% and only grows. Pull down anywhere that isn't a control saves and
-    // closes — the same commit the backdrop and the X run; a half-filled task is never
-    // thrown away.
+    // Opens at ~62% and only grows. Pull down saves and closes (the same commit the backdrop and
+    // the X run; a half-filled task is never thrown away): from anywhere above the body, buttons
+    // included, and from the body itself when it is scrolled to the top, off its capsules.
     <SheetShell onClose={commitAndClose} onSwipeDown={commitAndClose} handle={!desktop} floor={desktop ? 0 : 0.62} maxWidth={maxWidth} placement={desktop ? 'center' : 'bottom'}>
       {/* pt: the title used to sit hard against the handle. Same grey as the section labels
           below it — it is a label for the panel, not content. */}

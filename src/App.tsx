@@ -5042,12 +5042,19 @@ const FOCUS_COL_MIN = 240;
 const FOCUS_BAR_MIN = 120;
 const FOCUS_BAR_FR = 0.25;
 const focusTrack = (open: boolean) => (open ? `minmax(${FOCUS_COL_MIN}px, 1fr)` : `minmax(${FOCUS_BAR_MIN}px, ${FOCUS_BAR_FR}fr)`);
+// The morph's tempo. index.css writes every duration and delay of the film at the original
+// v0.7.23 tempo and multiplies it by --fc-k, which the grid sets to 1 / FOCUS_MORPH_SPEED, so this
+// one number speeds the whole thing up or slows it down without touching its ease-in / ease-out
+// curves or the order of its beats. 3 (v0.7.24): opening ~500ms, closing ~250ms.
+const FOCUS_MORPH_SPEED = 3;
+const focusMorphMs = (ms: number) => Math.ceil(ms / FOCUS_MORPH_SPEED);
 // How long each direction of the morph runs before the column settles. They must cover the
-// beats in index.css: the last ink stroke (opening), the tiles back inside the bar (closing).
-const FOCUS_OPEN_MS = 1500;
-const FOCUS_CLOSE_MS = 820;
+// beats in index.css: the last ink stroke (opening: 520 + 14×24 + 640 = 1496 at tempo 1), the
+// tiles back inside the bar (closing: 440 + 320 = 760). A little to spare on top.
+const FOCUS_OPEN_MS = focusMorphMs(1500) + 20;
+const FOCUS_CLOSE_MS = focusMorphMs(820) + 20;
 // A click within this long of the previous one is a change of mind mid-morph (see openFocusCol).
-const FOCUS_TURN_ROUND_MS = 600;
+const FOCUS_TURN_ROUND_MS = focusMorphMs(600);
 // The ink draws on card by card down the column; from this one on, the rest go together
 // (they are below the fold anyway).
 const FOCUS_INK_STAGGER_CAP = 14;
@@ -12691,7 +12698,7 @@ export default function App() {
               {/* The four day tracks are the accordion: Today and the open one of Tomorrow /
                   Next / Hold at minmax(240px, 1fr), the two folded ones at minmax(120px, 0.25fr).
                   .focus-grid transitions the template, so a click re-divides the widths smoothly. */}
-              <div className="focus-grid grid gap-0 flex-1 min-h-0 w-full overflow-x-auto" style={{ gridTemplateColumns: PIP_MODE ? '1fr 1fr 1fr' : `${stackSide ? sideW : sideW * 2}px ${[true, focusOpenCol === 'tomorrow', focusOpenCol === 'next', focusOpenCol === 'hold'].map(focusTrack).join(' ')}`, transitionDelay: focusTurnRound ? '0ms' : undefined }}>
+              <div className="focus-grid grid gap-0 flex-1 min-h-0 w-full overflow-x-auto" style={{ gridTemplateColumns: PIP_MODE ? '1fr 1fr 1fr' : `${stackSide ? sideW : sideW * 2}px ${[true, focusOpenCol === 'tomorrow', focusOpenCol === 'next', focusOpenCol === 'hold'].map(focusTrack).join(' ')}`, transitionDelay: focusTurnRound ? '0ms' : undefined, ['--fc-k' as string]: 1 / FOCUS_MORPH_SPEED } as React.CSSProperties}>
                 {/* Column 1 — Projects panel: flat master list (milestones pinned on top);
                     clicking a project FILTERS the Dashboard stack + all three calendar
                     columns (focusProjectId). Active row shows an ×; click again to clear.
