@@ -92,15 +92,80 @@ export function onAuthHealth(listener: (h: AuthHealth) => void): () => void {
 // THROW (a cold-started function deserves a retry) — but both report to the
 // health store so the UI can surface a real screen instead of spinning.
 
+// ── Launch fast path ──────────────────────────────────────────────────────────────────────
+// The user id of the session supabase-js persisted, read straight from localStorage — no
+// network. getSession() can't be used for this: it REFRESHES an expired access token before it
+// resolves, which is a network round trip on every launch more than an hour after the last.
+// Identity only; nothing here is trusted for access — the token mint and RLS still decide that.
+export function peekSessionUserId(): string | null {
+  try {
+    for (let i = 0; i < window.localStorage.length; i++) {
+      const key = window.localStorage.key(i);
+      if (!key || !/^sb-.+-auth-token$/.test(key)) continue;
+      const v = JSON.parse(window.localStorage.getItem(key) || 'null') as { user?: { id?: unknown }; currentSession?: { user?: { id?: unknown } } } | null;
+      const id = v?.user?.id ?? v?.currentSession?.user?.id;
+      if (typeof id === 'string' && id) return id;
+    }
+  } catch { /* storage unavailable or corrupt — take the slow path */ }
+  return null;
+}
+
+// The last Liveblocks token this device was given. The FIRST auth of a page load may reuse it
+// while it has more than 5 minutes left, which skips the liveblocks-auth edge function (and its
+// cold start) on a quick relaunch. Every later auth — Liveblocks re-auths on expiry and after a
+// rejected token — mints a fresh one, so a bad cached token costs one retry, never a lockout.
+// Same exposure as the Supabase refresh token already sitting in localStorage, but narrower:
+// one room, at most an hour.
+const LB_TOKEN_KEY = 'ctrl-lb-token';
+let lbAuthCalls = 0;
+function jwtExpMs(token: string): number | null {
+  try {
+    const part = token.split('.')[1];
+    const payload = JSON.parse(atob(part.replace(/-/g, '+').replace(/_/g, '/'))) as { exp?: unknown };
+    return typeof payload.exp === 'number' ? payload.exp * 1000 : null;
+  } catch { return null; }
+}
+function readLbToken(room: string | undefined, userId: string | null): string | null {
+  if (!userId) return null;
+  try {
+    const c = JSON.parse(window.localStorage.getItem(LB_TOKEN_KEY) || 'null') as { token?: string; room?: string; userId?: string; exp?: number } | null;
+    if (!c?.token || c.userId !== userId || c.room !== (room ?? '') || !c.exp) return null;
+    return c.exp - Date.now() > 5 * 60 * 1000 ? c.token : null;
+  } catch { return null; }
+}
+function writeLbToken(room: string | undefined, userId: string, token: string): void {
+  const exp = jwtExpMs(token);
+  if (!exp) return;
+  try { window.localStorage.setItem(LB_TOKEN_KEY, JSON.stringify({ token, room: room ?? '', userId, exp })); } catch { /* ignore */ }
+}
+export function clearLbToken(): void {
+  try { window.localStorage.removeItem(LB_TOKEN_KEY); } catch { /* ignore */ }
+}
+
 export async function liveblocksAuthEndpoint(room?: string): Promise<{ token: string } | { error: string; reason: string }> {
   if (!supabase || !FUNCTIONS_URL) {
     setAuthHealth({ status: 'unreachable', detail: 'Supabase not configured' });
     throw new Error('Supabase not configured');
   }
+  if (lbAuthCalls++ === 0) {
+    const cached = readLbToken(room, peekSessionUserId());
+    if (cached) {
+      setAuthHealth({ status: 'ok' });
+      return { token: cached };
+    }
+  }
   // getSession() refreshes an expired token — never capture the token in a
   // closure; a mounted room re-auths ~hourly and a stale JWT would 401 forever.
-  const { data: { session } } = await supabase.auth.getSession();
+  const { data: { session }, error: sessionError } = await supabase.auth.getSession();
   if (!session) {
+    // No session because the REFRESH failed (offline, auth down) while one is still stored:
+    // transient, so THROW and let Liveblocks retry with backoff. Returning 'forbidden' here
+    // would make it disconnect for good, leaving an offline launch stranded once the network
+    // came back.
+    if (sessionError && peekSessionUserId()) {
+      setAuthHealth({ status: 'unreachable', detail: sessionError.message });
+      throw new Error(`session refresh failed: ${sessionError.message}`);
+    }
     setAuthHealth({ status: 'forbidden', detail: 'signed out' });
     return { error: 'forbidden', reason: 'signed out' };
   }
@@ -128,7 +193,9 @@ export async function liveblocksAuthEndpoint(room?: string): Promise<{ token: st
     throw new Error(`liveblocks-auth failed: ${res.status}`);
   }
   setAuthHealth({ status: 'ok' });
-  return await res.json() as { token: string };
+  const body = await res.json() as { token: string };
+  if (body?.token) writeLbToken(room, session.user.id, body.token);
+  return body;
 }
 
 // ---------------------------------------------------------------------------
@@ -139,7 +206,7 @@ export async function liveblocksAuthEndpoint(room?: string): Promise<{ token: st
 // Display-convenience only: a revoked member's Liveblocks token mint still
 // 403s server-side the moment the network is back.
 const MEMBERSHIP_CACHE_KEY = 'ctrl-membership-cache';
-function readMembershipCache(userId: string): Membership | null {
+export function readMembershipCache(userId: string): Membership | null {
   try {
     const raw = window.localStorage.getItem(MEMBERSHIP_CACHE_KEY);
     if (!raw) return null;
@@ -352,5 +419,6 @@ export async function signInWithPassword(email: string, password: string): Promi
 export async function signOut(): Promise<void> {
   if (!supabase) return;
   clearMembershipCache();
+  clearLbToken();
   await supabase.auth.signOut({ scope: 'local' });
 }

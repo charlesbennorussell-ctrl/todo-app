@@ -173,7 +173,7 @@ function TauriTitlebar() {
 
 /** Applies the room's theme to the CSS custom properties. Call once per surface (App, MobileApp). */
 export function useSharedTheme(): void {
-  const theme = useStorage((root) => (root as unknown as { theme?: { bg?: string; accent?: string; highlight?: string } }).theme);
+  const theme = useRoomStorage((root) => (root as unknown as { theme?: { bg?: string; accent?: string; highlight?: string } }).theme);
   const bg = theme?.bg;
   const accent = migrateAccent(theme?.accent);
   const highlight = theme?.highlight;
@@ -232,7 +232,7 @@ function readSubGroupCache(): SubGroupPrefs {
 
 /** The room's sub-grouping switches. Call once per surface (App, MobileApp). */
 export function useSharedSubGroup(): SubGroupPrefs {
-  const room = useStorage((root) => (root as unknown as { subGroup?: Partial<SubGroupPrefs> }).subGroup);
+  const room = useRoomStorage((root) => (root as unknown as { subGroup?: Partial<SubGroupPrefs> }).subGroup);
   // Read once per mount. After that the room is authoritative, and re-reading would let the
   // cache-write effect below feed its own output back in.
   const [cache] = useState(readSubGroupCache);
@@ -262,7 +262,7 @@ export function useSetSharedSubGroup() {
 /** The room's auto-capitalisation mode, falling back to this device's cached value pre-connect
  *  (and on rooms created before the key existed). Same room-wins shape as useSharedTheme. */
 export function useSharedCaseMode(): CaseMode {
-  const roomMode = useStorage((root) => (root as unknown as { caseMode?: CaseMode }).caseMode);
+  const roomMode = useRoomStorage((root) => (root as unknown as { caseMode?: CaseMode }).caseMode);
   // Mirror the resolved value down into this device's cache so the NEXT cold start is
   // already right before Storage answers. Guarded on the room having actually spoken —
   // writing the fallback back down would just cement whatever this device already had.
@@ -821,6 +821,9 @@ if (typeof document !== 'undefined') {
 let recentEditBlurAt = 0;
 
 import { useStorage, useMutation, useUndo, useRedo } from '@liveblocks/react/suspense';
+// The three room settings the PHONE reads (theme / sub-grouping / case) go through the instant-launch
+// layer so the phone can paint from its snapshot; everything else here stays on the suspense hooks.
+import { useStorage as useRoomStorage } from './instant';
 import { uploadFocusImage, deleteFocusImageBlob, SUPABASE_BUCKET } from './supabase';
 import { getCachedImageUrl, getCachedImageUrlSync, evictCachedImage, readCachedBlob } from './imageCache';
 import { consumeOauthRedirect, openLightroomAuth, hasLightroomAuth, resolveShareUrl, fetchAlbumAssets, fetchAssetBlob } from './lightroom';

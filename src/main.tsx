@@ -12,8 +12,10 @@ import {
   MembershipContext, type Membership,
   fetchMembership, liveblocksAuthEndpoint, getAuthHealth, onAuthHealth,
   captureInviteToken, clearInviteToken, redeemInviteAuthed, signOut,
+  peekSessionUserId, readMembershipCache, clearLbToken, IS_TAURI,
 } from './auth';
 import { SignInScreen, InviteJoinScreen, NoAccessScreen, AuthTroubleScreen } from './AuthScreens';
+import { LiveBridge, bootFromSnapshot, clearSnapshots } from './instant';
 
 // Mobile-vs-desktop router. matchMedia is reactive — rotating an iPad or resizing a
 // desktop browser across 768px hot-swaps mid-session. Overrides for testing:
@@ -51,6 +53,33 @@ const AUTH_ENABLED = (import.meta.env.VITE_AUTH_ENABLED as string | undefined) =
 // looks exactly like total data loss to the person staring at demo tasks.
 const ROOM_ALLOWLIST = new Set(['todo-app-v3', 'todo-app-sandbox-dev']);
 const roomIdValid = ROOM_ALLOWLIST.has(roomId);
+
+// ── Instant launch (phone) ──────────────────────────────────────────────────────────────────
+// The phone shell opens on this device's last-synced copy of the room (src/instant.ts) instead
+// of a black screen, IF everything needed to skip the network is already here: a persisted
+// Supabase session, the cached membership row for that user, and a snapshot saved for that same
+// user. The real checks still run — immediately, in the background — and a signed-out or revoked
+// account is taken to the right screen and its snapshot deleted. Access was never decided on the
+// client: the token mint (and, for the members row, RLS) is the gate, and that hasn't moved.
+// Decided ONCE at boot. The desktop app, the PIP window and any first launch take the old path.
+const BOOT_MOBILE = !FORCE_DESKTOP && (FORCE_MOBILE || (typeof window !== 'undefined' && window.matchMedia(MOBILE_BREAKPOINT).matches));
+let instantMember: Membership | null = null;
+async function prepareInstantBoot(): Promise<void> {
+  if (!BOOT_MOBILE || !roomIdValid) return;
+  if (AUTH_ENABLED) {
+    const userId = peekSessionUserId();
+    const member = userId ? readMembershipCache(userId) : null;
+    if (!userId || !member || member.removed_at) return;
+    if (await bootFromSnapshot(roomId, userId)) instantMember = member;
+  } else if (publicApiKey) {
+    await bootFromSnapshot(roomId, 'public');
+  }
+}
+/** Signed out or access lost: nothing of the room may stay on the device for the next person. */
+function forgetDevice(): void {
+  clearLbToken();
+  void clearSnapshots();
+}
 
 // New rooms get seeded from initialStorage. Demo data is a dev convenience
 // only — a production build must never plant demo tasks anywhere.
@@ -330,6 +359,10 @@ const Providers = ({ member }: { member: Membership | null }) => (
           subGroup: { today: false, tomorrow: false, next: true },
         }}
       >
+        {/* Outside the Suspense boundary on purpose: it is what flips the app live (see
+            src/instant.ts), so it must never be the thing waiting. The phone also keeps its
+            launch snapshot fresh through it; the desktop doesn't save one. */}
+        <LiveBridge persistKey={BOOT_MOBILE ? { roomId, userId: member?.user_id ?? 'public' } : null} />
         <ClientSideSuspense fallback={<Loading />}>
           <SplashGate>
             <Connected />
@@ -364,7 +397,11 @@ type GatePhase =
 const BOOT_STALL_MS = 12000;
 
 const AuthGate = () => {
-  const [phase, setPhase] = useState<GatePhase>({ k: 'boot' });
+  // Instant launch starts already inside the room on the cached identity; evaluate() below then
+  // confirms it SILENTLY (see `silent`) instead of dropping back to the launch screen.
+  const [phase, setPhase] = useState<GatePhase>(() => (instantMember ? { k: 'member', member: instantMember } : { k: 'boot' }));
+  const phaseRef = useRef(phase);
+  phaseRef.current = phase;
   const evaluatingRef = useRef(false);
   // A SIGNED_IN that arrives while an evaluate is already in flight must not
   // be silently dropped (the in-flight one may be deciding on stale state) —
@@ -377,10 +414,23 @@ const AuthGate = () => {
     try {
       const stashedToken = captureInviteToken();
       if (!session) {
+        const cur = phaseRef.current;
+        // getSession() also comes back empty when an expired access token couldn't be
+        // REFRESHED — offline, or the auth server down — while the session itself is still
+        // stored. Already in the room as that user: stay there (supabase-js retries the refresh
+        // on its own) rather than throwing them out to sign in again because of a bad signal.
+        // A real sign-out removes the stored session, so it still lands below.
+        if (cur.k === 'member' && peekSessionUserId() === cur.member.user_id) return;
+        if (cur.k === 'member') forgetDevice();
         setPhase(stashedToken ? { k: 'invite', token: stashedToken } : { k: 'signedOut' });
         return;
       }
-      setPhase({ k: 'checking' });
+      // Already inside the room as this same user (instant launch, or a re-check)? Then verify
+      // without leaving it: 'checking' renders the launch screen, which would unmount the room
+      // and throw away the screen the user is already reading.
+      const cur = phaseRef.current;
+      const silent = cur.k === 'member' && cur.member.user_id === session.user.id;
+      if (!silent) setPhase({ k: 'checking' });
       let result = await fetchMembership(session.user.id);
       // Happy-path auto-redeem: signed in + token in hand + not a member yet →
       // join silently, then re-check. Failures fall through to NoAccess where
@@ -395,12 +445,19 @@ const AuthGate = () => {
         result = await fetchMembership(session.user.id);
       }
       if (result.kind === 'error') {
-        setPhase({ k: 'trouble', detail: result.detail });
+        // Silent re-check that couldn't reach the server: stay in the room on the cached
+        // identity — the same call fetchMembership makes when it has a cached row to fall back
+        // on. The token mint will still refuse a revoked account.
+        if (!silent) setPhase({ k: 'trouble', detail: result.detail });
       } else if (result.kind === 'none') {
+        forgetDevice();
         setPhase({ k: 'noAccess', email: session.user.email || 'unknown' });
       } else {
         clearInviteToken(); // member + leftover token = already redeemed or moot
-        setPhase({ k: 'member', member: result.member });
+        const fresh = result.member;
+        // Keep the same object when nothing changed, so a silent re-check doesn't re-render the
+        // whole app through MembershipContext.
+        setPhase((p) => (p.k === 'member' && JSON.stringify(p.member) === JSON.stringify(fresh) ? p : { k: 'member', member: fresh }));
       }
     } finally {
       evaluatingRef.current = false;
@@ -431,6 +488,7 @@ const AuthGate = () => {
 
     const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === 'SIGNED_OUT') {
+        forgetDevice();
         setPhase({ k: 'signedOut' });
       } else if (event === 'SIGNED_IN') {
         cleanOAuthParams();
@@ -541,8 +599,27 @@ const Root = () => {
   return <Providers member={null} />;
 };
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
-  <React.StrictMode>
-    <Root />
-  </React.StrictMode>
-);
+// The snapshot read is the one thing worth waiting for before the first render: it is local,
+// capped at 500ms, and it is what lets the phone skip the network entirely. Everything else
+// renders the same as before.
+void prepareInstantBoot().catch(() => {}).finally(() => {
+  ReactDOM.createRoot(document.getElementById('root')!).render(
+    <React.StrictMode>
+      <Root />
+    </React.StrictMode>
+  );
+});
+
+// App-file cache for the PHONE (public/sw.js): the html, bundle, fonts and icons come from the
+// device instead of the network, so a launch costs no downloads. Production builds only, and
+// never in the desktop app — Tauri loads the live URL and updates through its own version
+// polling, which a cached shell would only delay. Registered at module load so the listener is
+// in place before 'load' can fire.
+if (import.meta.env.PROD && BOOT_MOBILE && !IS_TAURI && typeof navigator !== 'undefined' && 'serviceWorker' in navigator) {
+  const register = () => {
+    const base = import.meta.env.BASE_URL || '/';
+    navigator.serviceWorker.register(`${base}sw.js`, { scope: base, updateViaCache: 'none' }).catch(() => { /* unsupported / private mode */ });
+  };
+  if (document.readyState === 'complete') register();
+  else window.addEventListener('load', register, { once: true });
+}

@@ -17,7 +17,11 @@ export default defineConfig({
   },
   plugins: [react(), tailwindcss()],
   resolve: {
-    alias: [{ find: /^@liveblocks\/react\/suspense$/, replacement: resolve(__dirname, 'lb-mock.tsx') }],
+    alias: [
+      { find: /^@liveblocks\/react\/suspense$/, replacement: resolve(__dirname, 'lb-mock.tsx') },
+      // The plain entry — src/instant.ts reads through it.
+      { find: /^@liveblocks\/react$/, replacement: resolve(__dirname, 'lb-mock-plain.tsx') },
+    ],
   },
   server: { port: 5199, strictPort: true },
 });

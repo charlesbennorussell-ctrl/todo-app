@@ -10,6 +10,23 @@ let root: Root = {};
 const listeners = new Set<() => void>();
 const emit = () => listeners.forEach((l) => l());
 const subscribe = (l: () => void) => { listeners.add(l); return () => { listeners.delete(l); }; };
+export const __subscribe = subscribe;
+
+// Simulated room LOAD, for testing the instant-launch path (src/instant.ts). Loaded by default;
+// __delayLoad(ms) — or __delayLoad(null) for "until __finishLoad() is called" — makes Storage
+// unavailable until then: the suspense hooks below suspend, the plain ones (lb-mock-plain.tsx)
+// return null, exactly like Liveblocks before the room answers.
+let loaded = true;
+let resolveLoad: () => void = () => {};
+let loadPromise: Promise<void> = Promise.resolve();
+export function __delayLoad(ms: number | null) {
+  loaded = false;
+  loadPromise = new Promise<void>((r) => { resolveLoad = r; });
+  if (ms != null) window.setTimeout(() => __finishLoad(), ms);
+}
+export function __finishLoad() { if (loaded) return; loaded = true; resolveLoad(); emit(); }
+export function __isLoaded() { return loaded; }
+export function __loadPromise() { return loadPromise; }
 
 /** Replace the whole store (the page seeds it before mounting the app). */
 export function __seed(next: Root) { root = next; emit(); }
@@ -20,8 +37,10 @@ const storage = {
   get: (key: string) => root[key],
   set: (key: string, value: unknown) => { root = { ...root, [key]: value }; emit(); },
 };
+export const __storage = storage;
 
 export function useStorage<T>(selector: (root: any) => T): T {
+  if (!loaded) throw loadPromise;
   // useSyncExternalStore needs a stable snapshot while the store is unchanged; selectors may
   // build fresh objects, so cache per store identity.
   const cache = useRef<{ root: Root; value: T } | null>(null);

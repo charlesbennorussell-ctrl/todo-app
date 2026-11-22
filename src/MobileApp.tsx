@@ -34,7 +34,9 @@
 //   - text inputs commit on blur AND on input (predictive text fires no keydown)
 
 import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { useStorage, useMutation } from '@liveblocks/react/suspense';
+// Instant launch: these read the device's last-synced snapshot until the room is live, and
+// queue edits made in between — see src/instant.ts (and its replay rule) before adding a write.
+import { useStorage, useMutation, useIsLive, isLive, pendingCount, whenLive, useReconnect } from './instant';
 import {
   DndContext, DragOverlay, MeasuringStrategy, MouseSensor, TouchSensor,
   useSensor, useSensors, useDroppable, pointerWithin,
@@ -618,6 +620,9 @@ export default function MobileApp() {
         if (!res.ok) return;
         const manifest = await res.json() as { version: string; buildTime: string };
         if (cancelled || !manifest.buildTime || manifest.buildTime <= __BUILD_TIME__) return;
+        // Not while the app is still showing its launch snapshot: a reload now would throw
+        // away any edit queued for the room (src/instant.ts). whenLive() below re-runs this.
+        if (!isLive() || pendingCount() > 0) return;
         const typing = Date.now() - lastKeyAtRef.current < 15000;
         const dragging = document.body.classList.contains('dnd-dragging');
         if (typing || dragging) return;
@@ -627,6 +632,7 @@ export default function MobileApp() {
       } catch { /* network blip — next tick */ }
     };
     check();
+    void whenLive().then(() => { if (!cancelled) check(); });
     const id = window.setInterval(check, 60 * 1000);
     const onVis = () => { if (!document.hidden) check(); };
     document.addEventListener('visibilitychange', onVis);
@@ -898,6 +904,20 @@ export default function MobileApp() {
 
   const headerDate = new Date().toLocaleDateString('en-US', { weekday: 'long', month: 'long', day: 'numeric' });
 
+  // The launch snapshot → live hand-off (src/instant.ts) shows itself ONLY when it is slow: a
+  // quiet "Syncing" fades in after 1.5s, and turns into "Offline" — tap to retry — if the room
+  // still hasn't answered at 12s. A normal launch goes live long before either.
+  const syncLive = useIsLive();
+  const reconnect = useReconnect();
+  const [syncShown, setSyncShown] = useState(false);
+  const [syncStalled, setSyncStalled] = useState(false);
+  useEffect(() => {
+    if (syncLive) { setSyncShown(false); setSyncStalled(false); return; }
+    const a = window.setTimeout(() => setSyncShown(true), 1500);
+    const b = window.setTimeout(() => setSyncStalled(true), 12000);
+    return () => { window.clearTimeout(a); window.clearTimeout(b); };
+  }, [syncLive]);
+
   return (
     <DndContext
       sensors={sensors}
@@ -911,13 +931,24 @@ export default function MobileApp() {
         {/* Header — brand + date. LONG-PRESS it to open the layout diagnostic panel; that works
             inside the installed home-screen app, where you can't append ?debug=1 to the URL. */}
         <div
-          className="shrink-0 px-[18px] pt-[18px]"
+          className="shrink-0 px-[18px] pt-[18px] flex items-baseline justify-between gap-[12px]"
           onTouchStart={() => { holdRef.current = window.setTimeout(() => setDiag((d) => !d), 700); }}
           onTouchEnd={() => { if (holdRef.current) { window.clearTimeout(holdRef.current); holdRef.current = null; } }}
           onTouchCancel={() => { if (holdRef.current) { window.clearTimeout(holdRef.current); holdRef.current = null; } }}
           onDoubleClick={() => setDiag((d) => !d)}
         >
           <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[13px] text-white whitespace-nowrap">{headerDate}</p>
+          <button
+            type="button"
+            data-sync-label
+            tabIndex={-1}
+            aria-hidden={!syncShown}
+            onClick={syncStalled ? reconnect : undefined}
+            className="font-['Univers_BQ:55_Regular',sans-serif] text-[13px] text-[#5e5e5e] whitespace-nowrap transition-opacity duration-300 ease-[cubic-bezier(0.2,0,0,1)]"
+            style={{ opacity: syncShown ? 1 : 0, pointerEvents: syncShown ? 'auto' : 'none' }}
+          >
+            {syncStalled ? 'Offline' : 'Syncing'}
+          </button>
         </div>
         {/* Day switcher — the CTRL Assets toolbar paradigm: ONE rounded track with a lighter
             knob that slides to the active segment. No underline. The padding is measured in the

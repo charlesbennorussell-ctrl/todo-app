@@ -3,7 +3,8 @@
 // surfaces: the same chips, the same Personal-hides-Client rule, the same save-on-dismiss.
 // Imports nothing from App.tsx (App imports THIS), so there is no cycle.
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
-import { useMutation } from '@liveblocks/react/suspense';
+// Instant launch: works before the room is live (queues the write) — see src/instant.ts.
+import { useMutation } from './instant';
 import { motion } from 'motion/react';
 import { ChevronLeft, ChevronRight, Plus, X } from 'lucide-react';
 import type { Task, Project, Client, Person, ListId, SectionId } from './data';
