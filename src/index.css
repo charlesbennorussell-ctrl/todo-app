@@ -335,20 +335,85 @@ textarea:focus-visible,
 .focus-search-input::placeholder { color: #656464; }
 
 /* Desktop Focus accordion (FocusFoldBody in App.tsx). Today stays put; of Tomorrow / Next /
-   Hold one is open and two are folded bars. A click swaps them in overlapping beats:
-     0–480ms    the grid re-divides its widths (easeInOutQuart — liquid, no snap at either end)
-     0–120ms    the outgoing content fades out (120 = FOCUS_FOLD_OUT_MS; ease-out, so it is
-                actually gone when the swap lands)
-     240–440ms  the folded bar's counts fade in
-     320–540ms  the opening column's cards fade in, once it has mostly finished widening, so
-                they never visibly re-wrap while the column grows. */
-.focus-grid { transition: grid-template-columns 480ms cubic-bezier(0.76, 0, 0.24, 1); }
-.fc-out { opacity: 0; transition: opacity 120ms cubic-bezier(0.2, 0, 0, 1); }
-.fc-in-fold { animation: fc-fade-in 200ms cubic-bezier(0.2, 0, 0, 1) 120ms both; }
-.fc-in-open { animation: fc-fade-in 220ms cubic-bezier(0.2, 0, 0, 1) 200ms both; }
-.fc-count { animation: fc-fade-in 200ms cubic-bezier(0.2, 0, 0, 1) 140ms both; }
-@keyframes fc-fade-in { from { opacity: 0; } to { opacity: 1; } }
+   Hold one is open and the other two are plain bars under their titles. A click morphs them,
+   never through a blank frame (FOCUS_OPEN_MS / FOCUS_CLOSE_MS in App.tsx cover these beats):
+
+   OPENING   0-300ms    the bar dissolves into the column's cards. They arrive as blank tiles of
+                        the bar's own faint white, the bar fading out under them on the same
+                        curve, so over a tile the two always sum to the same brightness and only
+                        the gaps between tiles fade: the bar splits into the cards.
+             140-740ms  the column widens (the grid's own transition) and the tiles stretch
+             520ms on   the ink draws on, a soft left-to-right wipe, card by card down the
+                        column (24ms apart; FOCUS_INK_STAGGER_CAP)
+   CLOSING   0-160ms    the ink lifts
+             140-740ms  the column narrows
+             440-760ms  the tiles melt back into the bar
+
+   The widths, the bar and the tiles are transitions, so a click mid-morph turns them round from
+   wherever they got to (the ink's draw-on is a keyframe animation; see below). The grid waits
+   140ms so the closing column's ink is gone before the widths move; a click that lands mid-morph
+   skips that wait (openFocusCol in App.tsx). */
+.focus-grid { transition: grid-template-columns 600ms cubic-bezier(0.65, 0, 0.25, 1) 140ms; }
+
+.fc-bar {
+  /* The cards' own insets (mx-6, plus CustomScroll's 14px gutter on the right), so every tile
+     lands inside the bar's outline. */
+  position: absolute; left: 6px; right: 20px; top: 0; bottom: 8px;
+  border-radius: 3.333px;
+  background-color: rgb(255 255 255 / 0.03);
+  transition: opacity 320ms cubic-bezier(0.45, 0, 0.55, 1) 440ms, background-color 300ms ease;
+}
+.group\/fold:hover .fc-bar { background-color: rgb(255 255 255 / 0.05); }
+.fc-bar[data-fc="opening"], .fc-bar[data-fc="open"] {
+  opacity: 0;
+  transition: opacity 300ms cubic-bezier(0.45, 0, 0.55, 1), background-color 300ms ease;
+}
+
+.fc-cards {
+  position: relative; flex: 1 1 0%; min-height: 0; display: flex; flex-direction: column;
+  transition: opacity 300ms cubic-bezier(0.45, 0, 0.55, 1);
+}
+.fc-cards[data-fc="pre"] { opacity: 0; }
+/* Inert until the first lines of ink are up: the pointer is usually sitting on the column it
+   just clicked, and a hover-only control (a card's + and trash) must not pop in on a blank tile. */
+.fc-cards[data-fc="pre"], .fc-cards[data-fc="out"] { pointer-events: none; }
+.fc-cards[data-fc="in"] { animation: fc-inert 900ms; }
+@keyframes fc-inert { from, to { pointer-events: none; } }
+.fc-cards[data-fc="out"] { opacity: 0; transition: opacity 320ms cubic-bezier(0.45, 0, 0.55, 1) 440ms; }
+
+/* The ink: a gradient mask 2.5x the element's width, slid from fully off (100%) to fully on
+   (0%), so a soft edge sweeps across each line as it fades up. Only present mid-morph.
+   Drawing ON is a keyframe animation, not a transition, because some ink mounts a beat after
+   the morph starts (a column's scroll arrows appear once it has measured its overflow) and a
+   transition can't animate an element that wasn't there when it began: those popped in at
+   full strength over blank tiles. An animation runs from each element's own arrival. The
+   'pre' rule shares the selector so the flip to 'in' doesn't restart it. Lifting OFF stays a
+   transition, so it starts from wherever the drawing had got to. */
+.fc-cards[data-fc] [data-ink] {
+  -webkit-mask-image: linear-gradient(90deg, #000 40%, transparent 60%);
+  mask-image: linear-gradient(90deg, #000 40%, transparent 60%);
+  -webkit-mask-size: 250% 100%; mask-size: 250% 100%;
+  -webkit-mask-repeat: no-repeat; mask-repeat: no-repeat;
+  -webkit-mask-position: 0% 0; mask-position: 0% 0;
+}
+.fc-cards[data-fc="pre"] [data-ink], .fc-cards[data-fc="in"] [data-ink] {
+  animation: fc-ink-on 640ms cubic-bezier(0.22, 1, 0.36, 1) both;
+  animation-delay: calc(520ms + var(--ink-i, 0) * 24ms);
+}
+@keyframes fc-ink-on {
+  from { opacity: 0; -webkit-mask-position: 100% 0; mask-position: 100% 0; }
+  65% { opacity: 1; }
+  to { opacity: 1; -webkit-mask-position: 0% 0; mask-position: 0% 0; }
+}
+.fc-cards[data-fc="out"] [data-ink] {
+  /* Lifts evenly, then the mask resets out of sight. */
+  opacity: 0; -webkit-mask-position: 100% 0; mask-position: 100% 0;
+  transition-property: opacity, -webkit-mask-position, mask-position;
+  transition-duration: 160ms, 0s, 0s;
+  transition-timing-function: cubic-bezier(0.4, 0, 1, 1);
+  transition-delay: 0s, 160ms, 160ms;
+}
 @media (prefers-reduced-motion: reduce) {
-  .focus-grid, .fc-out { transition: none; }
-  .fc-in-fold, .fc-in-open, .fc-count { animation: none; }
+  .focus-grid, .fc-bar, .fc-cards, .fc-cards[data-fc] [data-ink] { transition: none !important; }
+  .fc-cards[data-fc="in"], .fc-cards[data-fc] [data-ink] { animation: none !important; }
 }

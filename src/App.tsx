@@ -1337,6 +1337,7 @@ function CustomScroll({
           <button
             type="button"
             onClick={() => stepScroll(-CUSTOM_SCROLL_STEP)}
+            data-ink
             className="absolute right-0 z-10 flex items-center justify-center text-[#656464] hover:text-white transition-colors"
             style={{ top: CUSTOM_SCROLL_TOP_PAD, width: CUSTOM_SCROLL_ARROW_BOX, height: CUSTOM_SCROLL_ARROW_BOX }}
             aria-label="Scroll up"
@@ -1349,6 +1350,7 @@ function CustomScroll({
           <button
             type="button"
             onClick={() => stepScroll(CUSTOM_SCROLL_STEP)}
+            data-ink
             className="absolute right-0 z-10 flex items-center justify-center text-[#656464] hover:text-white transition-colors"
             style={{ bottom: CUSTOM_SCROLL_BOTTOM_PAD, width: CUSTOM_SCROLL_ARROW_BOX, height: CUSTOM_SCROLL_ARROW_BOX }}
             aria-label="Scroll down"
@@ -1360,6 +1362,7 @@ function CustomScroll({
           {/* Pill thumb */}
           <div
             ref={thumbElRef}
+            data-ink
             className="absolute top-0 right-[4px] w-[6px] rounded-full cursor-pointer transition-colors z-10 bg-[#656464] hover:bg-[#8a8a8a]"
             style={{ height: CUSTOM_SCROLL_THUMB_H, willChange: 'transform' }}
             onPointerDown={onThumbDown}
@@ -5029,59 +5032,106 @@ function CalendarColumnDroppable({ date, children, className = 'min-w-[200px] fl
 
 // ─── Desktop Focus accordion ──────────────────────────────────────────────────────────────
 // Today is always open; of Tomorrow, Next and Hold exactly one is, and the other two fold into
-// narrow bars. Every day track is a minmax(px, fr) pair so the swap INTERPOLATES: Chromium
-// animates grid-template-columns only between track lists of the same shape, and a px↔fr or
-// fr↔minmax change would jump. A folded column takes 0.25fr against an open one's 1fr — about
-// 0.4 of the width it had when all four were equal — and the total stays 2.5fr either way, so
-// Today never moves while the other two trade places. The timing lives in index.css
-// (.focus-grid / .fc-*).
+// plain bars that carry nothing but their column's title. Every day track is a minmax(px, fr)
+// pair so the swap INTERPOLATES: Chromium animates grid-template-columns only between track
+// lists of the same shape, and a px↔fr or fr↔minmax change would jump. A folded column takes
+// 0.25fr against an open one's 1fr, and the total stays 2.5fr either way, so Today never moves
+// while the other two trade places. The choreography lives in index.css (.focus-grid / .fc-*).
 type FocusFoldCol = 'tomorrow' | 'next' | 'hold';
 const FOCUS_COL_MIN = 240;
 const FOCUS_BAR_MIN = 120;
 const FOCUS_BAR_FR = 0.25;
 const focusTrack = (open: boolean) => (open ? `minmax(${FOCUS_COL_MIN}px, 1fr)` : `minmax(${FOCUS_BAR_MIN}px, ${FOCUS_BAR_FR}fr)`);
-// How long the outgoing content takes to fade before the incoming one replaces it (must match
-// .fc-out in index.css).
-const FOCUS_FOLD_OUT_MS = 120;
+// How long each direction of the morph runs before the column settles. They must cover the
+// beats in index.css: the last ink stroke (opening), the tiles back inside the bar (closing).
+const FOCUS_OPEN_MS = 1500;
+const FOCUS_CLOSE_MS = 820;
+// A click within this long of the previous one is a change of mind mid-morph (see openFocusCol).
+const FOCUS_TURN_ROUND_MS = 600;
+// The ink draws on card by card down the column; from this one on, the rest go together
+// (they are below the fold anyway).
+const FOCUS_INK_STAGGER_CAP = 14;
+
+type FocusFoldPhase = 'folded' | 'opening' | 'open' | 'closing';
 
 /**
- * A foldable Focus column's body. `folded` flips the instant a bar is clicked — the grid starts
- * re-dividing its widths straight away — and the body follows a beat behind: the outgoing
- * content fades out, then the incoming content fades in; an opening column's cards wait until
- * the column has nearly finished widening, so they never visibly re-wrap while it grows.
- * Nothing animates on mount, so launching or coming back to Focus just shows the columns.
+ * A foldable Focus column's body: a plain bar when folded, the column's cards when open, and a
+ * continuous morph between the two that never shows a blank frame.
+ *
+ * Opening: the cards mount inside the still-narrow column with their ink hidden, so for a moment
+ * they are blank tiles of the same faint white as the bar, which fades out under them: the bar
+ * seems to split into the cards. The column then widens (the grid's own transition, started by
+ * the same click) and the tiles stretch with it; as it lands, the ink draws on, card by card down
+ * the column. Closing is the same film backwards: the ink lifts, the column narrows, the tiles
+ * melt back into the bar.
+ *
+ * The widths, the bar and the tiles are CSS transitions, so a click mid-morph simply turns them
+ * round from wherever they got to. Nothing animates on mount: launching or coming back to Focus
+ * just shows the columns.
  */
-function FocusFoldBody({ folded, renderOpen, renderFold }: { folded: boolean; renderOpen: () => React.ReactNode; renderFold: () => React.ReactNode }) {
-  const [shown, setShown] = useState(folded);
-  const [swapped, setSwapped] = useState(false);
-  // Derived in render, not set from an effect, so the fade-out starts in the SAME frame as the
-  // grid's width change. (Through an effect it began a frame late and was cut off at ~20%.)
-  // Clicking back before the swap simply clears it: what is showing stays.
-  const leaving = folded !== shown;
+function FocusFoldBody({ folded, renderOpen, renderDrops }: { folded: boolean; renderOpen: () => React.ReactNode; renderDrops: () => React.ReactNode }) {
+  const [phase, setPhase] = useState<FocusFoldPhase>(folded ? 'folded' : 'open');
+  // Derived DURING render (React re-runs the component before committing), not in an effect, so
+  // the morph starts in the same frame as the grid's width change instead of one frame late.
+  const want: FocusFoldPhase = folded ? (phase === 'folded' ? 'folded' : 'closing') : (phase === 'open' ? 'open' : 'opening');
+  if (want !== phase) setPhase(want);
   useEffect(() => {
-    if (!leaving) return;
-    const t = window.setTimeout(() => { setShown(folded); setSwapped(true); }, FOCUS_FOLD_OUT_MS);
+    if (phase !== 'opening' && phase !== 'closing') return;
+    const t = window.setTimeout(() => setPhase(phase === 'opening' ? 'open' : 'folded'), phase === 'opening' ? FOCUS_OPEN_MS : FOCUS_CLOSE_MS);
     return () => window.clearTimeout(t);
-  }, [folded, leaving]);
-  const fx = leaving ? 'fc-out' : swapped ? (shown ? 'fc-in-fold' : 'fc-in-open') : '';
-  // Keyed on what it shows, so each swap mounts fresh and its fade-in runs once.
-  return <div key={shown ? 'fold' : 'open'} className={`flex-1 min-h-0 flex flex-col ${fx}`}>{shown ? renderFold() : renderOpen()}</div>;
+  }, [phase]);
+  return (
+    <div className="relative flex-1 min-h-0 flex flex-col">
+      {/* Always mounted (it is one div), so its fades are transitions that start from wherever
+          the last one left off. Its drop cells exist only while it IS the column. */}
+      <div className="fc-bar" data-fc={phase} aria-hidden>
+        {phase === 'folded' && renderDrops()}
+      </div>
+      {phase !== 'folded' && <FocusFoldCards phase={phase}>{renderOpen()}</FocusFoldCards>}
+    </div>
+  );
 }
 
-/** One category row of a folded Focus bar — the band's drop cell, washed like an open band's. */
-function FocusFoldDrop({ id, children }: { id: string; children: React.ReactNode }) {
-  // data.fold tells calendarCollision this cell has no cards, so no stale "over card" from
+/** The cards half of a FocusFoldBody. Its `data-fc` drives the tiles and the ink (index.css). */
+function FocusFoldCards({ phase, children }: { phase: FocusFoldPhase; children: React.ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  // A transition needs a before-style, and an element that has just been inserted has none. So
+  // when a click mounts this layer, its first commit renders 'pre' (tiles and ink hidden), and
+  // the layout effect below flushes that style and flips to 'in' before the browser paints, so
+  // the tiles' fade runs from 'pre'. (The ink's draw-on is a keyframe animation and needs no
+  // help.) Mounted any other way (already open), it never animates.
+  const [primed, setPrimed] = useState(phase !== 'opening');
+  useLayoutEffect(() => {
+    if (phase !== 'opening') return;
+    const el = ref.current;
+    if (!el) return;
+    // Stagger by document order, which down a column is reading order.
+    el.querySelectorAll<HTMLElement>('[data-ink]').forEach((n, i) => n.style.setProperty('--ink-i', String(Math.min(i, FOCUS_INK_STAGGER_CAP))));
+    if (!primed) {
+      void el.offsetWidth;
+      setPrimed(true);
+    }
+  }, [phase, primed]);
+  const state = phase === 'opening' ? (primed ? 'in' : 'pre') : phase === 'closing' ? 'out' : undefined;
+  return <div ref={ref} className="fc-cards" data-fc={state}>{children}</div>;
+}
+
+/**
+ * One category's drop cell on a folded bar. All of them cover the WHOLE bar: it shows no
+ * categories, so a card dropped on it keeps its own (calendarCollision routes it there, Ctrl or
+ * not), and the cell that wins washes the whole bar.
+ */
+function FocusFoldDrop({ id }: { id: string }) {
+  // data.fold also tells calendarCollision this cell has no cards, so no stale "over card" from
   // earlier in the drag can pick the landing slot.
   const { setNodeRef, isOver, active } = useDroppable({ id, data: { fold: true } });
   const taskOver = isOver && (active?.data.current?.type === 'task' || active?.data.current?.type === 'projTask');
   return (
     <div
       ref={setNodeRef}
-      className="rounded-[4px] transition-colors duration-200 ease-in-out"
+      className="absolute inset-0 rounded-[inherit] transition-colors duration-200 ease-in-out"
       style={taskOver ? { backgroundColor: 'rgb(from var(--app-accent) r g b / 0.1)' } : undefined}
-    >
-      {children}
-    </div>
+    />
   );
 }
 
@@ -5193,7 +5243,7 @@ function MilestoneCardView({ task, projects, clients, showDate, categoryDimmed =
           the only shrinkable element and absorbed every shortfall while the
           assignees never gave up a pixel.
           Coming-Up cards stay ONE line in BOTH the calendar and focus views. */}
-      <div className={`px-[10px] flex flex-row items-center gap-[6px] ${stacked ? 'h-[22px]' : 'h-full'}`}>
+      <div data-ink className={`px-[10px] flex flex-row items-center gap-[6px] ${stacked ? 'h-[22px]' : 'h-full'}`}>
         <span style={{ flexShrink: 1 }} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] whitespace-nowrap overflow-hidden text-ellipsis min-w-0 ${titleClass}`}>{task.title}</span>
         {client?.short && project?.name && <p style={{ flexShrink: 1000 }} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap min-w-0 overflow-hidden text-ellipsis ${titleClass}`}>{client.short}<Arrowhead dim={task.completed || categoryDimmed} tone="milestone" faint={isExpired} />{project.name}</p>}
         {client?.short && !project?.name && <p style={{ flexShrink: 10000 }} className={`font-['Univers_BQ:55_Regular',sans-serif] text-[11.5px] whitespace-nowrap min-w-0 overflow-hidden text-ellipsis ${titleClass}`}>{client.short}</p>}
@@ -5509,7 +5559,7 @@ function AddPlaceholderCard({ isToday, onClick, stacked = false, dimmed = false 
       className={`mx-[6px] mb-[4px] rounded-[3.333px] ${stacked ? 'h-[56px] pt-[6px]' : 'h-[33px]'} w-[calc(100%-12px)] flex flex-col px-[10px] ${isToday ? '' : 'bg-white/[0.03]'} hover:brightness-125 transition-[filter]`}
       style={isToday ? { backgroundColor: 'rgb(from var(--app-accent) r g b / 0.1)' } : undefined}
     >
-      <span className={`flex flex-row items-center gap-[6px] ${stacked ? 'h-[22px]' : 'h-full'}`}>
+      <span data-ink className={`flex flex-row items-center gap-[6px] ${stacked ? 'h-[22px]' : 'h-full'}`}>
         <span className={`font-['Univers_BQ:55_Regular',sans-serif] text-[13px] ${tone}`}>Add</span>
         <Plus size={12} className={tone} />
       </span>
@@ -5670,7 +5720,7 @@ function NextBandHeader({ label, bodyFont, onLabelClick, onAdd, addAriaLabel, ba
         ...(barDrop.isOver ? { background: 'rgb(from var(--app-accent) r g b / 0.18)' } : null),
       }}
     >
-      <p onClick={onLabelClick} className={`${bodyFont} text-[#5e5e5e] cursor-pointer`}>
+      <p data-ink onClick={onLabelClick} className={`${bodyFont} text-[#5e5e5e] cursor-pointer`}>
         {label}
         {active ? <Arrowhead /> : null}
         {active ? <span className="text-[#7a7a7a]">{active.name}</span> : null}
@@ -5880,7 +5930,8 @@ function CalendarCard({ task, cellId, projects, clients, onToggle, onRename, onD
       animate={{ opacity: isDragging ? 0 : 1 }}
       transition={{ opacity: { duration: 0.12, ease: 'easeOut' } }}
     >
-      <div onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} onContextMenu={(e) => { if (onQuickEdit) { e.preventDefault(); e.stopPropagation(); onQuickEdit(); } }} {...attributes} {...listeners} className={`cursor-grab active:cursor-grabbing pl-[10px] overflow-hidden flex-1 transition-[padding] duration-150 ease-[cubic-bezier(0.86,0,0.07,1)] ${hovered ? 'pr-[44px]' : 'pr-[10px]'} ${singleLine ? 'flex flex-row items-center gap-[4px]' : stacked ? 'flex flex-col gap-0 py-[6px]' : 'flex flex-col gap-0'}`}>
+      {/* data-ink: the Focus accordion draws this on after the blank card has arrived. */}
+      <div data-ink onDoubleClick={(e) => { e.stopPropagation(); onEdit(); }} onContextMenu={(e) => { if (onQuickEdit) { e.preventDefault(); e.stopPropagation(); onQuickEdit(); } }} {...attributes} {...listeners} className={`cursor-grab active:cursor-grabbing pl-[10px] overflow-hidden flex-1 transition-[padding] duration-150 ease-[cubic-bezier(0.86,0,0.07,1)] ${hovered ? 'pr-[44px]' : 'pr-[10px]'} ${singleLine ? 'flex flex-row items-center gap-[4px]' : stacked ? 'flex flex-col gap-0 py-[6px]' : 'flex flex-col gap-0'}`}>
         {/* Calendar cards always render Title on line 1, all other meta on line 2 — taskOrder
             setting doesn't apply here. Line 1: checkbox + title. Line 2: client › project,
             assignees, deadline, + button. Checkbox is INLINE with the title so it stays aligned
@@ -9474,6 +9525,29 @@ export default function App() {
   // Desktop Focus accordion (see FocusFoldBody): which of Tomorrow / Next / Hold is open beside
   // Today. Tomorrow by default, and on purpose not persisted — every launch starts there.
   const [focusOpenCol, setFocusOpenCol] = useState<FocusFoldCol>('tomorrow');
+  // A click that lands mid-morph turns the widths round AT ONCE. The grid's 140ms head start
+  // (index.css) exists only so the closing column's ink can lift before its width moves, and
+  // that early in a morph no ink is showing yet; kept, it would freeze the columns mid-motion.
+  const focusSwitchAtRef = useRef(-Infinity);
+  const [focusTurnRound, setFocusTurnRound] = useState(false);
+  const openFocusCol = useCallback((c: FocusFoldCol) => {
+    const now = performance.now();
+    setFocusTurnRound(now - focusSwitchAtRef.current < FOCUS_TURN_ROUND_MS);
+    focusSwitchAtRef.current = now;
+    setFocusOpenCol(c);
+  }, []);
+  // measureTextPx sizes the Focus side columns in the webfont, which usually lands AFTER the
+  // first render — and nothing re-rendered until the first accordion click, so that click slid
+  // the side column (and Today with it) ~8px mid-morph. Re-measure as soon as fonts land.
+  const [, setFontsLanded] = useState(0);
+  useEffect(() => {
+    const fonts = document.fonts;
+    if (!fonts) return;
+    const bump = () => setFontsLanded((n) => n + 1);
+    fonts.addEventListener('loadingdone', bump);
+    void fonts.ready.then(bump);
+    return () => fonts.removeEventListener('loadingdone', bump);
+  }, []);
   // Assignees filter (Focus left column): selected shorts. Intersection
   // semantics — with ['P','B'] selected, only tasks assigned to BOTH show.
   const [assigneeFilter, setAssigneeFilter] = useState<string[]>([]);
@@ -12220,10 +12294,12 @@ export default function App() {
         // drop handler uses this to know if the user released above / below / inside the
         // source category band.
         lastCalOverCellIdRef.current = id;
-        // A folded Focus bar's rows hold no cards, so a card hovered earlier in this drag must
-        // not pick the slot: a drop there lands like one into a band's empty space.
-        if (args.droppableContainers.find((d) => d.id === c.id)?.data?.current?.fold) lastCalOverTaskIdRef.current = null;
-        if (allowListChange || list === activeList) {
+        // A folded Focus bar holds no cards, so a card hovered earlier in this drag must not
+        // pick the slot: a drop there lands like one into a band's empty space. It shows no
+        // categories either, so it can't be aimed: the card keeps its own, even with Ctrl.
+        const isFold = !!args.droppableContainers.find((d) => d.id === c.id)?.data?.current?.fold;
+        if (isFold) lastCalOverTaskIdRef.current = null;
+        if ((allowListChange && !isFold) || list === activeList) {
           if (!seen.has(id)) { cellHits.push(c); seen.add(id); }
         } else {
           const redirectId = `cal:${date}:${activeList}`;
@@ -12615,7 +12691,7 @@ export default function App() {
               {/* The four day tracks are the accordion: Today and the open one of Tomorrow /
                   Next / Hold at minmax(240px, 1fr), the two folded ones at minmax(120px, 0.25fr).
                   .focus-grid transitions the template, so a click re-divides the widths smoothly. */}
-              <div className="focus-grid grid gap-0 flex-1 min-h-0 w-full overflow-x-auto" style={{ gridTemplateColumns: PIP_MODE ? '1fr 1fr 1fr' : `${stackSide ? sideW : sideW * 2}px ${[true, focusOpenCol === 'tomorrow', focusOpenCol === 'next', focusOpenCol === 'hold'].map(focusTrack).join(' ')}` }}>
+              <div className="focus-grid grid gap-0 flex-1 min-h-0 w-full overflow-x-auto" style={{ gridTemplateColumns: PIP_MODE ? '1fr 1fr 1fr' : `${stackSide ? sideW : sideW * 2}px ${[true, focusOpenCol === 'tomorrow', focusOpenCol === 'next', focusOpenCol === 'hold'].map(focusTrack).join(' ')}`, transitionDelay: focusTurnRound ? '0ms' : undefined }}>
                 {/* Column 1 — Projects panel: flat master list (milestones pinned on top);
                     clicking a project FILTERS the Dashboard stack + all three calendar
                     columns (focusProjectId). Active row shows an ×; click again to clear.
@@ -12825,9 +12901,7 @@ export default function App() {
                   // One band block (label + cards) per CAL_LIST, aggregated over the
                   // column's iso set. Mirrors WeekCalendarMode's per-day band rendering.
                   // The cards one band shows: the column's tasks in that category after the active
-                  // filter, with the column's milestones on top. Shared by an open column's bands
-                  // and a folded bar's counts, so the number on a bar is exactly what opening it
-                  // will show.
+                  // filter, with the column's milestones on top.
                   const bandCellTasks = (isos: string[], section: SectionId, listId: ListId): Task[] => {
                     const isoSet = new Set(isos);
                     // Filter helper — project narrows to one, else client narrows to all its tasks.
@@ -12907,7 +12981,7 @@ export default function App() {
                           />
                         ) : (
                         <div data-band-list={listId} className="group/band h-[37px] px-[16px] flex items-center gap-2 sticky top-0 z-10 bg-[var(--app-bg)]" style={{ marginBottom: bandSpacing(cardRows === 1).mb }}>
-                          <p onClick={scrollBandToTop} className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap text-[#5e5e5e] cursor-pointer">{bandLabel}</p>
+                          <p data-ink onClick={scrollBandToTop} className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap text-[#5e5e5e] cursor-pointer">{bandLabel}</p>
                           <button
                             type="button"
                             onClick={() => addBlankTaskInSection(listId, section, focusProjectId ? { projectId: focusProjectId } : focusClientId ? { clientId: focusClientId } : undefined)}
@@ -12956,7 +13030,7 @@ export default function App() {
                                     <SubGroupDrop kind={g.kind} id={g.id} cell={cellId}>
                                       <div className="h-[37px] px-[16px] flex items-center">
                                         {/* Breadcrumb — see the day column's note. */}
-                                        <p className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap text-[#5e5e5e]">
+                                        <p data-ink className="font-['Univers_BQ:55_Regular',sans-serif] text-[14px] whitespace-nowrap text-[#5e5e5e]">
                                           {bandLabel}<Arrowhead /><span className="text-[#7a7a7a]">{g.name}</span>
                                         </p>
                                       </div>
@@ -13082,7 +13156,7 @@ export default function App() {
                         {col.section === 'next' && comingUpMilestones.length > 0 && (
                           <div className="mb-[37px]">
                             <div className="h-[37px] px-[16px] flex items-center">
-                              <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap text-[#5e5e5e]">Coming Up</p>
+                              <p data-ink className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] whitespace-nowrap text-[#5e5e5e]">Coming Up</p>
                             </div>
                             {/* Same purple-tint two-line card the calendar's Coming Up uses.
                                 Click → filter to its project (or name-search when projectless). */}
@@ -13105,33 +13179,20 @@ export default function App() {
                         {dayBands(col.isos, col.key, col.section)}
                       </CustomScroll>
                   );
-                  // A folded bar: one quiet row per category with its count, on a faint strip that
-                  // brightens under the pointer. Every row is also that band's drop cell, so a card
-                  // can be parked in a folded column without opening it (the category lock still
-                  // routes it into its own band, which is the row that lights up).
-                  const foldBody = (col: (typeof cols)[number], counts: { listId: ListId; n: number }[]) => (
-                    <div className="flex-1 min-h-0 mx-[6px] mb-[8px] rounded-[6px] bg-white/[0.02] group-hover/fold:bg-white/[0.045] transition-colors duration-300">
-                      {counts.map(({ listId, n }) => (
-                        <FocusFoldDrop key={listId} id={`cal:${col.isos[0]}:${listId}`}>
-                          <div className="h-[37px] px-[10px] flex items-center gap-2 whitespace-nowrap overflow-hidden">
-                            <p className="font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] not-italic text-[14px] text-[#5e5e5e] overflow-hidden text-ellipsis">{LIST_TITLES[listId]}</p>
-                            {n > 0 && <span className="ml-auto font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] text-[14px] text-[#656464] tabular-nums">{n}</span>}
-                          </div>
-                        </FocusFoldDrop>
-                      ))}
-                    </div>
-                  );
+                  // A folded bar's drop cells, one per category (see FocusFoldDrop): a card can be
+                  // parked in a folded column without opening it, and lands in its own band.
+                  const barDrops = (col: (typeof cols)[number]) => listSequence.map((listId) => (
+                    <FocusFoldDrop key={listId} id={`cal:${col.isos[0]}:${listId}`} />
+                  ));
                   // PIP is the reduced quick-view — three day columns on a three-track
                   // grid, no side panel. Hold would wrap there too, so it stays desktop-only.
                   return cols.filter((col) => !(PIP_MODE && col.section === 'hold')).map((col) => {
                     const foldable = !PIP_MODE && col.section !== 'today';
                     const folded = foldable && col.section !== focusOpenCol;
-                    const counts = folded ? listSequence.map((listId) => ({ listId, n: bandCellTasks(col.isos, col.section, listId).length })) : [];
-                    const total = counts.reduce((sum, c) => sum + c.n, 0);
-                    const open = () => setFocusOpenCol(col.section as FocusFoldCol);
+                    const open = () => openFocusCol(col.section as FocusFoldCol);
                     return (
                       <CalendarColumnDroppable key={col.key} date={col.isos[0]} className={`${PIP_MODE ? 'min-w-[240px]' : 'min-w-0'} flex flex-col min-h-0 overflow-hidden`}>
-                        {/* The whole folded column is the button — heading, counts and strip. */}
+                        {/* The whole folded column is the button: its title and the bar. */}
                         <div
                           className={`flex-1 min-h-0 flex flex-col ${folded ? 'group/fold cursor-pointer outline-none' : ''}`}
                           {...(folded ? {
@@ -13144,10 +13205,9 @@ export default function App() {
                         >
                           <div className={`shrink-0 h-[37px] flex items-center gap-2 px-[16px] whitespace-nowrap overflow-hidden ${col.section === 'today' ? 'text-[var(--app-accent)]' : 'text-white'}`} style={{ marginBottom: SPACING.dcr }}>
                             {col.title}
-                            {folded && total > 0 && <span className="fc-count font-['Univers_BQ:55_Regular',sans-serif] leading-[normal] text-[14px] text-[#656464] tabular-nums">{total}</span>}
                           </div>
                           {foldable
-                            ? <FocusFoldBody folded={folded} renderOpen={() => openBody(col)} renderFold={() => foldBody(col, counts.length ? counts : listSequence.map((listId) => ({ listId, n: bandCellTasks(col.isos, col.section, listId).length })))} />
+                            ? <FocusFoldBody folded={folded} renderOpen={() => openBody(col)} renderDrops={() => barDrops(col)} />
                             : openBody(col)}
                         </div>
                       </CalendarColumnDroppable>
